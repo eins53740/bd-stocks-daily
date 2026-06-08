@@ -14,10 +14,12 @@ Data quality (added after repeated gross yfinance errors on EU small/mid-caps):
     *price* fallback for non-US names (Phase 6, Finding D2; no API key).
     Best-effort & non-fatal. FMP returns 402 and Twelve Data returns 404
     ("needs Grow/Venture plan") for many EU/Asia exchanges on the free tier, so
-    Stooq now carries the price cross-check for global names. The Stooq daily-EOD
-    CSV endpoint (https://stooq.com/q/d/l/?s=<sym>&i=d) is plain CSV and is NOT
-    JS-blocked — only the interactive stooq.com site is. Disable all of Layer 1
-    with --no-fmp / --no-xval.
+    the Stooq daily-EOD CSV endpoint (https://stooq.com/q/d/l/?s=<sym>&i=d) is
+    wired as the non-US Layer-1 *price* cross-check. As of mid-2026 that CSV
+    endpoint is itself gated by a JavaScript proof-of-work challenge for clients
+    that don't run JS, so it currently degrades cleanly to Layers 0+2 (the parser
+    detects the HTML interstitial and reports it instead of bad data). Disable all
+    of Layer 1 with --no-fmp / --no-xval.
   * Layer 2 — reconcile_price_with_history(): self-heals a stale info-price by
     comparing it to history()'s last close (a different, reliable yfinance path)
     and recomputing market_cap. Works on EVERY exchange incl. Iberian small-caps.
@@ -36,7 +38,7 @@ import math
 import statistics
 import sys
 import warnings
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Force UTF-8 on Windows so unicode in output doesn't crash cp1252 console
@@ -934,6 +936,19 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
             f"currency mismatch: yfinance reports {info['currency']} but "
             f"{mkt_meta['exchange']} ({ticker}) is normally {mkt_meta['currency']}"
         )
+    # GBp/GBX (LSE pence) -> GBP. London shares are quoted in pence (1/100 GBP).
+    # yfinance is inconsistent: info["currency"] is sometimes the explicit "GBp"/
+    # "GBX", but for many .L names it reports plain "GBP" while currentPrice /
+    # marketCap are STILL in pence (e.g. SHEL.L ~3227.5 = £32.27). So treat any
+    # .L line whose currency is in the GBP family as pence-quoted and collapse to
+    # GBP, so the local->EUR path (EURGBP=X) isn't 100x too high. USD/EUR-
+    # denominated .L lines report their own currency and are left untouched.
+    lse_pence = (
+        markets.suffix_of(ticker) == "L"
+        and (currency or "").upper() in ("GBP", "GBX")
+    ) or currency in ("GBp", "GBX")
+    if lse_pence:
+        price_curr, currency = markets.normalize_gbx(price_curr, "GBp")
     region = mkt_meta["region"]
     accounting_standard = mkt_meta["accounting_standard"]
     exchange_name = mkt_meta["exchange"]
@@ -1270,14 +1285,29 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     try:
         ed_df = tk.earnings_dates  # includes recent past + upcoming
         if ed_df is not None and not ed_df.empty:
-            past = [d.date() for d in ed_df.index.to_pydatetime() if d.date() <= today]
+            # The index is tz-aware (exchange / US-Eastern). Take each timestamp's
+            # OWN calendar date in its native tz (tz_localize(None) drops the tz
+            # without shifting wall-clock) so we compare exchange-local dates, not
+            # a UTC-shifted one — otherwise near midnight UTC the day-delta is off
+            # by 1. We allow +1 day of slack vs the UTC `today` so a not-yet-past
+            # (by exchange clock) event isn't excluded by tz skew.
+            tomorrow = today + timedelta(days=1)
+
+            def _native_date(ts):
+                # Drop tz (if any) WITHOUT shifting wall-clock, then take the date.
+                if getattr(ts, "tzinfo", None) is not None:
+                    ts = ts.tz_localize(None)
+                return ts.date()
+
+            past = [d for d in (_native_date(ts) for ts in ed_df.index) if d <= tomorrow]
             if past:
                 last_earnings_date = max(past)
     except Exception:
         pass
     news_freshness = None
     if last_earnings_date is not None:
-        days_since = (today - last_earnings_date).days
+        # Clamp at 0: tz skew can make a "today" earnings look 1 day in the future.
+        days_since = max(0, (today - last_earnings_date).days)
         news_freshness = compute_news_freshness(days_since)
         if news_freshness is not None and news_freshness < 0.5:
             warnings_.append(
@@ -1360,7 +1390,9 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     }
 
     # --- Layer 2: reconcile price/market_cap vs history() and self-heal (free) ---
-    corrected_fields = reconcile_price_with_history(out, hist)
+    # For LSE pence names price_current is already in GBP but history() Close is
+    # still in GBp; scale the history side by 0.01 so the two are comparable.
+    corrected_fields = reconcile_price_with_history(out, hist, price_scale=0.01 if lse_pence else 1.0)
     out["corrected_fields"] = corrected_fields
     for c in corrected_fields:
         warnings_.append(
@@ -1470,7 +1502,7 @@ def validate_consistency(out: dict) -> tuple[list[str], str]:
     return issues, quality
 
 
-def reconcile_price_with_history(out: dict, hist) -> list[dict]:
+def reconcile_price_with_history(out: dict, hist, price_scale: float = 1.0) -> list[dict]:
     """Layer 2 — reconcile the info-derived price against history() and self-heal.
 
     yfinance's `Ticker.info` price (currentPrice/regularMarketPrice) and
@@ -1483,12 +1515,18 @@ def reconcile_price_with_history(out: dict, hist) -> list[dict]:
     When info-price and the last history close diverge >10%, the history close
     wins: this corrects price_current and recomputes market_cap (= close×shares)
     when the cap is also inconsistent. Returns a list of corrected-field records.
+
+    `price_scale` rescales the raw history close before comparison (and before it
+    overwrites price_current). For LSE pence-quoted names history()'s Close is in
+    GBp like the quote, while out["price_current"] has already been collapsed to
+    GBP — passing price_scale=0.01 keeps the comparison like-for-like so this
+    layer doesn't "self-heal" the GBP price back into pence.
     """
     corrected: list[dict] = []
     try:
         if hist is None or getattr(hist, "empty", True):
             return corrected
-        hist_close = float(hist["Close"].iloc[-1])
+        hist_close = float(hist["Close"].iloc[-1]) * price_scale
     except Exception:
         return corrected
     if not (isinstance(hist_close, (int, float)) and hist_close > 0):

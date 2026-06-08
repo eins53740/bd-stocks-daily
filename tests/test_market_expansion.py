@@ -17,13 +17,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from analyze_ticker import reconcile_price_with_history  # noqa: E402
 
 from markets import (  # noqa: E402
     currency_of,
     eur_fx_pair,
     market_caveats,
     market_meta,
+    normalize_gbx,
     parse_stooq_csv,
     region_of,
     stooq_csv_url,
@@ -177,6 +182,62 @@ def test_to_eur():
     # Missing rate -> None (non-EUR)
     assert to_eur(100, "JPY", None) is None
     assert to_eur(None, "JPY", 160.0) is None
+
+
+# ------------------------- 4b. GBp/GBX (LSE pence) -> GBP normalisation -------------------------
+def test_normalize_gbx_pence_to_gbp():
+    # Shell on the LSE quotes ~2750 GBp = £27.50.
+    amount, cur = normalize_gbx(2750.0, "GBp")
+    assert amount == 27.5
+    assert cur == "GBP"
+    # GBX is the same thing, different spelling.
+    amount, cur = normalize_gbx(2750.0, "GBX")
+    assert amount == 27.5 and cur == "GBP"
+
+
+def test_normalize_gbx_passthrough_non_pence():
+    # Plain GBP, EUR, None currency all pass through unchanged.
+    assert normalize_gbx(27.5, "GBP") == (27.5, "GBP")
+    assert normalize_gbx(100.0, "EUR") == (100.0, "EUR")
+    assert normalize_gbx(50.0, "USD") == (50.0, "USD")
+    # None amount preserved; currency still normalised for the pence case.
+    assert normalize_gbx(None, "GBp") == (None, "GBP")
+    assert normalize_gbx(None, "GBP") == (None, "GBP")
+
+
+def test_gbp_pence_to_eur_is_not_100x_off():
+    # Shell ~2750 GBp; EURGBP ~0.85 GBP/EUR -> ~£27.50 -> ~€32, NOT €3235.
+    amount_gbp, cur = normalize_gbx(2750.0, "GBp")
+    eur = to_eur(amount_gbp, cur, 0.85)
+    assert 30.0 < eur < 35.0
+
+
+def test_uk_market_caveat_mentions_gbp_pence():
+    caveats = market_caveats("SHEL.L")
+    assert any("GBp" in c and "100x" in c for c in caveats)
+
+
+def test_layer2_does_not_reheal_gbp_price_back_into_pence():
+    # Regression: price_current already collapsed to GBP (32.43), but history()
+    # Close is still in GBp (3243). With price_scale=0.01 the two are comparable
+    # so Layer 2 must NOT "self-heal" the GBP price back to pence.
+    out = {"price_current": 32.43, "fundamentals": {"shares_out": 5_552_740_619,
+                                                     "market_cap": 180_075_397_120}}
+    hist = pd.DataFrame({"Close": [3200.0, 3243.0]})
+    corrected = reconcile_price_with_history(out, hist, price_scale=0.01)
+    assert corrected == []
+    assert out["price_current"] == 32.43
+    assert out["fundamentals"]["market_cap"] == 180_075_397_120
+
+
+def test_layer2_still_heals_a_genuinely_stale_price():
+    # Sanity: with no scaling, a truly stale info price (8.49 vs 38.0 close) is
+    # still corrected — the GBp scaling must not disable the original behaviour.
+    out = {"price_current": 8.49, "fundamentals": {"shares_out": 1_000_000, "market_cap": 8_490_000}}
+    hist = pd.DataFrame({"Close": [37.0, 38.0]})
+    corrected = reconcile_price_with_history(out, hist, price_scale=1.0)
+    assert any(c["field"] == "price_current" for c in corrected)
+    assert out["price_current"] == 38.0
 
 
 # ------------------------- 5. stooq_price_check (injected fetcher) -------------------------

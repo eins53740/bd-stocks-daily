@@ -125,6 +125,9 @@ _MARKET_CAVEATS: dict[str, str] = {
            "for TPEx (.TWO) small-caps"),
     "IN": ("India (.NS/.BO): Ind-AS (IFRS-converged); good large-cap coverage; "
            "promoter-holding structures common — check shareholder concentration"),
+    "UK": ("London (.L): shares are usually quoted in GBp (pence) = 1/100 GBP — "
+           "yfinance reports GBp/GBX; prices are normalised to GBP before the EUR "
+           "conversion (a raw pence value read as GBP would be 100x too high)"),
 }
 
 
@@ -142,6 +145,33 @@ def market_caveats(ticker: str) -> list[str]:
     if cav:
         out.append(f"accounting/coverage [{meta['region']}]: {cav}")
     return out
+
+
+# ------------------------- GBp / GBX (LSE pence) normalisation -------------------------
+# London-listed shares are usually quoted in GBp (pence) = 1/100 GBP, and
+# yfinance reports the quote currency as "GBp" or "GBX" accordingly. If a pence
+# price were ever treated as GBP the EUR conversion would be 100x too large.
+# normalize_gbx() collapses GBp/GBX prices to GBP so the local->EUR path (which
+# uses the EURGBP=X pair) is currency-correct.
+_GBX_CODES = frozenset({"GBP", "GBX"})  # uppercased; "GBp" -> "GBP" before lookup
+
+
+def normalize_gbx(amount, currency: str) -> tuple[float | None, str]:
+    """Normalise a GBp/GBX (pence) amount to GBP.
+
+    Returns (amount_in_gbp_or_unchanged, normalised_currency). For GBp/GBX the
+    amount is divided by 100 and the currency becomes "GBP". Any other currency
+    (including plain GBP) passes through unchanged. `amount` of None passes
+    through. The check is case-sensitive on the original ("GBp"/"GBX") because
+    yfinance uses exactly those spellings; plain "GBP" is left as-is.
+    """
+    cur = currency or ""
+    is_pence = cur in ("GBp", "GBX")
+    if not is_pence:
+        return (None if amount is None else float(amount)), cur
+    if amount is None:
+        return None, "GBP"
+    return float(amount) / 100.0, "GBP"
 
 
 # ------------------------- FX: local -> EUR -------------------------
