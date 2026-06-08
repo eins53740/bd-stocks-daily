@@ -4,9 +4,11 @@ description: Daily stock evaluation — picks 3 tickers (1 deep + 2 screens) fro
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v2)
+# Daily Stock Evaluation (v3 — scoring schema 2.2)
 
-Avaliação diária automática de 3 acções (1 deep-dive + 2 screens) do pool pré-filtrado, com score 0-10, peer comparison, market timing, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep).
+Avaliação diária automática de 3 acções (1 deep-dive + 2 screens) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 12 nós** (sub-fases 0.5 / 1.5 / 2.5 / 3.5 / 5.5 incluídas).
+
+O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
@@ -16,17 +18,26 @@ Avaliação diária automática de 3 acções (1 deep-dive + 2 screens) do pool 
 
 **Números estruturados (revenue, P/E, margins, ROE, debt, prices) — SEMPRE de Python helpers (yfinance/stockanalysis).** Nunca extrair números de 10-K / 10-Q via WebFetch. LLM só compõe narrativa (tese, riscos, guidance management, management quality score qualitativo). Se precisares de um número, chama o helper. Qualquer secção qualitativa (§2.1, 2.3, 2.7, 2.11, 2.12, 2.14) deve citar números a partir da JSON da Phase 2 — **nunca inventar**.
 
-## Composite score v2 (weights)
+## Composite score v2.2 (weights)
+
+Schema `2.2`. **Weights are unchanged from v2.1** — v2.2 adds *structural* improvements only (no weight-magnitude shift; magnitude changes stay gated on the item-12 backtest, see `docs/SCORING_REVIEW_v3.md`):
 
 | Componente                                            | Peso   | Fonte                  |
 | ----------------------------------------------------- | ------ | ---------------------- |
 | Fundamentals (Piotroski + gates + Altman)             | 35%    | Python                 |
-| Valuation (P/E + PEG + FCF yield + DCF upside)        | 20%    | Python                 |
-| Moat (ROE consistency + margin stability)             | 12%    | Python                 |
+| Valuation (P/E + PEG + FCF yield + DCF upside + **EV/EBIT**) | 20%    | Python                 |
+| Moat (ROE consistency + margin stability; **ROIC>25% → ×1.25 Buffett opt-in**) | 12%    | Python                 |
 | Peer ranking                                          | 12%    | Python + LLM narrative |
 | Growth Durability (CAGR + stability + Lynch category) | 8%     | Python                 |
 | **Management Quality**                                | **8%** | **LLM (Phase 2.5)**    |
 | Market Context (VIX / FGI)                            | 5%     | Python                 |
+
+**v2.2 deltas (weights unchanged):**
+
+- **ROIC + EV/EBIT** computed in `_compact_fund` (Magic-Formula proxy): EV/EBIT feeds the Valuation sub-score; ROIC drives the Buffett moat opt-in. (Roadmap items 1 + 6.)
+- **Buffett moat opt-in**: `apply_buffett_moat()` lifts the moat *sub-score* ×1.25 (capped at 10) only when ROIC > 25% — the 12% moat *weight* is untouched, so no rebalancing (`score_details.moat.buffett_moat_applied`).
+- **Gate-5 growth bypass**: `gate5_growth_bypass()` lets a hyper-grower pass Gate-5 despite net margin ≤10% when rev CAGR≥25% AND ROIC≥15% AND FCF/rev improving (`gates_detail.gate_5_margin.gate_5_bypassed`).
+- **News decay overlay**: `compute_news_freshness()` (half-life 7d on the last earnings date) — UX freshness signal only, **no composite effect**; `< 0.5` raises a `data_warnings` note. (Roadmap item 7.)
 
 - **Deep mode**: runs all 7 components. `analyze_ticker.py` emits a provisional composite with `mgmt=5.0` (neutral); `finalize_score.py` recomputes after the LLM Phase 2.5 supplies the real Management Quality score.
 - **Screen mode**: no management LLM call. The 6 Python components are renormalised (each weight ÷ 0.92) so they sum to 100%. No `finalize_score.py` call.
