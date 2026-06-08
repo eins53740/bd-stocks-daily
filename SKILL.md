@@ -164,7 +164,7 @@ Emits a JSON directive `{slug, path, exists, stale, reason, age_days, generated_
 sector: {Sector}
 slug: {slug}
 generated_at: {today ISO}
-schema_version: "2.1"
+schema_version: "2.2"
 sources: [url1, url2, ...]
 ---
 ```
@@ -189,6 +189,7 @@ python "%SCRIPTS%\analyze_ticker.py" --ticker ASML.AS --mode deep
   - **`corrected`** → Layer 2 self-healed a stale `info` price using `history()`'s last close (and recomputed `market_cap`). Read `corrected_fields` for what changed — the numbers in the JSON are already the FIXED ones, safe to use. This auto-fixes the CMO.MC €8.49→€38 class. Add a small "ℹ️ price auto-corrected from history()" note.
   - **`suspect`** → Layer 0 found an UNFIXABLE inconsistency. **DO NOT trust the raw numbers** — read `consistency_issues` and `cross_validation.divergences`, cross-check the affected fields against the official filing before quoting, and add a "⚠️ data-quality: suspect" note. This catches the distorted-margin/PE class (e.g. SEM.LS P/E 50 vs margin 31%).
   - `cross_validation.error` containing "no coverage" just means FMP free can't validate this ticker (EU exchanges) — Layers 0+2 cover it. Note: no free quote API (FMP/Polygon/Finnhub free, Stooq) covers Iberian small-caps; Layers 0+2 (pure yfinance) are the protection there.
+- **v2.2 flags:** `gates_detail.gate_5_margin.gate_5_bypassed: true` (+ `gate_5_bypass_reason`) → a hyper-grower passed Gate-5 on the growth bypass (rev CAGR≥25% AND ROIC≥15% AND FCF/rev improving) despite net margin ≤10% — say so in §2.6/§2.9, do not call it a margin failure. `news_freshness` (0–1, half-life 7d on the last earnings date) is a UX freshness overlay only (no composite effect); when `< 0.5` a `data_warnings` note flags that the data lags the next print — surface it in the TL;DR. `score_details.moat.buffett_moat_applied: true` means ROIC>25% lifted the moat sub-score 1.25x (still inside the unchanged 12% moat weight).
 
 v2 output JSON (the ground truth — USE THESE NUMBERS):
 
@@ -196,7 +197,7 @@ v2 output JSON (the ground truth — USE THESE NUMBERS):
 {
   "ticker": "ASML.AS",
   "mode": "deep",
-  "schema_version": "2.1",
+  "schema_version": "2.2",
   "weights": { "fundamentals": 0.35, "valuation": 0.20, "moat": 0.12, "peer": 0.12, "growth_durability": 0.08, "management": 0.08, "market_context": 0.05 },
   "fetched_at": "...",
   "company_name": "ASML Holding NV",
@@ -342,7 +343,7 @@ management_flag: false         # true only if <7.0 and mode==deep
 industry_cache_date: 2026-04-17
 industry_cache_slug: semiconductors
 bear_case_trigger: "If ASML loses EUV monopoly to a credible competitor within 3 years"
-schema_version: "2.1"
+schema_version: "2.2"
 ---
 ```
 
@@ -451,6 +452,7 @@ schema_version: "2.1"
 | #7  | **P/S** | {ps_ratio}x | — | |
 | #8  | **EBITDA** | {ebitda_ttm:,} | — | |
 | #8  | **EV/EBITDA** | {ev_ebitda}x | — | |
+| #8  | **EV/EBIT** | {ev_ebit}x | — | Magic Formula (v2.2); feeds Valuation sub-score |
 | #9  | Net income | {net_income:,} | — | |
 | #9  | P/E (trailing) | {pe_ratio}x | — | |
 | #9  | PEG | {peg}x | — | |
@@ -458,8 +460,8 @@ schema_version: "2.1"
 | #10 | Operating margin | {operating_margin_ttm}% | — | |
 | #10 | Net margin | {net_margin_ttm}% | {net_margin_5y_avg}% avg | |
 | #11 | ROE | {roe_ttm}% | {roe_5y_avg}% avg | |
-| #11 | **ROCE** | {roce_ttm}% | — | |
-| #11 | **ROIC** | {roic_ttm}% | — | |
+| #11 | **ROCE** | {roce_ttm}% | — | EBIT / (Assets − Current Liab.) |
+| #11 | **ROIC** | {roic_ttm}% | — | v2.2 Magic Formula; >25% triggers Buffett moat 1.25x (`score_details.moat.buffett_moat_applied`) |
 | #12 | Total debt | {total_debt:,} | — | |
 | #12 | **Net debt** | {net_debt:,} | total_debt − total_cash | |
 | #12 | **Net debt / EBITDA** | {net_debt_ebitda}x | <2x = comfortable; >4x = stretched |

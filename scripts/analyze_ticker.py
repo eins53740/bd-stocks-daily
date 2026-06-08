@@ -242,12 +242,24 @@ def evaluate_gates(fund: dict) -> tuple[int, dict]:
     }
 
     # Gate 5: Net profit margin > 10%
+    # v2.2 growth bypass: a hyper-grower deliberately suppressing current margin to
+    # reinvest counts as PASS when rev CAGR>=25% AND ROIC>=15% AND FCF/rev improving YoY.
     nm = fund.get("net_margin_ttm")
+    margin_pass = nm is not None and nm > 0.10
+    g5_bypassed = False
+    g5_bypass_reason = None
+    if not margin_pass:
+        g5_bypassed, g5_bypass_reason = gate5_growth_bypass(
+            fund.get("revenue_cagr_5y"), fund.get("roic_ttm"),
+            fund.get("fcf_rev_latest"), fund.get("fcf_rev_prior"),
+        )
     gates["gate_5_margin"] = {
-        "pass": nm is not None and nm > 0.10,
+        "pass": margin_pass or g5_bypassed,
         "value": nm,
         "threshold": 0.10,
         "label": "Net margin > 10%",
+        "gate_5_bypassed": g5_bypassed,
+        "gate_5_bypass_reason": g5_bypass_reason,
     }
 
     # Gate 6: D/E < 1.0
@@ -286,6 +298,86 @@ def score_fundamentals(fscore: int, gates_passed: int, zscore: float | None) -> 
     return round(p + g + z, 2)
 
 
+# ------------------------- v2.2 pure helpers (Magic Formula + Buffett + decay + bypass) -------------------------
+# These are pure (no network, no yfinance) so they unit-test cleanly. They are
+# the single source of truth for the v2.2 fundamentals fields and overlays.
+def compute_roic(ebit, tax_provision, pretax_income,
+                 total_debt, total_equity, cash) -> float | None:
+    """ROIC = NOPAT / Invested Capital (Magic Formula proxy).
+
+    NOPAT = EBIT * (1 - effective_tax_rate); eff_rate = tax/pretax clamped to
+    [0, 0.35], default 0.21 if unavailable. Invested Capital = total_debt +
+    total_equity - cash. None if EBIT/inputs missing or IC <= 0.
+    """
+    if ebit is None or total_debt is None or total_equity is None or cash is None:
+        return None
+    tax_rate = 0.21
+    if tax_provision is not None and pretax_income not in (None, 0) and pretax_income > 0:
+        tax_rate = max(0.0, min(0.35, tax_provision / pretax_income))
+    invested_capital = total_debt + total_equity - cash
+    if invested_capital <= 0:
+        return None
+    nopat = ebit * (1 - tax_rate)
+    return round(nopat / invested_capital, 6)
+
+
+def compute_ev_ebit(market_cap, total_debt, cash, ebit) -> float | None:
+    """EV/EBIT where EV = market_cap + total_debt - cash. None if EBIT<=0/missing."""
+    if market_cap is None or ebit is None or ebit <= 0:
+        return None
+    debt = total_debt or 0.0
+    c = cash or 0.0
+    ev = market_cap + debt - c
+    return round(ev / ebit, 6)
+
+
+def compute_roce(ebit, total_assets, current_liabilities) -> float | None:
+    """ROCE = EBIT / (Total Assets - Current Liabilities). None if unavailable."""
+    if ebit is None or total_assets is None or current_liabilities is None:
+        return None
+    capital_employed = total_assets - current_liabilities
+    if capital_employed <= 0:
+        return None
+    return round(ebit / capital_employed, 6)
+
+
+def apply_buffett_moat(moat_score: float, roic_ttm) -> tuple[float, bool]:
+    """Buffett opt-in: if ROIC > 25%, multiply moat sub-score by 1.25 (cap 10)."""
+    if roic_ttm is not None and roic_ttm > 0.25:
+        return round(min(10.0, moat_score * 1.25), 2), True
+    return round(moat_score, 2), False
+
+
+# News-event time decay: I(t) = I0 * e^(-lambda * dt), I0=1.0, half-life 7 days.
+_NEWS_DECAY_LAMBDA = math.log(2) / 7.0
+
+
+def compute_news_freshness(days_since_earnings) -> float | None:
+    """Freshness overlay 0..1 for the last earnings event. None if no earnings date."""
+    if days_since_earnings is None:
+        return None
+    return round(math.exp(-_NEWS_DECAY_LAMBDA * max(0, days_since_earnings)), 3)
+
+
+def gate5_growth_bypass(revenue_cagr_5y, roic_ttm,
+                        fcf_rev_latest, fcf_rev_prior) -> tuple[bool, str | None]:
+    """Gate-5 (net-margin) growth bypass predicate.
+
+    Bypass fires only when ALL hold: revenue_cagr_5y >= 0.25 AND roic_ttm >= 0.15
+    AND FCF/revenue improving YoY (latest > prior). Returns (fires, reason).
+    """
+    if None in (revenue_cagr_5y, roic_ttm, fcf_rev_latest, fcf_rev_prior):
+        return False, None
+    if revenue_cagr_5y >= 0.25 and roic_ttm >= 0.15 and fcf_rev_latest > fcf_rev_prior:
+        reason = (
+            f"Gate-5 bypass: hyper-grower reinvesting margin "
+            f"(rev CAGR {revenue_cagr_5y*100:.0f}% >=25%, ROIC {roic_ttm*100:.0f}% >=15%, "
+            f"FCF/rev improving {fcf_rev_prior*100:.1f}%->{fcf_rev_latest*100:.1f}%)"
+        )
+        return True, reason
+    return False, None
+
+
 def score_moat(roe_ttm, roe_5y, margin_ttm, margin_5y) -> tuple[float, dict]:
     # ROE consistency + margin stability + absolute levels
     details = {}
@@ -314,17 +406,22 @@ def score_moat(roe_ttm, roe_5y, margin_ttm, margin_5y) -> tuple[float, dict]:
     return round(min(10.0, roe_score + stability + margin_score), 2), details
 
 
-def score_valuation(pe, peg, fcf_yield, dcf_upside) -> tuple[float, dict]:
+def score_valuation(pe, peg, fcf_yield, dcf_upside, ev_ebit=None) -> tuple[float, dict]:
+    # v2.2 — WEIGHT-NEUTRAL: EV/EBIT (Magic Formula) folded INSIDE the 0-10 cap.
+    # P/E trimmed 0-3 -> 0-2 (it overlaps EV/EBIT per SCORING_REVIEW_v3 §2.2) and
+    # EV/EBIT given a comparable 0-1 band. Sub-points still sum to max 10; the
+    # Valuation top weight stays 0.20 (unchanged).
+    #   P/E 0-2 + PEG 0-3 + FCF 0-2 + DCF 0-2 + EV/EBIT 0-1 = 10
     s = 0.0
     details = {}
-    # P/E component (0-3)
+    # P/E component (0-2)
     if pe is not None and pe > 0:
         if pe < 15:
-            s += 3
-        elif pe < 25:
             s += 2
+        elif pe < 25:
+            s += 1.5
         elif pe < 35:
-            s += 1
+            s += 0.5
     # PEG (0-3)
     if peg is not None and peg > 0:
         if peg < 1:
@@ -345,7 +442,13 @@ def score_valuation(pe, peg, fcf_yield, dcf_upside) -> tuple[float, dict]:
             s += 2
         elif dcf_upside > 0:
             s += 1
-    details.update(pe=pe, peg=peg, fcf_yield=fcf_yield, dcf_upside=dcf_upside)
+    # EV/EBIT (0-1) — Magic Formula cheapness band: <12 cheap, <18 fair, else rich
+    if ev_ebit is not None and ev_ebit > 0:
+        if ev_ebit < 12:
+            s += 1
+        elif ev_ebit < 18:
+            s += 0.5
+    details.update(pe=pe, peg=peg, fcf_yield=fcf_yield, dcf_upside=dcf_upside, ev_ebit=ev_ebit)
     return round(min(10.0, s), 2), details
 
 
@@ -905,14 +1008,21 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     except Exception as e:
         warnings_.append(f"5y avgs: {e}")
 
-    # --- Borja v2.1: ROCE & ROIC from financials + balance sheet ---
-    # ROCE = EBIT / (Total Assets - Current Liabilities)
-    # ROIC = NOPAT / (Equity + Long-term Debt), NOPAT = EBIT * (1 - effective_tax_rate)
+    # --- v2.2: Magic-Formula proxy — ROIC, EV/EBIT, ROCE from financials + balance sheet ---
+    # ROIC  = NOPAT / Invested Capital; IC = Total Debt + Total Equity - Cash (compute_roic)
+    # EV/EBIT = (market_cap + total_debt - cash) / EBIT (compute_ev_ebit)
+    # ROCE  = EBIT / (Total Assets - Current Liabilities) (compute_roce)
     fund["roce_ttm"] = None
     fund["roic_ttm"] = None
+    fund["ev_ebit"] = None
     try:
+        ebit = None
+        ta = None
+        cl = None
+        equity = None
+        tax = None
+        pretax = None
         if fs is not None and bs is not None and not fs.empty and not bs.empty:
-            ebit = None
             if "EBIT" in fs.index:
                 ebit = float(fs.loc["EBIT"].iloc[0])
             elif "Operating Income" in fs.index:
@@ -920,27 +1030,33 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
             ta = float(bs.loc["Total Assets"].iloc[0]) if "Total Assets" in bs.index else None
             cl_label = "Current Liabilities" if "Current Liabilities" in bs.index else ("Total Current Liabilities" if "Total Current Liabilities" in bs.index else None)
             cl = float(bs.loc[cl_label].iloc[0]) if cl_label else None
-            if ebit and ta and cl and (ta - cl) > 0:
-                fund["roce_ttm"] = ebit / (ta - cl)
-            # ROIC
             eq_label = "Stockholders Equity" if "Stockholders Equity" in bs.index else ("Total Stockholder Equity" if "Total Stockholder Equity" in bs.index else None)
             equity = float(bs.loc[eq_label].iloc[0]) if eq_label else None
-            lt_debt = float(bs.loc["Long Term Debt"].iloc[0]) if "Long Term Debt" in bs.index else 0.0
-            # Effective tax rate from financials
-            tax_rate = 0.25  # sensible default
-            try:
-                if "Tax Provision" in fs.index and "Pretax Income" in fs.index:
-                    tax = float(fs.loc["Tax Provision"].iloc[0])
-                    pretax = float(fs.loc["Pretax Income"].iloc[0])
-                    if pretax and pretax > 0:
-                        tax_rate = max(0.0, min(0.45, tax / pretax))
-            except Exception:
-                pass
-            if ebit and equity and (equity + lt_debt) > 0:
-                nopat = ebit * (1 - tax_rate)
-                fund["roic_ttm"] = nopat / (equity + lt_debt)
+            if "Tax Provision" in fs.index:
+                tax = float(fs.loc["Tax Provision"].iloc[0])
+            if "Pretax Income" in fs.index:
+                pretax = float(fs.loc["Pretax Income"].iloc[0])
+        # ROIC uses balance-sheet Total Debt/Cash (more precise) falling back to info.
+        bs_debt = fund.get("total_debt")
+        bs_cash = fund.get("total_cash")
+        fund["roce_ttm"] = compute_roce(ebit, ta, cl)
+        fund["roic_ttm"] = compute_roic(ebit, tax, pretax, bs_debt, equity, bs_cash)
+        fund["ev_ebit"] = compute_ev_ebit(fund.get("market_cap"), bs_debt, bs_cash, ebit)
     except Exception as e:
-        warnings_.append(f"roce/roic: {e}")
+        warnings_.append(f"roce/roic/ev_ebit: {e}")
+
+    # --- v2.2: FCF/revenue YoY (latest vs prior) — input to the Gate-5 growth bypass ---
+    fund["fcf_rev_latest"] = None
+    fund["fcf_rev_prior"] = None
+    try:
+        if cf is not None and fs is not None and "Free Cash Flow" in cf.index and "Total Revenue" in fs.index:
+            fcfs = [float(x) for x in cf.loc["Free Cash Flow"].dropna().tolist()]
+            revs = [float(x) for x in fs.loc["Total Revenue"].dropna().tolist()]
+            if len(fcfs) >= 2 and len(revs) >= 2 and revs[0] > 0 and revs[1] > 0:
+                fund["fcf_rev_latest"] = fcfs[0] / revs[0]
+                fund["fcf_rev_prior"] = fcfs[1] / revs[1]
+    except Exception:
+        pass
 
     # --- Borja v2.1: 5y share-count delta (catches dilution / buyback) ---
     fund["shares_change_5y_pct"] = None
@@ -1056,8 +1172,13 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     moat_score, moat_details = score_moat(
         fund["roe_ttm"], fund["roe_5y_avg"], fund["net_margin_ttm"], fund["net_margin_5y_avg"]
     )
+    # v2.2 Buffett opt-in: superior capital efficiency (ROIC>25%) lifts the moat
+    # sub-score 1.25x (cap 10). Does NOT touch the top-level WEIGHTS_V2_DEEP.
+    moat_score, buffett_applied = apply_buffett_moat(moat_score, fund.get("roic_ttm"))
+    moat_details["buffett_moat_applied"] = buffett_applied
+    moat_details["roic_ttm"] = fund.get("roic_ttm")
     val_score, val_details = score_valuation(
-        fund["pe_ratio"], fund["peg"], fund["fcf_yield"], dcf_upside
+        fund["pe_ratio"], fund["peg"], fund["fcf_yield"], dcf_upside, fund.get("ev_ebit")
     )
     category = lynch_category(fund["revenue_cagr_5y"], fund["roe_5y_avg"], fund["net_margin_5y_avg"])
     growth_score, growth_details = score_growth_durability(
@@ -1096,8 +1217,31 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
 
     # earnings_today flag — evaluating a ticker on earnings day means every
     # number is obsolete within hours. Caller (Phase 1 / SKILL.md) can re-pick.
-    today_iso = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(timezone.utc).date()
+    today_iso = today.isoformat()
     earnings_today = bool(earnings_next and earnings_next[:10] == today_iso)
+
+    # --- v2.2: news-event time decay overlay (UX/freshness, NO composite change) ---
+    # I(t) = e^(-ln2/7 * dt); dt = days since the most recent PAST earnings date.
+    # A stale earnings event visibly decays; surfaced in data_warnings when low.
+    last_earnings_date = None
+    try:
+        ed_df = tk.earnings_dates  # includes recent past + upcoming
+        if ed_df is not None and not ed_df.empty:
+            past = [d.date() for d in ed_df.index.to_pydatetime() if d.date() <= today]
+            if past:
+                last_earnings_date = max(past)
+    except Exception:
+        pass
+    news_freshness = None
+    if last_earnings_date is not None:
+        days_since = (today - last_earnings_date).days
+        news_freshness = compute_news_freshness(days_since)
+        if news_freshness is not None and news_freshness < 0.5:
+            warnings_.append(
+                f"news_freshness {news_freshness} — last earnings {last_earnings_date.isoformat()} "
+                f"({days_since}d ago) is stale (>1 half-life); numbers may lag the next print"
+            )
 
     # --- Borja v2.1 extractors (informational; do not feed composite score) ---
     shareholder_structure = compute_shareholder_structure(tk, info)
@@ -1128,12 +1272,14 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         "vix": vix,
         "earnings_date_next": earnings_next,
         "earnings_today": earnings_today,
+        "last_earnings_date": last_earnings_date.isoformat() if last_earnings_date else None,
+        "news_freshness": news_freshness,
         "management_score": None,   # filled by Phase 2.5 LLM pass; deep only
         "management_flag": False,   # set true by finalize_score.py if mgmt<7 and mode==deep
         "shareholder_structure": shareholder_structure,
         "capital_returns": capital_returns,
         "consensus": consensus,
-        "schema_version": "2.1",
+        "schema_version": "2.2",
         "weights": WEIGHTS_V2_DEEP,
         "scores": {
             "fundamentals": fund_score,
