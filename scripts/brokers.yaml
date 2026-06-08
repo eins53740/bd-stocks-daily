@@ -1,0 +1,454 @@
+# brokers.yaml — Broker fee & market-coverage reference for the cost comparator (Phase 8)
+# =============================================================================
+# CAVEAT — READ BEFORE TRUSTING ANY NUMBER HERE
+# Broker fee schedules change frequently (often several times a year) and vary
+# by account type, promotion, residency and order routing. Every fee value
+# below carries an `as_of` date and a `source` note. Values marked
+# `approx: true` are reasonable estimates, NOT quoted tariffs — verify on the
+# broker's live fee page before acting. This file needs a PERIODIC MANUAL
+# REFRESH. Last full review: 2026-06.
+#
+# Scope: exactly the 9 brokers the user actually holds:
+#   IBKR, DEGIRO, Trade Republic, Robinhood, Revolut, XTB,
+#   Banco BIG, Banco CTT, Banco BEST.
+#
+# Schema (per broker):
+#   name:              display name
+#   profile:           one-line positioning
+#   base_currency:     account funding currency (drives FX applicability)
+#   fx_fee_pct:        cost to convert EUR->local for a non-base-currency trade
+#                      (percentage of traded notional, charged once per leg)
+#   custody_fee:       free-text custody / inactivity note (annualised, not per-trade)
+#   markets:           map of MARKET_KEY -> per-market fee block, OR absent =>
+#                      broker does NOT offer that market (excluded from compare)
+#
+#   Per-market fee block:
+#     commission_pct:  variable commission as % of notional (per leg)
+#     commission_min:  minimum commission in EUR (per leg); 0 = no minimum
+#     commission_max:  cap in EUR (per leg); null = uncapped
+#     flat_fee:        fixed per-order fee in EUR (per leg), added to commission
+#     market_data_fee: free-text note (annual/one-off; NOT added to round-trip)
+#     dividend_fee:    free-text note (NOT added to a buy/sell round-trip)
+#     other_costs:     free-text note on hidden costs (FX spread, conversion, etc.)
+#     as_of:           "YYYY-MM" the figure was last verified
+#     source:          where the figure came from
+#     approx:          true if the number is an estimate, not a quoted tariff
+#
+# MARKET_KEY values used by broker_compare.py (the spec's 7 example markets):
+#   US        NYSE / Nasdaq (USD)
+#   IE        Euronext Dublin / ISEQ (EUR)
+#   PT        Euronext Lisbon (EUR)
+#   TW        Taiwan Stock Exchange (TWD)
+#   HK        Hong Kong Stock Exchange (HKD)
+#   JP        Tokyo Stock Exchange (JPY)
+#   CN_SZ     Shenzhen Stock Exchange (CNY, via Stock-Connect where offered)
+# =============================================================================
+
+brokers:
+
+  # ---------------------------------------------------------------------------
+  IBKR:
+    name: "Interactive Brokers"
+    profile: "Widest global reach; tiered/fixed pricing; pro-grade."
+    base_currency: "EUR"
+    fx_fee_pct: 0.03            # 0.002% of notional, min USD 2 -> ~0.03% on small tickets, effectively spread
+    custody_fee: "No custody fee; no inactivity fee since 2021."
+    markets:
+      US:
+        commission_pct: 0.05
+        commission_min: 0.35
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "US securities snapshot free; streaming ~USD 1.5-4.5/mo per bundle."
+        dividend_fee: "No handling fee; withholding tax applies (US 15% w/ W-8BEN)."
+        other_costs: "FX auto-conversion ~0.002% min USD 2 if funding in EUR."
+        as_of: "2026-06"
+        source: "IBKR Fixed pricing schedule (US stocks/ETFs)."
+        approx: false
+      IE:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Euronext bundle ~EUR 3/mo."
+        dividend_fee: "No handling fee."
+        other_costs: "EUR-denominated, no FX."
+        as_of: "2026-06"
+        source: "IBKR Europe tiered/fixed (Euronext)."
+        approx: true
+      PT:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Euronext bundle ~EUR 3/mo."
+        dividend_fee: "No handling fee."
+        other_costs: "EUR-denominated, no FX."
+        as_of: "2026-06"
+        source: "IBKR Europe fixed (Euronext Lisbon)."
+        approx: true
+      TW:
+        commission_pct: 0.15
+        commission_min: 15.0      # ~TWD 500 min
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "TWSE data ~USD 3/mo."
+        dividend_fee: "No handling fee; TW withholding applies."
+        other_costs: "FX EUR->TWD ~0.03%; TW gov transaction tax 0.3% on sells (large)."
+        as_of: "2026-06"
+        source: "IBKR Asia (Taiwan) tiered; tax is exchange-mandated."
+        approx: true
+      HK:
+        commission_pct: 0.08
+        commission_min: 18.0      # ~HKD 18 min
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "HKEX data ~USD 2/mo."
+        dividend_fee: "No handling fee."
+        other_costs: "FX EUR->HKD ~0.03%; HK stamp duty 0.1% per side."
+        as_of: "2026-06"
+        source: "IBKR Asia (HK) tiered + HKEX stamp duty."
+        approx: true
+      JP:
+        commission_pct: 0.05
+        commission_min: 8.0       # ~JPY 80-100 min equiv
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "TSE data ~USD 3/mo."
+        dividend_fee: "No handling fee; JP withholding applies."
+        other_costs: "FX EUR->JPY ~0.03%."
+        as_of: "2026-06"
+        source: "IBKR Asia (Japan) tiered."
+        approx: true
+      CN_SZ:
+        commission_pct: 0.08
+        commission_min: 12.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Stock-Connect (SZSE) data ~USD 2/mo."
+        dividend_fee: "No handling fee."
+        other_costs: "FX EUR->CNH ~0.03%; Connect stamp duty 0.05% on sells."
+        as_of: "2026-06"
+        source: "IBKR China A via Stock-Connect (Shenzhen)."
+        approx: true
+
+  # ---------------------------------------------------------------------------
+  DEGIRO:
+    name: "DEGIRO"
+    profile: "Low-cost EU retail; broad reach but Asia access is partial."
+    base_currency: "EUR"
+    fx_fee_pct: 0.25            # AutoFX 0.25% per conversion
+    custody_fee: "EUR 2.50/yr per non-home exchange (connectivity fee)."
+    markets:
+      US:
+        commission_pct: 0.0
+        commission_min: 1.0
+        commission_max: 1.0
+        flat_fee: 1.0           # EUR 1 flat handling fee per US order
+        market_data_fee: "Free real-time on core; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee on most US names."
+        other_costs: "AutoFX 0.25% EUR->USD per leg; EUR 2.50/yr exchange connectivity."
+        as_of: "2026-06"
+        source: "DEGIRO fee schedule (US flat EUR 1)."
+        approx: false
+      IE:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 3.9           # EUR ~3.90 core EU
+        market_data_fee: "Free real-time on core EU."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 2.50/yr exchange connectivity."
+        as_of: "2026-06"
+        source: "DEGIRO core EU flat (Euronext Dublin)."
+        approx: true
+      PT:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 3.9
+        market_data_fee: "Free real-time on Euronext core."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 2.50/yr exchange connectivity."
+        as_of: "2026-06"
+        source: "DEGIRO Euronext Lisbon flat."
+        approx: true
+      HK:
+        commission_pct: 0.05
+        commission_min: 10.0
+        commission_max: null
+        flat_fee: 5.0           # EUR ~5 base + variable on HK
+        market_data_fee: "HK data paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "AutoFX 0.25% EUR->HKD; HK stamp duty 0.1%/side; EUR 2.50/yr connectivity."
+        as_of: "2026-06"
+        source: "DEGIRO HK (estimate; tariff varies)."
+        approx: true
+      JP:
+        commission_pct: 0.05
+        commission_min: 10.0
+        commission_max: null
+        flat_fee: 5.0
+        market_data_fee: "JP data paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "AutoFX 0.25% EUR->JPY; EUR 2.50/yr connectivity."
+        as_of: "2026-06"
+        source: "DEGIRO Japan (estimate; tariff varies)."
+        approx: true
+      # NOTE: DEGIRO does not offer Taiwan (TW) or China A-shares (CN_SZ) to retail.
+
+  # ---------------------------------------------------------------------------
+  TradeRepublic:
+    name: "Trade Republic"
+    profile: "EU mobile-first; flat EUR 1/order; US + core EU only."
+    base_currency: "EUR"
+    fx_fee_pct: 0.0            # trades settle in EUR via German depository; no explicit FX on US
+    custody_fee: "No custody fee; no inactivity fee."
+    markets:
+      US:
+        commission_pct: 0.0
+        commission_min: 1.0
+        commission_max: 1.0
+        flat_fee: 1.0           # EUR 1 external settlement fee
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee; US withholding applies."
+        other_costs: "FX spread embedded in EUR-settled price (~0.1-0.3% implied)."
+        as_of: "2026-06"
+        source: "Trade Republic EUR 1 settlement fee."
+        approx: false
+      IE:
+        commission_pct: 0.0
+        commission_min: 1.0
+        commission_max: 1.0
+        flat_fee: 1.0
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee."
+        other_costs: "EUR-settled, no FX."
+        as_of: "2026-06"
+        source: "Trade Republic EUR 1 settlement (EU)."
+        approx: true
+      PT:
+        commission_pct: 0.0
+        commission_min: 1.0
+        commission_max: 1.0
+        flat_fee: 1.0
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee."
+        other_costs: "EUR-settled, no FX. Limited PT-listed coverage."
+        as_of: "2026-06"
+        source: "Trade Republic EUR 1 settlement (EU; PT coverage partial)."
+        approx: true
+      # NOTE: Trade Republic does NOT offer TW / HK / JP / CN_SZ to retail.
+
+  # ---------------------------------------------------------------------------
+  Robinhood:
+    name: "Robinhood"
+    profile: "US-only commission-free; no foreign exchanges."
+    base_currency: "USD"
+    fx_fee_pct: 0.0
+    custody_fee: "No custody/inactivity fee on cash brokerage."
+    markets:
+      US:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: 0.0
+        flat_fee: 0.0
+        market_data_fee: "Free; Gold tier ~USD 5/mo for L2 (optional)."
+        dividend_fee: "No handling fee."
+        other_costs: "Regulatory pass-through (SEC/TAF) a few cents; EUR funding needs a USD bridge."
+        as_of: "2026-06"
+        source: "Robinhood commission-free US equities."
+        approx: false
+      # NOTE: Robinhood offers NO non-US markets. All other markets intentionally absent.
+
+  # ---------------------------------------------------------------------------
+  Revolut:
+    name: "Revolut"
+    profile: "EU app; US equities + limited EU; commission tied to plan tier."
+    base_currency: "EUR"
+    fx_fee_pct: 0.0            # in-app FX usually free within plan allowance on weekdays
+    custody_fee: "No custody fee; free-trade allowance per plan, then per-order fee."
+    markets:
+      US:
+        commission_pct: 0.25    # ~0.25% beyond free allowance (Standard plan)
+        commission_min: 1.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee; US withholding applies."
+        other_costs: "1% FX markup on weekends / above plan allowance; small custody fee 0.12%/yr on some plans."
+        as_of: "2026-06"
+        source: "Revolut Standard plan US equity pricing (estimate)."
+        approx: true
+      IE:
+        commission_pct: 0.25
+        commission_min: 1.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee."
+        other_costs: "EUR-settled; limited EU coverage."
+        as_of: "2026-06"
+        source: "Revolut EU equity (limited; estimate)."
+        approx: true
+      # NOTE: Revolut does NOT offer Asia (TW/HK/JP/CN_SZ) or reliable PT-listed access.
+
+  # ---------------------------------------------------------------------------
+  XTB:
+    name: "XTB"
+    profile: "EU broker; commission-free stocks under EUR 100k/mo turnover; US + EU."
+    base_currency: "EUR"
+    fx_fee_pct: 0.5            # 0.5% currency conversion on non-EUR trades
+    custody_fee: "Inactivity fee EUR 10/mo after 12mo idle + no deposit."
+    markets:
+      US:
+        commission_pct: 0.0     # 0% up to EUR 100k monthly turnover, then 0.2%
+        commission_min: 0.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee; US withholding applies."
+        other_costs: "0.5% FX conversion EUR->USD per leg (the real cost driver)."
+        as_of: "2026-06"
+        source: "XTB 0% commission (<=EUR 100k/mo) + 0.5% FX."
+        approx: false
+      IE:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee."
+        other_costs: "EUR-settled, no FX."
+        as_of: "2026-06"
+        source: "XTB 0% commission EU (Euronext Dublin)."
+        approx: true
+      PT:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free in-app."
+        dividend_fee: "No handling fee."
+        other_costs: "EUR-settled, no FX. PT-listed coverage limited."
+        as_of: "2026-06"
+        source: "XTB 0% commission EU (Euronext Lisbon; partial coverage)."
+        approx: true
+      # NOTE: XTB does NOT offer cash equities in TW / HK / JP / CN_SZ (CFD-only on indices, out of scope).
+
+  # ---------------------------------------------------------------------------
+  BancoBIG:
+    name: "Banco BIG"
+    profile: "PT bank-broker; strong PT/Euronext, limited foreign-market access."
+    base_currency: "EUR"
+    fx_fee_pct: 0.5
+    custody_fee: "Custody ~0.04%/yr (min EUR ~5/yr) on foreign holdings."
+    markets:
+      PT:
+        commission_pct: 0.25
+        commission_min: 5.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free real-time PT."
+        dividend_fee: "Dividend collection fee ~1-2% on foreign; PT usually free."
+        other_costs: "EUR-settled domestic."
+        as_of: "2026-06"
+        source: "Banco BIG PT equity tariff (estimate)."
+        approx: true
+      IE:
+        commission_pct: 0.30
+        commission_min: 10.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Euronext data may carry a small fee."
+        dividend_fee: "Foreign dividend collection ~1-2%."
+        other_costs: "EUR-settled Euronext."
+        as_of: "2026-06"
+        source: "Banco BIG Euronext foreign tariff (estimate)."
+        approx: true
+      US:
+        commission_pct: 0.35
+        commission_min: 15.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "US data fee may apply."
+        dividend_fee: "US dividend collection ~1-2%."
+        other_costs: "0.5% FX EUR->USD; higher minimums make small US tickets costly."
+        as_of: "2026-06"
+        source: "Banco BIG US equity tariff (estimate)."
+        approx: true
+      # NOTE: Banco BIG does NOT offer Asian markets (TW/HK/JP/CN_SZ) to retail.
+
+  # ---------------------------------------------------------------------------
+  BancoCTT:
+    name: "Banco CTT"
+    profile: "PT retail bank; very PT-centric, minimal foreign-market reach."
+    base_currency: "EUR"
+    fx_fee_pct: 0.5
+    custody_fee: "Custody ~0.05%/yr on foreign positions (min applies)."
+    markets:
+      PT:
+        commission_pct: 0.30
+        commission_min: 6.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free PT real-time."
+        dividend_fee: "PT usually free; foreign ~2%."
+        other_costs: "EUR-settled domestic."
+        as_of: "2026-06"
+        source: "Banco CTT PT equity tariff (estimate)."
+        approx: true
+      # NOTE: Banco CTT offers essentially PT/Euronext-Lisbon only; no US/IE/Asia retail access here.
+
+  # ---------------------------------------------------------------------------
+  BancoBEST:
+    name: "Banco BEST"
+    profile: "PT online bank; PT + some US/EU; Asia not offered."
+    base_currency: "EUR"
+    fx_fee_pct: 0.5
+    custody_fee: "Custody ~0.04%/yr foreign; PT custody often waived."
+    markets:
+      PT:
+        commission_pct: 0.25
+        commission_min: 5.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Free PT real-time."
+        dividend_fee: "PT usually free; foreign ~1-2%."
+        other_costs: "EUR-settled domestic."
+        as_of: "2026-06"
+        source: "Banco BEST PT equity tariff (estimate)."
+        approx: true
+      IE:
+        commission_pct: 0.30
+        commission_min: 12.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Euronext data fee may apply."
+        dividend_fee: "Foreign dividend collection ~1-2%."
+        other_costs: "EUR-settled Euronext."
+        as_of: "2026-06"
+        source: "Banco BEST Euronext foreign tariff (estimate)."
+        approx: true
+      US:
+        commission_pct: 0.30
+        commission_min: 14.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "US data fee may apply."
+        dividend_fee: "US dividend collection ~1-2%."
+        other_costs: "0.5% FX EUR->USD; high minimum penalises small US tickets."
+        as_of: "2026-06"
+        source: "Banco BEST US equity tariff (estimate)."
+        approx: true
+      # NOTE: Banco BEST does NOT offer Asian markets (TW/HK/JP/CN_SZ) to retail.
+
+# Market display metadata (for the dashboard + summaries).
+markets_meta:
+  US:    { label: "NYSE / Nasdaq (US)", currency: "USD", region: "US" }
+  IE:    { label: "Euronext Dublin / ISEQ (Ireland)", currency: "EUR", region: "IE" }
+  PT:    { label: "Euronext Lisbon (Portugal)", currency: "EUR", region: "PT" }
+  TW:    { label: "Taiwan Stock Exchange", currency: "TWD", region: "TW" }
+  HK:    { label: "Hong Kong Stock Exchange", currency: "HKD", region: "HK" }
+  JP:    { label: "Tokyo Stock Exchange (Japan)", currency: "JPY", region: "JP" }
+  CN_SZ: { label: "Shenzhen Stock Exchange", currency: "CNY", region: "CN" }

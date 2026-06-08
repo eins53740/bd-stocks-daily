@@ -34,6 +34,7 @@ LOG = ROOT / "_log.csv"
 PREFILTER_STATS = ROOT / "_prefilter_stats.json"
 PORTFOLIO_JSON = ROOT / "_portfolio.json"
 THESIS_JSON = ROOT / "_thesis.json"
+BROKERS_JSON = ROOT / "_brokers.json"
 
 REPORT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_.+\.md$")
 
@@ -234,6 +235,18 @@ def load_thesis() -> dict:
         return {"names": []}
 
 
+def load_brokers() -> dict:
+    """Read the precomputed _brokers.json written by broker_compare.py.
+    The dashboard computes nothing — it only renders this. Missing/invalid -> empty."""
+    if not BROKERS_JSON.exists():
+        return {"markets": [], "support_matrix": {}}
+    try:
+        return json.loads(BROKERS_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        log(f"WARN: could not parse {BROKERS_JSON}: {e}")
+        return {"markets": [], "support_matrix": {}}
+
+
 def main() -> int:
     if not TEMPLATE.exists():
         log(f"ERROR: template not found at {TEMPLATE}")
@@ -256,6 +269,7 @@ def main() -> int:
         "prefilter": load_prefilter(),
         "portfolio": load_portfolio(),
         "thesis": load_thesis(),
+        "brokers": load_brokers(),
     }
 
     template = TEMPLATE.read_text(encoding="utf-8")
