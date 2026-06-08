@@ -10,17 +10,18 @@ Data quality (added after repeated gross yfinance errors on EU small/mid-caps):
     reconciled with P/S÷net_margin. Sets out["data_quality"] = ok|suspect and
     out["consistency_issues"]. Catches errors no second source is needed for.
   * Layer 1 — fetch_external_validation(): external cross-check, FMP first
-    (US fundamentals) → Twelve Data fallback (key in api_keys.txt). Best-effort
-    & non-fatal. NOTE: BOTH free tiers are US-only for quotes — FMP returns 402
-    and Twelve Data returns 404 ("needs Grow/Venture plan") for EU exchanges
-    (.MC/.LS/.PA/.DE). So Layer 1 validates US tickers; EU relies on Layers 0+2.
-    The TD path is wired so that upgrading the TD plan auto-enables EU validation
-    with no code change. Disable all of Layer 1 with --no-fmp / --no-xval.
+    (US fundamentals) → Twelve Data fallback (key in api_keys.txt) → Stooq EOD
+    *price* fallback for non-US names (Phase 6, Finding D2; no API key).
+    Best-effort & non-fatal. FMP returns 402 and Twelve Data returns 404
+    ("needs Grow/Venture plan") for many EU/Asia exchanges on the free tier, so
+    Stooq now carries the price cross-check for global names. The Stooq daily-EOD
+    CSV endpoint (https://stooq.com/q/d/l/?s=<sym>&i=d) is plain CSV and is NOT
+    JS-blocked — only the interactive stooq.com site is. Disable all of Layer 1
+    with --no-fmp / --no-xval.
   * Layer 2 — reconcile_price_with_history(): self-heals a stale info-price by
     comparing it to history()'s last close (a different, reliable yfinance path)
-    and recomputing market_cap. Works on EVERY exchange incl. Iberian small-caps
-    that no free quote API covers (Stooq is JS-blocked; FMP/Polygon/Finnhub free
-    are US-only). This is what fixes the CMO.MC €8.49→€38 class automatically.
+    and recomputing market_cap. Works on EVERY exchange incl. Iberian small-caps.
+    This is what fixes the CMO.MC €8.49→€38 class automatically.
 
 data_quality field: ok | corrected (Layer 2 self-healed price/cap) | suspect
 (Layer 0 found an unfixable inconsistency, e.g. distorted margin/PE).
@@ -50,6 +51,9 @@ for _name in ("stdout", "stderr"):
 warnings.filterwarnings("ignore")
 
 import yfinance as yf  # noqa: E402
+
+# Phase 6 — global-market metadata + free Stooq price cross-check.
+import markets  # noqa: E402
 
 # Reuse BD_Finance's api_keys_reader for the FMP cross-validation key (Layer 1).
 BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
@@ -492,6 +496,28 @@ def fetch_vix() -> float | None:
         return None
 
 
+def fetch_eur_rate(currency: str) -> float | None:
+    """Units of `currency` per 1 EUR via the Yahoo FX pair (e.g. EURJPY=X).
+
+    EUR returns 1.0. Best-effort & non-fatal — None on any failure so EUR
+    conversion simply degrades to 'not available' rather than crashing a market.
+    """
+    cur = (currency or "").upper()
+    if cur == "EUR":
+        return 1.0
+    pair = markets.eur_fx_pair(cur)
+    if not pair:
+        return None
+    try:
+        h = yf.Ticker(pair).history(period="5d")
+        if h is None or h.empty:
+            return None
+        rate = float(h["Close"].iloc[-1])
+        return rate if rate > 0 else None
+    except Exception:
+        return None
+
+
 # ------------------------- Composite reweighting (schema v2) -------------------------
 # Weights locked in the v2 plan. Management is an LLM-derived score injected after
 # Phase 2.5; analyze_ticker emits a provisional composite using mgmt=5.0 for deep,
@@ -897,7 +923,23 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
 
     # --- Basics ---
     price_curr = safe(lambda: info.get("currentPrice") or info.get("regularMarketPrice") or hist["Close"].iloc[-1] if hist is not None and not hist.empty else None)
-    currency = info.get("currency", "USD")
+
+    # --- Phase 6: global-market metadata (suffix-driven currency/region/accounting) ---
+    mkt_meta = markets.market_meta(ticker)
+    # Prefer yfinance's reported currency; fall back to the suffix-derived one.
+    # Warn (don't crash) when they disagree — a sign of an ADR / odd listing.
+    currency = info.get("currency") or mkt_meta["currency"]
+    if info.get("currency") and info["currency"].upper() != mkt_meta["currency"] and mkt_meta["known"]:
+        warnings_.append(
+            f"currency mismatch: yfinance reports {info['currency']} but "
+            f"{mkt_meta['exchange']} ({ticker}) is normally {mkt_meta['currency']}"
+        )
+    region = mkt_meta["region"]
+    accounting_standard = mkt_meta["accounting_standard"]
+    exchange_name = mkt_meta["exchange"]
+    # Per-market accounting / coverage / liquidity caveats into data_warnings.
+    for cav in markets.market_caveats(ticker):
+        warnings_.append(cav)
 
     # --- Fundamentals from info + statements ---
     fund = {
@@ -1248,6 +1290,13 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     capital_returns = compute_capital_returns(fund, cf)
     consensus = compute_consensus(tk)
 
+    # --- Phase 6: local -> EUR conversion (local currency + EUR everywhere) ---
+    eur_rate = fetch_eur_rate(currency)
+    price_eur = markets.to_eur(price_curr, currency, eur_rate)
+    market_cap_eur = markets.to_eur(fund.get("market_cap"), currency, eur_rate)
+    if eur_rate is None and (currency or "").upper() != "EUR":
+        warnings_.append(f"EUR FX rate for {currency} unavailable — EUR figures omitted")
+
     out = {
         "ticker": ticker,
         "mode": mode,
@@ -1256,7 +1305,13 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         "sector": info.get("sector"),
         "industry": info.get("industry"),
         "currency": currency,
+        "region": region,
+        "exchange": exchange_name,
+        "accounting_standard": accounting_standard,
+        "eur_rate_local_per_eur": eur_rate,
         "price_current": price_curr,
+        "price_current_eur": price_eur,
+        "market_cap_eur": market_cap_eur,
         "fundamentals": fund,
         "technical": tech,
         "piotroski_fscore": fscore,
@@ -1310,6 +1365,12 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     for c in corrected_fields:
         warnings_.append(
             f"corrected: {c['field']} {c['old']} -> {c['new']} ({c['source']})"
+        )
+    # Recompute EUR figures off the (possibly self-healed) price/market_cap.
+    if corrected_fields and eur_rate is not None:
+        out["price_current_eur"] = markets.to_eur(out.get("price_current"), currency, eur_rate)
+        out["market_cap_eur"] = markets.to_eur(
+            out.get("fundamentals", {}).get("market_cap"), currency, eur_rate
         )
 
     # --- Layer 0: internal-consistency gate on the (possibly corrected) data ---
@@ -1615,8 +1676,16 @@ def fetch_twelvedata_validation(ticker: str, fund: dict, price_curr) -> dict:
 
 def fetch_external_validation(ticker: str, fund: dict, price_curr) -> dict:
     """Orchestrate the external cross-checks: FMP first (best for US fundamentals),
-    fall back to Twelve Data when FMP has no coverage (EU listings). Returns a
-    single unified dict with a `provider` field naming who actually validated."""
+    fall back to Twelve Data (EU-capable), then Stooq EOD price (Finding D2 —
+    free global price cross-check for non-US names, no API key). Returns a single
+    unified dict with a `provider` field naming who actually validated.
+
+    Stooq closes the EU/Asia price-validation gap that FMP (US-only free) and
+    Twelve Data (gated EU coverage) leave open — it serves Taiwan/HK/Korea/Japan/
+    India/China EOD via the CSV endpoint, which is NOT JS-blocked (only the
+    interactive stooq.com site is). Price/market-cap only — Stooq has no
+    fundamentals. For US names FMP already covers price+P/E, so Stooq is reserved
+    as the non-US fallback to avoid a redundant request on the daily path."""
     fmp = fetch_fmp_validation(ticker, fund, price_curr)
     if fmp.get("checked"):
         fmp["provider"] = "fmp"
@@ -1626,9 +1695,20 @@ def fetch_external_validation(ticker: str, fund: dict, price_curr) -> dict:
         td["provider"] = "twelvedata"
         td["fmp_note"] = fmp.get("error")
         return td
+    # Stooq EOD price fallback (non-US: anything with a Yahoo suffix).
+    stooq_note = None
+    if markets.suffix_of(ticker):
+        stq = markets.stooq_price_check(ticker, price_curr)
+        if stq.get("checked"):
+            stq["provider"] = "stooq"
+            stq["fmp_note"] = fmp.get("error")
+            stq["twelvedata_note"] = td.get("error")
+            return stq
+        stooq_note = stq.get("error")
     return {
         "provider": "none", "checked": [], "divergences": [], "agree": None,
-        "error": f"FMP: {fmp.get('error')} | TwelveData: {td.get('error')}",
+        "error": f"FMP: {fmp.get('error')} | TwelveData: {td.get('error')}"
+                 + (f" | Stooq: {stooq_note}" if stooq_note else ""),
     }
 
 
