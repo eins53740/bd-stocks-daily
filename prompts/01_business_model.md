@@ -34,20 +34,58 @@ RULES:
 
 OUTPUT: 300–500 words. Clear sections. Cite sources (annual report page or IR URL).
 
-**REQUIRED Sankey block** (appended at the end of the §2.1 narrative — Mermaid `sankey-beta`). Values are TTM in the company's reporting currency, in millions; round to the nearest 100M for readability. Source-of-funds (Revenue) on the left flows into uses (COGS, R&D, SG&A, Other OpEx, Tax, Net Income). Net Income then splits into Dividends + Buybacks + Retained Earnings when those allocations are disclosed.
+**REQUIRED Sankey block** (appended at the end of the §2.1 narrative — Mermaid `sankey-beta`). Values are TTM in the company's reporting currency, in millions; round to the nearest 100M for readability. **In-flow** (source of funds — Revenue) enters on the left; **out-flows** (uses — COGS, R&D, SG&A, Other OpEx, Interest & Tax, capex) exit on the right; value-creation nodes (Gross Profit → Operating Income → Net Income → Retained Earnings) form the green spine through the middle. Net Income then splits into Dividends + Buybacks + Retained Earnings when those allocations are disclosed; if FCF / capex are disclosed, branch Operating Income → Capex (cost) and the residual toward FCF.
 
-**Colour convention** (mermaid sankey-beta colours links by source automatically — the convention is enforced strictly only when render_charts.py emits a PNG version of the diagram):
-- 🔴 Red — cost flows: COGS, R&D, SG&A, Other OpEx, Interest & Tax.
-- 🟢 Green — profit flows: Gross Profit, Operating Income, Net Income, Retained Earnings.
-- 🟡 Yellow/orange — capital allocation: Dividends, Buybacks.
-- 🔵 Blue — neutral input: Revenue.
+#### Standardised colour palette (apply to EVERY diagram — no exceptions)
+
+Mermaid `sankey-beta` colours links **by their source node** when `linkColor: source` is set, and node colours are assigned with a `sankey.nodeColors` map in the diagram's YAML config header. Use exactly these hex values so diagrams are visually consistent across sectors:
+
+| Category | Nodes | Hex | Swatch |
+|----------|-------|-----|--------|
+| **Revenue / in-flow** (neutral source) | Revenue | `#2563eb` | 🔵 blue |
+| **Value-creation & profit** (RESERVED — green only) | Gross Profit, Operating Income, Net Income, FCF, Retained Earnings | `#16a34a` | 🟢 green |
+| **Operating costs** | COGS, R&D, SG&A, Other OpEx | `#dc2626` | 🔴 red |
+| **Interest & Tax** (non-operating drains) | Interest & Tax | `#b45309` | 🟤 amber-brown |
+| **Capex / investment out-flow** | Capex | `#7c3aed` | 🟣 purple |
+| **Capital allocation** (returns to holders) | Dividends, Buybacks | `#ca8a04` | 🟡 gold |
+
+Rules:
+- **Green is reserved strictly for value-creation & profit metrics** (Gross Profit, Operating Income, Net Income, FCF, Retained Earnings). Never colour a cost or a payout green.
+- Costs are warm (red operating / amber interest-tax); capital uses are cool-distinct (purple capex, gold shareholder returns); the lone neutral input is blue.
+- Keep flows left→right: Revenue (in) → profit spine (green) → out-flows (red/amber/purple/gold).
+- `linkColor: source` makes every link inherit its source node's colour, so a flow *out of* Gross Profit is green, a flow *into* COGS is red, etc. — this is what enforces the palette visually.
+- Source caption, TTM basis, millions rounding, and the `(annual report p.X)` / `(not disclosed)` tagging rules are unchanged.
+
+The diagram is valid `sankey-beta` and renders in Obsidian's bundled Mermaid (v11+). `nodeColors` is the official Mermaid API for pinning node hex; some renderer versions still fall back to the default theme palette for it, so the **legend caption below is mandatory** — it guarantees the reader always sees the green-=-value-creation mapping even when a renderer ignores `nodeColors`. Always keep `linkColor: source` (universally honoured) so links are at least consistently coloured by their origin node.
 
 Reference rendering: `IMG/sankey_money_engine_demo.png` (illustrative SaaS example, 25% net margin) in the StocksDaily docs folder.
 
-Template (replace placeholders, keep the comment lines):
+Template (replace placeholders, keep the config header + `nodeColors` map exactly):
 
 ````markdown
 ```mermaid
+---
+config:
+  sankey:
+    showValues: true
+    linkColor: source
+    nodeAlignment: justify
+    nodeColors:
+      Revenue: "#2563eb"
+      Gross Profit: "#16a34a"
+      Operating Income: "#16a34a"
+      Net Income: "#16a34a"
+      FCF: "#16a34a"
+      Retained Earnings: "#16a34a"
+      COGS: "#dc2626"
+      R&D: "#dc2626"
+      SG&A: "#dc2626"
+      Other OpEx: "#dc2626"
+      Interest & Tax: "#b45309"
+      Capex: "#7c3aed"
+      Dividends: "#ca8a04"
+      Buybacks: "#ca8a04"
+---
 sankey-beta
 
 %% Money engine — TTM, {currency} M
@@ -59,6 +97,7 @@ Gross Profit,SG&A,{sga}
 Gross Profit,Other OpEx,{other_opex}
 Gross Profit,Operating Income,{op_income}
 Operating Income,Interest & Tax,{int_tax}
+Operating Income,Capex,{capex}
 Operating Income,Net Income,{net_income}
 Net Income,Dividends,{div}
 Net Income,Buybacks,{buyback}
@@ -66,8 +105,15 @@ Net Income,Retained Earnings,{retained}
 ```
 ````
 
-After the diagram, add a one-line caption:
+Notes on the template:
+- The `nodeColors` map assigns each node its palette hex; drop any entry whose node maps to a `(not disclosed)` value, and drop the matching flow line too — never emit a flow with a blank or invented value.
+- The `Operating Income,Capex` branch is optional: include it only when capex is disclosed in the JSON or annual report; otherwise omit both that flow line and the `Capex` entry in `nodeColors`.
+- Keep the diagram body as bare `source,target,value` CSV rows after the `sankey-beta` line — the only addition versus a plain diagram is the YAML `config` header.
+
+After the diagram, add a one-line caption **and the mandatory colour legend** (both required — the legend conveys the palette even if the renderer ignores `nodeColors`):
 > *Cada euro de receita transforma-se em ~{net_margin_pct}% de net income; o maior dreno é {biggest_cost_bucket} ({biggest_cost_pct}%).*
+>
+> *Legenda: 🔵 receita · 🟢 criação de valor/lucro · 🔴 custos operacionais · 🟤 juros & impostos · 🟣 capex · 🟡 retorno a accionistas.*
 
 {STYLE_RULES}
 ```

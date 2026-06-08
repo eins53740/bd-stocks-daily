@@ -750,3 +750,44 @@ python "%SCRIPTS%\build_dashboard.py"
   else Hold.
 - **Tests**: `tests/test_portfolio.py` covers the engine + freshness gating
   (network/DB-free).
+
+## Investment Thesis Dashboard (v3 Phase 5)
+
+A thesis-tracker view (FS2 graft) on top of the stored evaluations. One precomputed
+`_thesis.json` feeds a **Thesis card** in the stdlib `build_dashboard.py`. **No new LLM
+pass, no composite recomputation** — it reuses `_log.csv`, report frontmatter, stored
+narratives, and `bear_case_trigger`.
+
+```bash
+# 1) Aggregate per-name thesis from stored data -> writes _thesis.json (stdlib-only)
+python "%SCRIPTS%\thesis_dashboard.py"
+
+# 2) Re-render the dashboard (Thesis card reads _thesis.json, stdlib-only)
+python "%SCRIPTS%\build_dashboard.py"
+```
+
+- **Per name** (most-recent report per ticker): Fundamental / Technical / Overall
+  scores + Quality / Valuation / Risk reads + a **Buy / Hold / Sell** stance with a
+  cited rationale block.
+- **Stance logic** (`derive_stance`, pure/tested): thesis broken / weak verdict
+  (reject·fair) / score<5 → **Sell**; strong verdict-or-overall≥7.5 + all pillars
+  intact + not NO-GO → **Buy**; everything else → **Hold** (with monitoring criteria).
+- **Pillars (FS2 — `derive_pillars`)**: 3–5 testable pillars per name — Business
+  quality (gates+Piotroski), Valuation (composite band), Balance-sheet resilience
+  (Altman-Z), Management & capital allocation (mgmt score/flag), Thesis-failure guard
+  (the stored `bear_case_trigger`). Each carries **status** (intact/weakened/broken)
+  + **conviction** (High/Med/Low) derived deterministically from stored scalars.
+  When a caller supplies `thesis_status` (from `thesis_check.py`), it overrides the
+  guard pillar so a drift-detected break shows.
+- **Tests**: `tests/test_thesis_dashboard.py` covers reads / pillars / stance / shape
+  (network-free, synthetic report dicts).
+
+## Business-model Sankey — standardised palette (v3 Phase 5)
+
+`prompts/01_business_model.md` now defines an explicit colour palette so every money-
+engine Sankey is consistent: 🔵 Revenue `#2563eb` · 🟢 value-creation/profit `#16a34a`
+(reserved — Gross Profit, Operating Income, Net Income, FCF, Retained Earnings) ·
+🔴 operating costs `#dc2626` · 🟤 Interest & Tax `#b45309` · 🟣 Capex `#7c3aed` ·
+🟡 capital allocation `#ca8a04`. Uses a YAML `config.sankey.nodeColors` map +
+`linkColor: source`, plus a **mandatory legend caption** so the mapping survives
+renderers that ignore `nodeColors`. Validated as `sankey-beta` via mermaid-cli 11.12.
