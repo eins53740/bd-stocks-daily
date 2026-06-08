@@ -169,6 +169,13 @@ def slim_report(path: Path, today: dt.date) -> dict | None:
         "thesis": extract_field(body, "Thesis"),
         "risks": risks,
         "action": extract_field(body, "Action"),
+        # ---- Phase-3 technical fields (frontmatter, scalars only) ----
+        "tech_score": safe_float(fm.get("technical_score")),
+        "go_no_go": fm.get("go_no_go"),
+        "combined_score": safe_float(fm.get("combined_score")),
+        "entry_zone": fm.get("entry_zone"),
+        "stop_loss": fm.get("suggested_stop_loss"),
+        "tech_risk": fm.get("tech_risk_level"),
     }
 
 

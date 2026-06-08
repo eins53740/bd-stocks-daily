@@ -283,6 +283,21 @@ Produz em `OUT_DIR\IMG\`:
 
 Screens não chamam este script.
 
+### Phase 3.5 — Technical Score & GO/NO-GO (deep only, fund score ≥ 7.0)
+
+Runs **only for the deep ticker** and **only when its fundamental score ≥ 7.0** (read `scores.fundamentals` from the analysis JSON — the per-axis fundamental sub-score, not the composite). For names below the gate, skip this phase entirely: the technical read adds no value if the business hasn't cleared the fundamental bar, and the report's §2.10 keeps the indicator table without a GO/NO-GO badge.
+
+```bash
+python "%SCRIPTS%\technical_score.py" --ticker ASML.AS --fundamental-score {scores.fundamentals} --analysis-json "%OUT_DIR%\_tmp\2026-04-30_ASML.AS.json"
+```
+
+- Indicator math is **reused** from `BD_Finance/technical/*` (RSI/ATR/ADX/Bollinger/max-drawdown) — no TA-Lib, no reimplementation. The script imports them with a yfinance stub so their import-time demo downloads don't fire.
+- It fetches ~2y daily OHLCV (yfinance), computes RSI(14)/MACD/SMA50/SMA200/ADX(20)/ATR(14)/support-resistance/volume-trend/relative-strength vs a region index, then emits: `technical_score` (0–10), `go_no_go` (GO/NO-GO), `combined_score` (0.6·fund + 0.4·tech), `entry_zone` (price band), `suggested_stop_loss` ([1.5×ATR, 2×ATR] below price), `risk_level` (Low/Med/High from ATR%), plus all raw indicators under `indicators`.
+- If fund score < 7.0 it exits 0 with `{"skipped": true, ...}` — handle gracefully (no GO/NO-GO in §2.10).
+- The script persists `%OUT_DIR%\_technical\{TICKER}.json` automatically (the offline, stdlib-only dashboard reads the same fields from report frontmatter).
+- **Wire the output into the report:** fill §2.10's callout + indicator table from this JSON, and write the six scalars into frontmatter (`technical_score`, `go_no_go`, `combined_score`, `entry_zone`, `suggested_stop_loss`, `tech_risk_level`) so `build_dashboard.py` surfaces the row in the Technical GO/NO-GO table. Use `go_callout = "success"` when GO, `"warning"` when NO-GO.
+- Screens do **not** run this phase.
+
 ### Phase 4 — Find official reports (narrative-only WebFetch OK here)
 
 ```bash
@@ -343,6 +358,12 @@ management_flag: false         # true only if <7.0 and mode==deep
 industry_cache_date: 2026-04-17
 industry_cache_slug: semiconductors
 bear_case_trigger: "If ASML loses EUV monopoly to a credible competitor within 3 years"
+technical_score: 8.4            # Phase 3.5; omit when fund score < 7.0 or screen
+go_no_go: GO                    # GO | NO-GO ; omit when not run
+combined_score: 8.28            # 0.6*fund + 0.4*tech ; omit when not run
+entry_zone: "1284.39–1514.60"   # omit when not run
+suggested_stop_loss: "1400.75–1429.21"  # [1.5xATR, 2xATR] ; omit when not run
+tech_risk_level: Med            # Low | Med | High ; omit when not run
 schema_version: "2.2"
 ---
 ```
@@ -482,8 +503,22 @@ schema_version: "2.2"
 ### 2.9 Growth decomposition & constraints
 ({Combined output a partir de prompts\03a + 03b + 03c — volume/price/M&A breakdown, Theory of Constraints bottleneck, growth assumption verdict Supported/Weakly/Not.})
 
-### 2.10 Análise técnica
-Preço actual {price} vs SMA50 {sma50}, SMA200 {sma200}. RSI {rsi}. MACD {macd_signal}. Drawdown máx 1Y: {dd}%.
+### 2.10 Análise técnica — Technical Score & GO/NO-GO
+> [!{go_callout}] Technical Score **{technical_score}/10** · **{go_no_go}** · Combined (fund+tech) **{combined_score}/10** · Risco {tech_risk_level}
+> **Entry zone**: {entry_zone} {currency} · **Stop sugerido (ATR)**: {stop_loss} {currency} ({reason curto})
+
+| Indicador | Valor | Leitura |
+|---|---|---|
+| Preço vs SMA50 / SMA200 | {price} / {sma50} / {sma200} | {tendência: acima/abaixo, golden/death cross} |
+| RSI(14) | {rsi} | {sobrecompra >70 / saudável 50-70 / fraqueza <40} |
+| MACD / signal | {macd} / {macd_signal} | {bullish se macd>signal>0} |
+| ADX(20) | {adx} | {força de tendência: >25 forte, <20 fraca} |
+| Força relativa 6m vs {benchmark} | {rel_strength_6m} | {out/underperform vs índice} |
+| ATR(14) ({atr_pct} do preço) | {atr} | {volatilidade → risco} |
+| Suporte / Resistência (60d) | {support} / {resistance} | {breakout: sim/não} |
+| Drawdown máx 1Y | {max_drawdown_1y} | — |
+
+*GO/NO-GO timing-only: requer technical_score ≥ 6.0, preço acima da SMA200, RSI ≤ 80 e MACD não profundamente baixista. Um NO-GO não invalida a tese fundamental — apenas sinaliza que o momento de entrada não está alinhado. Só corre para tickers com fundamental score ≥ 7.0 (ver Phase 3 abaixo).*
 
 ### 2.11 DCF + Intrinsic value
 {If dcf_valid=true:}
