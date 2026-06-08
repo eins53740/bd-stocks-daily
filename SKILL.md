@@ -713,3 +713,40 @@ Cost: ~${X}.
 - Reports antigos (pre-v2) continuam válidos; readers devem tratar ausência de `schema_version` como `schema_version: 1` e ausência de `management_score` como `null`.
 - `_shortlist.md` regenera-se a partir de `_log.csv` — não requer migração.
 - `_industry/` é um directório novo; criado on-demand em Phase 1.5.
+
+## Portfolio Management Dashboard (v3 Phase 4)
+
+A holdings-level view on top of the daily evaluations. Two scripts feed a precomputed
+`_portfolio.json` that the stdlib `build_dashboard.py` renders as a Portfolio card.
+
+```bash
+# 1) Read live holdings from BankBD (READ-ONLY) + yfinance prices -> JSON bundle
+python "%SCRIPTS%\portfolio_sync.py"            # stdout = bundle; stderr = summary
+python "%SCRIPTS%\portfolio_sync.py" --no-prices  # skip yfinance (use stored EUR value)
+
+# 2) Enrich with fund/tech scores + run the decision engine -> writes _portfolio.json
+python "%SCRIPTS%\portfolio_dashboard.py"
+
+# 3) Re-render the dashboard (Portfolio card reads _portfolio.json, stdlib-only)
+python "%SCRIPTS%\build_dashboard.py"
+```
+
+- **Source of truth**: BankBD SQLite (`C:\Github\BD\Finance\BankBD\bankbd.db`),
+  tables `positions` + `position_values`. Opened **read-only** via
+  `file:...?mode=ro`; never written. Empty positions table → 0 holdings (card shows
+  an empty-state note).
+- **Ticker mapping / filtering**: reuses `canon()` (ADR/dual-listing) and
+  `classify_nonequity()` from `C:\Github\.scripts\portfolio_deepdive_gap.py`; the
+  `asset_type` column also excludes crypto/bond/etf.
+- **Scores**: Fundamental score + verdict come from `_log.csv` (most-recent per
+  canonical ticker); Technical score / GO-NO-GO come from report frontmatter.
+  Anything older than 90 days is flagged `score_stale` and routed to **Review**
+  ("needs screen") — old numbers are never silently used.
+- **Overall Investment Score** = 0.70·fund + 0.30·tech (whichever is present).
+- **Decision engine** (`decide()`, pure/tested) → one of **Hold / Buy-More / Sell /
+  Review**, each with a cited trigger: stale→Review; thesis broken→Sell; fundamental
+  deterioration (reject/fair or fund<5)→Sell; technical NO-GO on a moderate name→Sell;
+  weight>20%→Review (reallocation); strong score + below cost + not NO-GO→Buy-More;
+  else Hold.
+- **Tests**: `tests/test_portfolio.py` covers the engine + freshness gating
+  (network/DB-free).

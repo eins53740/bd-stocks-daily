@@ -32,6 +32,7 @@ TEMPLATE = ROOT / "_dashboard" / "template.html"
 OUTPUT = ROOT / "_dashboard.html"
 LOG = ROOT / "_log.csv"
 PREFILTER_STATS = ROOT / "_prefilter_stats.json"
+PORTFOLIO_JSON = ROOT / "_portfolio.json"
 
 REPORT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_.+\.md$")
 
@@ -208,6 +209,18 @@ def load_prefilter() -> dict:
         return {}
 
 
+def load_portfolio() -> dict:
+    """Read the precomputed _portfolio.json written by portfolio_dashboard.py.
+    The dashboard computes nothing — it only renders this. Missing/invalid -> empty."""
+    if not PORTFOLIO_JSON.exists():
+        return {"holdings": []}
+    try:
+        return json.loads(PORTFOLIO_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        log(f"WARN: could not parse {PORTFOLIO_JSON}: {e}")
+        return {"holdings": []}
+
+
 def main() -> int:
     if not TEMPLATE.exists():
         log(f"ERROR: template not found at {TEMPLATE}")
@@ -228,6 +241,7 @@ def main() -> int:
         "reports": reports,
         "bear_triggers": load_bear_triggers(),
         "prefilter": load_prefilter(),
+        "portfolio": load_portfolio(),
     }
 
     template = TEMPLATE.read_text(encoding="utf-8")
