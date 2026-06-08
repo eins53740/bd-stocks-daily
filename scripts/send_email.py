@@ -44,6 +44,11 @@ BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
 sys.path.insert(0, str(BD_FINANCE))
 
 LOG = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily\_log.csv")
+# Phase 7 — parallel growth lens (/bd_stocks_daily_growth) keeps its own state file.
+# The daily digest surfaces a Growth section IF this file exists and has rows for
+# today; otherwise the section is omitted entirely (no-op — must never break the
+# 17:00 email). The daily _log.csv schema above is UNTOUCHED.
+GROWTH_LOG = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily\_growth_log.csv")
 OUT_DIR = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
 OUT_REL = "Personal/Finance/StocksDaily"  # inside BD_Obsidian vault
 DASHBOARD = OUT_DIR / "_dashboard.html"
@@ -250,6 +255,56 @@ def build_dashboard_inline_html(bundle: dict, target_date: str) -> str:
     )
 
 
+def build_growth_section_html(target_date: str) -> str:
+    """Phase 7 — render a Growth-lens section from _growth_log.csv for `target_date`.
+
+    GUARDED: returns "" (no-op) when the growth log is absent, unreadable, or has
+    no rows for the date. This guarantees the daily 17:00 email is unaffected when
+    the growth skill hasn't run. Pure read of a separate file — never touches the
+    daily _log.csv.
+    """
+    try:
+        if not GROWTH_LOG.exists() or GROWTH_LOG.stat().st_size == 0:
+            return ""
+        with GROWTH_LOG.open("r", encoding="utf-8", newline="") as f:
+            rows = [r for r in csv.DictReader(f) if r.get("date") == target_date]
+        if not rows:
+            return ""
+        body_rows = []
+        for r in sorted(rows, key=lambda r: float(r.get("growth_composite") or 0), reverse=True):
+            score = float(r.get("growth_composite") or 0)
+            color = "#7c3aed" if score >= 8.0 else ("#2ca02c" if score >= 6.5 else "#e8890b")
+            body_rows.append(
+                f"<tr>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'><b>{html.escape(r.get('ticker',''))}</b></td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;color:{color};font-weight:bold;'>{score:.2f}/10</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{html.escape((r.get('verdict','') or '').upper())}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{html.escape(str(r.get('rule_of_40','')))}%</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;'>{html.escape(str(r.get('cash_runway_months','')))}</td>"
+                f"<td style='padding:6px 10px;border-bottom:1px solid #eee;font-size:12px;color:#666;'>{html.escape(r.get('sector','') or '')}</td>"
+                f"</tr>"
+            )
+        return (
+            f"<section style='border:1px solid #d8c8f0;border-radius:8px;padding:14px 18px;"
+            f"margin:25px 0;background:#faf7ff;'>"
+            f"<h2 style='margin:0 0 8px;color:#7c3aed;'>🚀 Growth lens — {target_date}</h2>"
+            f"<p style='font-size:12px;color:#777;margin:0 0 8px;'>Parallel growth model "
+            f"(Rule of 40, runway, NRR proxy). Gate-5 bypassed by design.</p>"
+            f"<table style='border-collapse:collapse;width:100%;font-size:13px;'>"
+            f"<thead><tr style='background:#f0e8fb;'>"
+            f"<th style='padding:8px 10px;text-align:left;'>Ticker</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Growth score</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Verdict</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Rule of 40</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Runway</th>"
+            f"<th style='padding:8px 10px;text-align:left;'>Sector</th>"
+            f"</tr></thead><tbody>{''.join(body_rows)}</tbody></table></section>"
+        )
+    except Exception as exc:  # never let the growth section break the email
+        log(f"growth section SKIP (non-fatal): {type(exc).__name__}: {exc}")
+        return ""
+
+
 def build_card_html(row: dict) -> str:
     score = float(row.get("score", 0) or 0)
     emoji, _tag, label, color = verdict_style(row.get("verdict", ""), score)
@@ -370,6 +425,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     bundle = extract_dashboard_bundle()
     dashboard_inline_html = build_dashboard_inline_html(bundle, target_date) if bundle else ""
     cards_html = "\n".join(build_card_html(r) for r in rows)
+    growth_section_html = build_growth_section_html(target_date)  # Phase 7 — "" when no growth data
     reports_html = "\n".join(build_full_report_html(r) for r in rows)
     html_body = f"""
     <html>
@@ -395,6 +451,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         {dashboard_inline_html}
         <h2 style="margin-top: 25px;">Today's reports — summary</h2>
         {cards_html}
+        {growth_section_html}
         <h2 style="margin-top: 35px;">Full reports ({len(rows)})</h2>
         {reports_html}
         <hr>
