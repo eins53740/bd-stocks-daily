@@ -161,3 +161,85 @@ def test_decide_buy_more_not_triggered_when_above_cost():
         "live_price": 120.0, "avg_buy_price": 100.0, "overall": overall_score(8.2, 7.5),
     }
     assert decide(h)["decision"] == "Hold"
+
+
+# ---------------------------------------------------------------- CSV source
+# fetch_holdings_csv (Yahoo Finance export) + reconcile FX conversion.
+from portfolio_sync import fetch_holdings_csv, reconcile  # noqa: E402
+
+_CSV_HEADER = (
+    "Symbol,Current Price,Date,Time,Change,Open,High,Low,Volume,"
+    "Trade Date,Purchase Price,Quantity,Commission,High Limit,Low Limit,Comment,Transaction Type\n"
+)
+
+
+def _write_csv(tmp_path, body: str):
+    p = tmp_path / "portfolio.csv"
+    p.write_text(_CSV_HEADER + body, encoding="utf-8")
+    return p
+
+
+def test_csv_skips_watchlist_rows(tmp_path):
+    # rows without Quantity are watchlist entries, not positions
+    p = _write_csv(tmp_path, (
+        "BABA,116.3,2026/06/10,12:09 EDT,-3.3,116.0,118.1,115.7,5285276,,,,,,,,\n"
+        "CSCO,119.63,2026/06/10,12:09 EDT,1.0,118.0,120.0,117.9,100,,55.84,31.0,,,,,1064\n"
+    ))
+    rows = fetch_holdings_csv(p)
+    assert [r["ticker"] for r in rows] == ["CSCO"]
+    assert rows[0]["quantity"] == 31.0
+    assert rows[0]["avg_buy_price"] == 55.84
+    assert rows[0]["stored_price"] == 119.63
+    assert rows[0]["value_date"] == "2026-06-10"
+
+
+def test_csv_aggregates_lots_weighted(tmp_path):
+    # two SEM.LS lots -> one row, qty summed, buy price quantity-weighted
+    p = _write_csv(tmp_path, (
+        "SEM.LS,23.3,2026/06/10,17:14 CEST,0.1,23.0,23.4,22.9,1000,20240101,17.96,55.0,,,,,BUY\n"
+        "SEM.LS,23.3,2026/06/10,17:14 CEST,0.1,23.0,23.4,22.9,1000,20240201,17.70,56.0,,,,,BUY\n"
+    ))
+    rows = fetch_holdings_csv(p)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["quantity"] == 111.0
+    expected_avg = (17.96 * 55 + 17.70 * 56) / 111
+    assert abs(r["avg_buy_price"] - expected_avg) < 1e-9
+    assert r["currency"] == "EUR"  # .LS -> Euronext Lisbon
+
+
+def test_csv_crypto_rows_classified_nonequity(tmp_path):
+    p = _write_csv(tmp_path, (
+        "NEXO-USD,0.797,2026/06/10,12:09 EDT,0.0,0.8,0.81,0.79,1,,1.22,457.0,,,,,BUY\n"
+        "AMD,457.7,2026/06/10,12:09 EDT,1.0,450.0,460.0,449.0,1,,97.51,8.0,,,,,0895\n"
+    ))
+    holdings = reconcile(fetch_holdings_csv(p), live={}, fx={})
+    by_ticker = {h["ticker"]: h for h in holdings}
+    assert by_ticker["NEXO-USD"]["is_equity"] is False
+    assert by_ticker["NEXO-USD"]["non_equity_class"] == "crypto"
+    assert by_ticker["AMD"]["is_equity"] is True
+
+
+def test_reconcile_fx_converts_native_values_to_eur(tmp_path):
+    # USD position valued via stored CSV price, converted at EURUSD=1.10;
+    # EUR position passes through; weights computed over EUR values.
+    p = _write_csv(tmp_path, (
+        "AMD,110.0,2026/06/10,12:09 EDT,1.0,450.0,460.0,449.0,1,,97.51,10.0,,,,,BUY\n"
+        "SEM.LS,20.0,2026/06/10,17:14 CEST,0.1,23.0,23.4,22.9,1000,,17.96,50.0,,,,,BUY\n"
+    ))
+    holdings = reconcile(fetch_holdings_csv(p), live={}, fx={"USD": 1.10})
+    by_ticker = {h["ticker"]: h for h in holdings}
+    assert abs(by_ticker["AMD"]["market_value"] - (110.0 * 10 / 1.10)) < 1e-6
+    assert abs(by_ticker["SEM.LS"]["market_value"] - (20.0 * 50)) < 1e-6
+    total = by_ticker["AMD"]["market_value"] + by_ticker["SEM.LS"]["market_value"]
+    assert abs(by_ticker["AMD"]["weight"] - by_ticker["AMD"]["market_value"] / total) < 1e-9
+
+
+def test_reconcile_fx_missing_rate_yields_none(tmp_path):
+    # unknown FX rate -> market_value None (never a silently-wrong native figure)
+    p = _write_csv(tmp_path, (
+        "2330.TW,2255.0,2026/06/10,13:30 CST,-50.0,2285.0,2300.0,2255.0,1,20260605,2390.0,20.0,89.56,,,,BUY\n"
+    ))
+    holdings = reconcile(fetch_holdings_csv(p), live={}, fx={})
+    assert holdings[0]["market_value"] is None
+    assert holdings[0]["weight"] is None

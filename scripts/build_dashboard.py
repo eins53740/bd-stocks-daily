@@ -6,9 +6,11 @@ Reads:
   * _log.csv (for bear-case triggers)
   * _prefilter_stats.json
   * _dashboard/template.html (with __DATA__ marker)
+  * _dashboard/template_brokers.html (with __DATA__ marker)
 
 Writes:
   * _dashboard.html (overwritten without prompt)
+  * _dashboard_brokers.html (standalone Broker Analysis page, linked from the main dashboard)
 
 stdlib-only by design — no yfinance / requests / bs4 / yaml. Frontmatter parsing is line-based.
 """
@@ -29,14 +31,31 @@ os.environ.setdefault("PYTHONPYCACHEPREFIX", str(Path(tempfile.gettempdir()) / "
 
 ROOT = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
 TEMPLATE = ROOT / "_dashboard" / "template.html"
+TEMPLATE_BROKERS = ROOT / "_dashboard" / "template_brokers.html"
 OUTPUT = ROOT / "_dashboard.html"
+OUTPUT_BROKERS = ROOT / "_dashboard_brokers.html"
 LOG = ROOT / "_log.csv"
 PREFILTER_STATS = ROOT / "_prefilter_stats.json"
 PORTFOLIO_JSON = ROOT / "_portfolio.json"
 THESIS_JSON = ROOT / "_thesis.json"
 BROKERS_JSON = ROOT / "_brokers.json"
+LIVE_PRICES_JSON = ROOT / "_live_prices.json"
 
 REPORT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_.+\.md$")
+
+# Fair price is only meaningful for names with good fundamentals (quality lens)
+# or a good growth profile (growth lens).
+FAIR_PRICE_VERDICTS = {"great", "invest", "review", "rocket", "accelerate", "watch"}
+
+# Body fallbacks for reports written before fair_price landed in frontmatter.
+# Only the canonical template forms are matched — anything else stays blank.
+_DCF_BOLD_RE = re.compile(
+    r"DCF intr[íi]nseco(?:\s*\(helper\))?:\s*\*\*\s*[^\d*]*([\d][\d,]*\.?\d*)\s*[A-Za-z$€£]*\s*\*\*"
+)
+_DCF_TABLE_RE = re.compile(r"\|\s*DCF intrinsic\s*\|\s*[^|\d]*([\d][\d,]*\.?\d*)")
+_TARGET_ROW_RE = re.compile(
+    r"\|\s*Price target \(mean / median\)\s*\|\s*[^\d|]*([\d][\d,]*\.?\d*)\s*/\s*[^\d|]*([\d][\d,]*\.?\d*)"
+)
 
 
 def log(msg: str) -> None:
@@ -122,6 +141,56 @@ def extract_field(body: str, label: str) -> str | None:
     return out or None
 
 
+# Report H1 is `# {TICKER} — {Company name} — ...Score: ...` (both lenses)
+_H1_COMPANY_RE = re.compile(r"^#\s+[^\n—]+—\s*([^\n—]+?)\s*—", re.M)
+_COMPANY_SUFFIX_RE = re.compile(
+    r"[,\s]+(incorporated|inc|corporation|corp|company|co|ltd|limited|plc|nv|n\.v"
+    r"|sa|s\.a|se|ag|asa|ab|oyj|spa|s\.p\.a|holdings?|group)\.?$",
+    re.IGNORECASE,
+)
+
+
+def extract_company(body: str) -> str | None:
+    """Short company name from the report title — legal suffixes stripped
+    iteratively ('Alibaba Group Holding Limited' -> 'Alibaba')."""
+    m = _H1_COMPANY_RE.search(body)
+    if not m:
+        return None
+    name, prev = m.group(1).strip(), None
+    while name and name != prev:
+        prev = name
+        name = _COMPANY_SUFFIX_RE.sub("", name).strip().rstrip(",")
+    return name or None
+
+
+def _parse_price(s: str):
+    return safe_float(s.replace(",", ""))
+
+
+def extract_fair_price(fm: dict, body: str, verdict) -> tuple[float | None, str | None]:
+    """Fair-price anchor for a report. Frontmatter wins (fair_price / fair_price_basis,
+    written by the skill since 2026-06). For older reports, fall back to the canonical
+    body lines — DCF intrinsic first, analyst consensus median second — but only for
+    verdicts where a price anchor is meaningful (good fundamentals / good growth).
+    A body-derived DCF more than ±70% away from price_at_eval is discarded, mirroring
+    analyze_ticker's dcf_valid sanity trip (old reports quoted those DCFs anyway)."""
+    fp = safe_float(fm.get("fair_price"))
+    if fp is not None:
+        return fp, fm.get("fair_price_basis") or "dcf"
+    if verdict not in FAIR_PRICE_VERDICTS:
+        return None, None
+    price = safe_float(fm.get("price_at_eval"))
+    m = _DCF_BOLD_RE.search(body) or _DCF_TABLE_RE.search(body)
+    if m:
+        dcf = _parse_price(m.group(1))
+        if dcf and not (price and abs(dcf / price - 1) > 0.7):
+            return dcf, "dcf"
+    m = _TARGET_ROW_RE.search(body)
+    if m:
+        return _parse_price(m.group(2)), "consensus"
+    return None, None
+
+
 def slim_report(path: Path, today: dt.date) -> dict | None:
     text = path.read_text(encoding="utf-8", errors="replace")
     fm = parse_frontmatter(text)
@@ -147,17 +216,27 @@ def slim_report(path: Path, today: dt.date) -> dict | None:
     # Risks label varies (Risks vs Risk)
     risks = extract_field(body, "Risks") or extract_field(body, "Risk")
 
+    verdict = fm.get("verdict")
+    if verdict and verdict.strip().lower() in ("null", "none"):
+        verdict = None
+    fair_price, fair_price_basis = extract_fair_price(fm, body, verdict)
+
     return {
         "ticker": ticker,
+        "company": extract_company(body),
         "exchange": fm.get("exchange"),
         "region": fm.get("region"),
         "sector": fm.get("sector"),
         "size": fm.get("size"),
         "date": date_str,
         "round": safe_int(fm.get("round")) or 1,
-        "mode": fm.get("mode"),
-        "verdict": fm.get("verdict"),
+        # Growth-lens reports carry `lens: growth` instead of a mode
+        "mode": fm.get("mode") or ("growth" if fm.get("lens") == "growth" else None),
+        "verdict": verdict,
         "score": safe_float(fm.get("score")),
+        "growth_composite": safe_float(fm.get("growth_composite")),
+        "fair_price": fair_price,
+        "fair_price_basis": fair_price_basis,
         "gates_passed": safe_int(fm.get("gates_passed")),
         "piotroski": safe_int(fm.get("piotroski_fscore")),
         "altman": safe_float(fm.get("altman_zscore")),
@@ -166,6 +245,7 @@ def slim_report(path: Path, today: dt.date) -> dict | None:
         "earnings_next": fm.get("earnings_date_next"),
         "mgmt": safe_float(fm.get("management_score")),
         "mgmt_flag": safe_bool(fm.get("management_flag")),
+        "narrative_quality": fm.get("narrative_quality"),
         "expires": expires.isoformat(),
         "days_left": days_left,
         "filename": path.name,
@@ -247,6 +327,34 @@ def load_brokers() -> dict:
         return {"markets": [], "support_matrix": {}}
 
 
+def load_live_prices(reports: list[dict], skip: bool) -> dict:
+    """Refresh + read _live_prices.json for tickers carrying a technical read, so the
+    Technical card can compare live price vs entry zone ("buy range"). The yfinance
+    fetch lives in live_prices.py (subprocess) — this module stays import-stdlib-only.
+    Any failure degrades to the last JSON on disk, or to no live column at all."""
+    tickers = sorted({
+        r["ticker"] for r in reports
+        if r.get("tech_score") is not None and (r.get("score") or 0) >= 7.0 and r.get("entry_zone")
+    })
+    if tickers and not skip:
+        try:
+            import subprocess
+            subprocess.run(
+                [sys.executable, str(Path(__file__).parent / "live_prices.py"),
+                 "--tickers", ",".join(tickers)],
+                timeout=180, check=False,
+            )
+        except Exception as e:
+            log(f"WARN: live price refresh failed (non-fatal): {e}")
+    if not LIVE_PRICES_JSON.exists():
+        return {"prices": {}}
+    try:
+        return json.loads(LIVE_PRICES_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        log(f"WARN: could not parse {LIVE_PRICES_JSON}: {e}")
+        return {"prices": {}}
+
+
 def main() -> int:
     if not TEMPLATE.exists():
         log(f"ERROR: template not found at {TEMPLATE}")
@@ -261,20 +369,34 @@ def main() -> int:
         if slim is not None:
             reports.append(slim)
 
+    generated_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     bundle = {
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generated_at": generated_at,
         "today": today.isoformat(),
         "reports": reports,
         "bear_triggers": load_bear_triggers(),
         "prefilter": load_prefilter(),
         "portfolio": load_portfolio(),
         "thesis": load_thesis(),
-        "brokers": load_brokers(),
+        "live_prices": load_live_prices(reports, skip="--no-live" in sys.argv),
     }
 
     template = TEMPLATE.read_text(encoding="utf-8")
     rendered = template.replace("__DATA__", json.dumps(bundle, ensure_ascii=False), 1)
     OUTPUT.write_text(rendered, encoding="utf-8")
+
+    # Broker Analysis lives on its own page (linked from the main dashboard)
+    if TEMPLATE_BROKERS.exists():
+        broker_bundle = {
+            "generated_at": generated_at,
+            "today": today.isoformat(),
+            "brokers": load_brokers(),
+        }
+        broker_template = TEMPLATE_BROKERS.read_text(encoding="utf-8")
+        broker_rendered = broker_template.replace("__DATA__", json.dumps(broker_bundle, ensure_ascii=False), 1)
+        OUTPUT_BROKERS.write_text(broker_rendered, encoding="utf-8")
+    else:
+        log(f"WARN: broker template not found at {TEMPLATE_BROKERS} — skipping {OUTPUT_BROKERS.name}")
 
     # Summary
     active_shortlist = [r for r in reports if (r.get("score") or 0) >= 7.5 and (r.get("days_left") or 0) > 0]
@@ -288,6 +410,8 @@ def main() -> int:
         for r in top3:
             print(f"  - {r['ticker']:<10} {r.get('score','?'):>5}/10  {r.get('verdict','?')}  ({r.get('date')})")
     print(f"Wrote {OUTPUT}")
+    if OUTPUT_BROKERS.exists():
+        print(f"Wrote {OUTPUT_BROKERS}")
     return 0
 
 

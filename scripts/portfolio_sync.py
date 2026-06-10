@@ -6,6 +6,12 @@ their canonical Yahoo symbol via ``canon()`` (reused from portfolio_deepdive_gap
 skip non-equity holdings via ``classify_nonequity()``, fetch live prices from
 yfinance, reconcile against the stored last market value, and emit a JSON bundle.
 
+While BankBD's positions table is empty, a Yahoo Finance portfolio export can be
+used instead (``--csv``); the DB path also auto-falls-back to DEFAULT_CSV when it
+finds zero positions. Lot rows (Quantity set) aggregate per symbol; watchlist
+rows are skipped. Market values are converted to EUR via markets.to_eur() so
+weights are currency-correct.
+
 The BankBD DB is opened with the SQLite URI ``file:...?mode=ro`` and is NEVER
 written to. Verify byte-identity before/after if you need proof.
 
@@ -14,17 +20,22 @@ Output (stdout): JSON bundle of per-holding dicts. A human summary goes to stder
 Usage:
   python portfolio_sync.py                      # real BankBD DB -> JSON on stdout
   python portfolio_sync.py --db PATH            # override DB path (testing)
+  python portfolio_sync.py --csv [PATH]         # Yahoo Finance export instead of BankBD
   python portfolio_sync.py --no-prices          # skip yfinance (use stored value)
   python portfolio_sync.py --out FILE           # also write the JSON to FILE
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import markets  # noqa: E402 — sibling module (suffix -> currency, EUR FX)
 
 # --- Reuse canon() / classify_nonequity() from the gap script (locked decision) ---
 _GAP = Path(r"C:\Github\.scripts\portfolio_deepdive_gap.py")
@@ -55,6 +66,10 @@ canon, classify_nonequity = _load_gap_helpers()
 # Canonical BankBD DB path (matches bankbd.config.database_url default: sqlite:///bankbd.db
 # resolved against the repo root).
 DEFAULT_DB = Path(r"C:\Github\BD\Finance\BankBD\bankbd.db")
+
+# Interim holdings source while BankBD's positions table is empty: a Yahoo Finance
+# portfolio export. Auto-fallback target when the DB yields zero positions.
+DEFAULT_CSV = Path(r"C:\Users\bsdias\Downloads\portfolio.csv")
 
 # yfinance asset_type values that are NOT equities (belt-and-suspenders on top of
 # classify_nonequity, which keys off the ticker string).
@@ -109,6 +124,65 @@ def fetch_holdings(db_path: Path) -> list[dict]:
         conn.close()
 
 
+def fetch_holdings_csv(csv_path: Path) -> list[dict]:
+    """Read a Yahoo Finance portfolio export. Lot rows (Quantity set) are positions;
+    bare rows are watchlist entries and are skipped. Lots aggregate per symbol:
+    quantity summed, buy price quantity-weighted over the lots that carry one.
+    Returns rows shaped like fetch_holdings() so reconcile() works unchanged."""
+    lots: dict[str, dict] = {}
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f):
+            sym = (row.get("Symbol") or "").strip()
+            qty = _safe_float(row.get("Quantity"))
+            if not sym or not qty:
+                continue
+            buy = _safe_float(row.get("Purchase Price"))
+            px = _safe_float(row.get("Current Price"))
+            d = (row.get("Date") or "").strip().replace("/", "-")
+            slot = lots.setdefault(sym, {"qty": 0.0, "cost": 0.0, "cost_qty": 0.0, "px": None, "date": None})
+            slot["qty"] += qty
+            if buy is not None:
+                slot["cost"] += buy * qty
+                slot["cost_qty"] += qty
+            if px is not None:
+                slot["px"] = px
+            if d:
+                slot["date"] = d
+    rows: list[dict] = []
+    for sym, s in sorted(lots.items()):
+        rows.append({
+            "position_id": None,
+            "ticker": sym,
+            "exchange": None,
+            "quantity": s["qty"],
+            "avg_buy_price": s["cost"] / s["cost_qty"] if s["cost_qty"] else None,
+            "currency": markets.currency_of(sym),
+            "asset_type": "stock",  # reconcile()'s classify_nonequity() does the real filtering
+            "account_name": "Yahoo CSV",
+            "account_type": "csv",
+            "value_date": s["date"],
+            "stored_price": s["px"],
+            "stored_value_eur": None,
+            "stored_pnl": None,
+        })
+    return rows
+
+
+def _safe_float(v) -> float | None:
+    try:
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_eur_rates(currencies: set[str]) -> dict[str, float]:
+    """EUR->currency quotes (units of `currency` per 1 EUR) via yfinance, used to
+    convert native market values to EUR. EUR itself needs no rate."""
+    pairs = {c: p for c in currencies if (p := markets.eur_fx_pair(c))}
+    quotes = fetch_live_prices(list(pairs.values()))
+    return {c: quotes[p] for c, p in pairs.items() if p in quotes}
+
+
 def fetch_live_prices(symbols: list[str]) -> dict[str, float]:
     """Fetch last close per Yahoo symbol via yfinance. Best-effort; missing -> absent."""
     if not symbols:
@@ -150,8 +224,12 @@ def fetch_live_prices(symbols: list[str]) -> dict[str, float]:
     return out
 
 
-def reconcile(rows: list[dict], live: dict[str, float]) -> list[dict]:
-    """Build per-holding dicts; classify, map, value, compute weights."""
+def reconcile(rows: list[dict], live: dict[str, float], fx: dict[str, float] | None = None) -> list[dict]:
+    """Build per-holding dicts; classify, map, value, compute weights.
+
+    `fx` maps currency -> units per 1 EUR (from fetch_eur_rates). When given,
+    natively-priced market values are converted to EUR so weights don't mix
+    currencies; without it, native values pass through unchanged (legacy)."""
     holdings: list[dict] = []
     for r in rows:
         ticker = (r["ticker"] or "").strip()
@@ -165,16 +243,29 @@ def reconcile(rows: list[dict], live: dict[str, float]) -> list[dict]:
         qty = float(r["quantity"] or 0.0)
         avg = r["avg_buy_price"]
         cost_basis = float(avg) * qty if avg not in (None, "") else None
-        live_price = live.get(cticker) or live.get(ticker)
+        # Original listing first: its quote currency matches `currency`. The canon
+        # symbol may be a cross-listing in another currency (SHELL.AS -> SHEL.L
+        # quotes in GBp and would distort the EUR value 100x).
+        live_price = live.get(ticker) or live.get(cticker)
+        currency = (r["currency"] or "EUR").upper()
 
-        # Market value: prefer live price * qty if available; fall back to stored EUR value.
+        # Market value: live price * qty, else stored EUR value, else CSV's last
+        # quote * qty. Track whether the figure is native-currency or already EUR.
         stored_value = r["stored_value_eur"]
         if live_price is not None:
             market_value = live_price * qty
+            value_currency = currency
         elif stored_value not in (None, ""):
             market_value = float(stored_value)
+            value_currency = "EUR"
+        elif r["stored_price"] not in (None, ""):
+            market_value = float(r["stored_price"]) * qty
+            value_currency = currency
         else:
             market_value = None
+            value_currency = currency
+        if fx is not None and market_value is not None and value_currency != "EUR":
+            market_value = markets.to_eur(market_value, value_currency, fx.get(value_currency))
 
         holdings.append({
             "ticker": ticker,
@@ -228,18 +319,33 @@ def build_bundle(holdings: list[dict], db_path: Path) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=str(DEFAULT_DB), help="BankBD SQLite DB path (read-only)")
+    ap.add_argument("--csv", nargs="?", const=str(DEFAULT_CSV), default=None,
+                    help="read holdings from a Yahoo Finance portfolio export instead of BankBD")
     ap.add_argument("--no-prices", action="store_true", help="skip yfinance live prices")
     ap.add_argument("--out", default=None, help="optional path to also write the JSON bundle")
     args = ap.parse_args()
 
     db_path = Path(args.db)
-    if not db_path.exists():
-        log(f"ERROR: BankBD DB not found at {db_path}")
-        return 1
+    csv_path = Path(args.csv) if args.csv else None
+    rows: list[dict] = []
 
-    log(f"Opening BankBD READ-ONLY: {ro_uri(db_path)}")
-    rows = fetch_holdings(db_path)
-    log(f"Positions in DB (qty != 0): {len(rows)}")
+    if csv_path is None:
+        if not db_path.exists():
+            log(f"ERROR: BankBD DB not found at {db_path}")
+            return 1
+        log(f"Opening BankBD READ-ONLY: {ro_uri(db_path)}")
+        rows = fetch_holdings(db_path)
+        log(f"Positions in DB (qty != 0): {len(rows)}")
+        if not rows and DEFAULT_CSV.exists():
+            log(f"BankBD positions table is empty — falling back to CSV export {DEFAULT_CSV}")
+            csv_path = DEFAULT_CSV
+
+    if csv_path is not None:
+        if not csv_path.exists():
+            log(f"ERROR: portfolio CSV not found at {csv_path}")
+            return 1
+        rows = fetch_holdings_csv(csv_path)
+        log(f"Positions in CSV (lots aggregated per symbol): {len(rows)}")
 
     # Build the equity symbol set for price fetch (canonical Yahoo symbols).
     eq_syms = []
@@ -248,14 +354,21 @@ def main() -> int:
         if not t:
             continue
         if classify_nonequity(t) is None and (r["asset_type"] or "stock").lower() not in NON_EQUITY_ASSET_TYPES:
-            eq_syms.append(canon(t))
+            eq_syms.append(t)        # original listing — currency-correct quote
+            eq_syms.append(canon(t))  # canonical fallback if the original fails
 
     live = {} if args.no_prices else fetch_live_prices(eq_syms)
     if eq_syms and not args.no_prices:
         log(f"Live prices fetched: {len(live)}/{len(set(eq_syms))} symbols")
 
-    holdings = reconcile(rows, live)
-    bundle = build_bundle(holdings, db_path)
+    # EUR conversion rates for natively-priced market values (weights must not mix currencies).
+    currencies = {(r["currency"] or "EUR").upper() for r in rows}
+    fx = None if args.no_prices else fetch_eur_rates(currencies)
+    if fx:
+        log("EUR FX rates: " + ", ".join(f"{c}={v:.4f}" for c, v in sorted(fx.items())))
+
+    holdings = reconcile(rows, live, fx)
+    bundle = build_bundle(holdings, csv_path or db_path)
 
     # Human summary.
     log("=" * 64)
@@ -270,7 +383,7 @@ def main() -> int:
         log(f"  {h['ticker']:<12} -> {h['canon_ticker']:<10} {kind:<14} "
             f"qty={h['quantity']:<10g} px={lp:<10} mv={mv:<12} w={w}")
     if not holdings:
-        log("  (no positions in BankBD — positions table is empty; nothing to value)")
+        log("  (no positions found in the source — nothing to value)")
 
     out_json = json.dumps(bundle, ensure_ascii=False, indent=2)
     if args.out:

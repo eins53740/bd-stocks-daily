@@ -227,6 +227,7 @@ def load_report_technical(root: Path, canon) -> dict[str, dict]:
                 "combined_score": slim.get("combined_score"),
                 "thesis": slim.get("thesis"),
                 "filename": slim.get("filename"),
+                "company": slim.get("company"),
             }
     return out
 
@@ -270,6 +271,7 @@ def enrich(holdings: list[dict], log_scores: dict, tech_reads: dict, today: date
             "score_stale": score_stale,
             "overall": ov,
             "filename": tr.get("filename"),
+            "company": tr.get("company"),
         }
         decision = decide(row)
         row.update(decision)
@@ -282,6 +284,8 @@ def run_sync(args) -> dict:
     cmd = [sys.executable, str(SCRIPT_DIR / "portfolio_sync.py")]
     if args.db:
         cmd += ["--db", args.db]
+    if args.csv:
+        cmd += ["--csv", args.csv]
     if args.no_prices:
         cmd += ["--no-prices"]
     log(f"Running: {' '.join(cmd)}")
@@ -297,6 +301,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundle", default=None, help="use a pre-made sync bundle JSON instead of syncing")
     ap.add_argument("--db", default=None, help="BankBD DB path (passed to portfolio_sync)")
+    ap.add_argument("--csv", default=None, help="Yahoo Finance portfolio export (passed to portfolio_sync)")
     ap.add_argument("--no-prices", action="store_true")
     ap.add_argument("--out", default=str(OUT_JSON))
     ap.add_argument("--log-csv", default=str(LOG))

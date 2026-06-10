@@ -1245,6 +1245,11 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     mkt_score, mkt_details = market_context_score(vix)
     peer_info = fetch_peer_ranking(ticker, info, fund)
     peer_score = peer_info["score_0_10"]
+    if peer_info.get("peers_source") == "none":
+        warnings_.append(
+            "peer ranking: no peers configured for this industry/sector — "
+            "score is a neutral 5.0 placeholder, not a real ranking"
+        )
 
     component_scores = {
         "fundamentals": fund_score,

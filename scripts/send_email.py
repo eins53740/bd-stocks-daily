@@ -255,6 +255,19 @@ def build_dashboard_inline_html(bundle: dict, target_date: str) -> str:
     )
 
 
+def read_growth_rows(target_date: str) -> list[dict]:
+    """Rows from _growth_log.csv for `target_date`, best score first; [] on any problem."""
+    try:
+        if not GROWTH_LOG.exists() or GROWTH_LOG.stat().st_size == 0:
+            return []
+        with GROWTH_LOG.open("r", encoding="utf-8", newline="") as f:
+            rows = [r for r in csv.DictReader(f) if r.get("date") == target_date]
+        return sorted(rows, key=lambda r: float(r.get("growth_composite") or 0), reverse=True)
+    except Exception as exc:
+        log(f"growth log read SKIP (non-fatal): {type(exc).__name__}: {exc}")
+        return []
+
+
 def build_growth_section_html(target_date: str) -> str:
     """Phase 7 — render a Growth-lens section from _growth_log.csv for `target_date`.
 
@@ -264,14 +277,11 @@ def build_growth_section_html(target_date: str) -> str:
     daily _log.csv.
     """
     try:
-        if not GROWTH_LOG.exists() or GROWTH_LOG.stat().st_size == 0:
-            return ""
-        with GROWTH_LOG.open("r", encoding="utf-8", newline="") as f:
-            rows = [r for r in csv.DictReader(f) if r.get("date") == target_date]
+        rows = read_growth_rows(target_date)
         if not rows:
             return ""
         body_rows = []
-        for r in sorted(rows, key=lambda r: float(r.get("growth_composite") or 0), reverse=True):
+        for r in rows:
             score = float(r.get("growth_composite") or 0)
             color = "#7c3aed" if score >= 8.0 else ("#2ca02c" if score >= 6.5 else "#e8890b")
             body_rows.append(
@@ -402,6 +412,33 @@ def build_card_text(row: dict) -> str:
 def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     """Return (subject, html_body, text_body)."""
     if not rows:
+        # No daily evaluations — the growth lens may still have run today (it keeps
+        # its own _growth_log.csv), so render a growth-only digest before falling
+        # back to the empty stub.
+        growth_section_html = build_growth_section_html(target_date)
+        if growth_section_html:
+            growth_rows = read_growth_rows(target_date)
+            subject_parts = [
+                f"{r.get('ticker','')} {float(r.get('growth_composite') or 0):.1f} [{(r.get('verdict','') or '').upper()}]"
+                for r in growth_rows
+            ]
+            subject = f"StocksDaily {target_date} - growth lens: " + " | ".join(subject_parts)
+            html_body = (
+                f"<html><body style='font-family: Segoe UI, Arial, sans-serif; max-width: 820px;"
+                f" margin: 0 auto; padding: 20px; color: #222;'>"
+                f"<h2>StocksDaily {target_date}</h2>"
+                f"<p>No daily (quality-lens) evaluations for this date - growth lens only.</p>"
+                f"{growth_section_html}"
+                f"<hr><p style='font-size: 12px; color: #888;'>🤖 Auto-generated. Not investment advice.</p>"
+                f"</body></html>"
+            )
+            text_lines = [f"StocksDaily {target_date} - growth lens only", ""]
+            for r in growth_rows:
+                text_lines.append(
+                    f"- {r.get('ticker','')}: {float(r.get('growth_composite') or 0):.2f}/10 "
+                    f"{(r.get('verdict','') or '').upper()} (Ro40 {r.get('rule_of_40','')})"
+                )
+            return subject, html_body, "\n".join(text_lines) + "\n"
         subject = f"StocksDaily {target_date} - no evaluations"
         html_body = (
             f"<html><body><h2>StocksDaily {target_date}</h2>"

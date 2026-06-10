@@ -335,12 +335,14 @@ Para **deep-dive**: depois disto usa WebFetch sobre `annual_url` e `quarterly_ur
 python "%SCRIPTS%\get_narrative.py" --ticker NVDA --max-news 5
 ```
 
-Returns a JSON dict with `business_summary` (yfinance `longBusinessSummary`, ~1500 chars MD&A-equivalent), `recent_news` (yfinance `Ticker.news`), `ir_url`, `stockanalysis_fundamentals_url`, and a `narrative_quality` grade (`good` / `partial` / `degraded`). Use the combined `business_summary + recent_news` content as the `{ANNUAL_NARRATIVE}` substitution. If quality is `good` or `partial`, you can skip WebFetch entirely. If `degraded`, then try WebFetch on `annual_url` / `ir_page_url` from `find_reports.py` (avoid SEC EDGAR direct URLs — they 403). Degraded final state → §2.7 / §2.8 carry the `⚠️ Official report narrative unavailable` note and Phase 2.5 prompts label inferred claims accordingly.
+Returns a JSON dict with `business_summary` (yfinance `longBusinessSummary`, ~1500 chars MD&A-equivalent), `recent_news` (yfinance `Ticker.news`), `ir_url`, `stockanalysis_fundamentals_url`, and a `narrative_quality` grade (`good` / `partial` / `degraded`). Use the combined `business_summary + recent_news` content as the `{ANNUAL_NARRATIVE}` substitution. If quality is `good` or `partial`, you can skip WebFetch entirely. If `degraded`, then try WebFetch on `annual_url` / `ir_page_url` from `find_reports.py` (avoid SEC EDGAR direct URLs — they 403). Degraded final state → §2.7 / §2.8 carry the `⚠️ Official report narrative unavailable` note and Phase 2.5 prompts label inferred claims accordingly. **Always copy the final grade into report frontmatter as `narrative_quality`** (after any WebFetch upgrade attempt — record what the report was actually written from), so degraded narratives are visible without opening the report.
 
 ### Phase 5 — Write the report
 
 **Nome do ficheiro**: `{date}_{ticker}_{verdict}.md` (deep) ou `{date}_{ticker}_screen.md` (screens).
 `verdict` ∈ {`great` ≥9.0, `invest` 7.5-8.9, `review` 6.0-7.4, `fair` 4.0-5.9, `reject` <4.0}.
+
+**Fair price (deep + screen)** — every report whose verdict signals decent fundamentals (`great` / `invest` / `review`) records a fair-price anchor in frontmatter: `fair_price` = `dcf_intrinsic` when `dcf_valid: true`, otherwise `consensus.target_median` when `analyst_count ≥ 3` (both straight from the analyze JSON — no LLM estimate). Set `fair_price_basis` to `dcf` or `consensus` accordingly. For `fair` / `reject` verdicts **omit both keys** — a price anchor on a weak thesis is noise. `build_dashboard.py` surfaces these as the "Fair Px" / "Upside" columns in All Evaluations.
 
 **Frontmatter v2** (lowercase, sem emojis, sem espaços):
 
@@ -362,8 +364,11 @@ piotroski_fscore: 8
 altman_zscore: 6.4
 price_at_eval: 842.1
 currency: EUR
+fair_price: 920                # dcf_intrinsic se dcf_valid, senão consensus target_median (≥3 analistas); OMITIR quando verdict ∈ {fair, reject} ou sem âncora fiável
+fair_price_basis: dcf          # dcf | consensus ; presente sse fair_price presente
 earnings_date_next: 2026-04-24
 manual_reviewed: false
+narrative_quality: good        # good | partial | degraded — source quality the narrative was written from (get_narrative.py / post-WebFetch)
 management_score: 8.5          # null for screens
 management_flag: false         # true only if <7.0 and mode==deep
 industry_cache_date: 2026-04-17
@@ -391,6 +396,7 @@ schema_version: "2.2"
 
 > [!tldr] ⚡ TL;DR (leitura 2 minutos)
 > **Veredicto**: {emoji} {verdict_label} ({score}/10, {gates_passed}/7 gates, Piotroski {fscore}/9, Mgmt {mgmt_score}/10)
+> **Fair price**: {fair_price} {currency} ({fair_price_basis}) → upside {pct}% vs {price_at_eval} — omitir a linha quando não há fair_price
 > **Thesis**: {1-line bull case}
 > **Risks**: {2-3 key risks}
 > **Bear trigger**: {bear_case_trigger}

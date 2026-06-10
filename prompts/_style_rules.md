@@ -17,4 +17,13 @@ OUTPUT STYLE RULES (apply to every section below)
   (profit pools, market structure, moats) where both are relevant.
 - Cite sources (annual report page, quarterly report, IR deck, filings URL) whenever
   a claim is not derivable from the JSON.
+- CITATION DISCIPLINE:
+  * Any factual claim that is neither in the JSON nor tied to a cited source gets an
+    "[UNSOURCED]" tag at the end of its sentence. Prefer dropping the claim over tagging it.
+  * Source-quality order — cite the highest tier available for the claim:
+    10-K/annual report > 10-Q/earnings-call transcript > IR deck/page > reputable
+    financial press > aggregators. Never cite an aggregator when a filing covers it.
+  * Freshness: when a cited filing/news item is older than 3 months, state its date
+    next to the citation (e.g. "(10-K FY2025, filed 2026-02)"); older than 12 months
+    additionally flag "(may be stale)".
 ```
