@@ -40,6 +40,7 @@ PORTFOLIO_JSON = ROOT / "_portfolio.json"
 THESIS_JSON = ROOT / "_thesis.json"
 BROKERS_JSON = ROOT / "_brokers.json"
 LIVE_PRICES_JSON = ROOT / "_live_prices.json"
+TECH_DIR = ROOT / "_technical"
 
 REPORT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_.+\.md$")
 
@@ -327,15 +328,51 @@ def load_brokers() -> dict:
         return {"markets": [], "support_matrix": {}}
 
 
-def load_live_prices(reports: list[dict], skip: bool) -> dict:
+def _fmt_range(v):
+    if isinstance(v, (list, tuple)) and len(v) == 2 and all(x is not None for x in v):
+        return f"{float(v[0]):.2f}–{float(v[1]):.2f}"
+    return v or None
+
+
+def load_technical_store() -> list[dict]:
+    """Read _technical/*.json (Phase 3.5 persists one per ticker) so the Technical
+    card shows ALL names with a tech read — frontmatter only covers reports written
+    after the tech fields landed there."""
+    out = []
+    if not TECH_DIR.exists():
+        return out
+    for p in sorted(TECH_DIR.glob("*.json")):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as e:
+            log(f"WARN: bad technical json {p.name}: {e}")
+            continue
+        out.append({
+            "ticker": d.get("ticker") or p.stem,
+            "tech_score": safe_float(d.get("technical_score")),
+            "go_no_go": d.get("go_no_go"),
+            "combined_score": safe_float(d.get("combined_score")),
+            "fund_score": safe_float(d.get("fundamental_score")),
+            "entry_zone": _fmt_range(d.get("entry_zone")),
+            "stop_loss": _fmt_range(d.get("suggested_stop_loss")),
+            "tech_risk": d.get("risk_level"),
+            "fetched_at": d.get("fetched_at"),
+        })
+    return out
+
+
+def load_live_prices(reports: list[dict], tech_store: list[dict], skip: bool) -> dict:
     """Refresh + read _live_prices.json for tickers carrying a technical read, so the
     Technical card can compare live price vs entry zone ("buy range"). The yfinance
     fetch lives in live_prices.py (subprocess) — this module stays import-stdlib-only.
     Any failure degrades to the last JSON on disk, or to no live column at all."""
-    tickers = sorted({
-        r["ticker"] for r in reports
-        if r.get("tech_score") is not None and (r.get("score") or 0) >= 7.0 and r.get("entry_zone")
-    })
+    tickers = sorted(
+        {
+            r["ticker"] for r in reports
+            if r.get("tech_score") is not None and (r.get("score") or 0) >= 7.0 and r.get("entry_zone")
+        }
+        | {s["ticker"] for s in tech_store if s.get("entry_zone") and (s.get("fund_score") or 0) >= 7.0}
+    )
     if tickers and not skip:
         try:
             import subprocess
@@ -353,6 +390,12 @@ def load_live_prices(reports: list[dict], skip: bool) -> dict:
     except Exception as e:
         log(f"WARN: could not parse {LIVE_PRICES_JSON}: {e}")
         return {"prices": {}}
+
+
+def dump_for_script(bundle: dict) -> str:
+    """JSON for embedding inside a <script> block: escape "</" so a literal
+    "</script>" in report text can't close the data block and blank the page."""
+    return json.dumps(bundle, ensure_ascii=False).replace("</", "<\\/")
 
 
 def main() -> int:
@@ -378,11 +421,12 @@ def main() -> int:
         "prefilter": load_prefilter(),
         "portfolio": load_portfolio(),
         "thesis": load_thesis(),
-        "live_prices": load_live_prices(reports, skip="--no-live" in sys.argv),
+        "technical_store": (tech_store := load_technical_store()),
+        "live_prices": load_live_prices(reports, tech_store, skip="--no-live" in sys.argv),
     }
 
     template = TEMPLATE.read_text(encoding="utf-8")
-    rendered = template.replace("__DATA__", json.dumps(bundle, ensure_ascii=False), 1)
+    rendered = template.replace("__DATA__", dump_for_script(bundle), 1)
     OUTPUT.write_text(rendered, encoding="utf-8")
 
     # Broker Analysis lives on its own page (linked from the main dashboard)
@@ -393,7 +437,7 @@ def main() -> int:
             "brokers": load_brokers(),
         }
         broker_template = TEMPLATE_BROKERS.read_text(encoding="utf-8")
-        broker_rendered = broker_template.replace("__DATA__", json.dumps(broker_bundle, ensure_ascii=False), 1)
+        broker_rendered = broker_template.replace("__DATA__", dump_for_script(broker_bundle), 1)
         OUTPUT_BROKERS.write_text(broker_rendered, encoding="utf-8")
     else:
         log(f"WARN: broker template not found at {TEMPLATE_BROKERS} — skipping {OUTPUT_BROKERS.name}")
