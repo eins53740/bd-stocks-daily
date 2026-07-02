@@ -61,9 +61,12 @@ def regenerate_dashboard() -> None:
     """Regenerate _dashboard.html before sending so the attachment is fresh.
     Non-fatal if it fails — email still goes out without the attachment."""
     try:
+        # Timeout must exceed build_dashboard's inner live-price fetch (180s),
+        # otherwise slow yfinance days kill the regen and the email attaches a
+        # stale dashboard.
         result = subprocess.run(
             [sys.executable, str(BUILD_DASHBOARD)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=300,
         )
         if result.returncode == 0:
             log(f"dashboard regenerated ({DASHBOARD.stat().st_size} bytes)")
@@ -207,7 +210,7 @@ def build_dashboard_inline_html(bundle: dict, target_date: str) -> str:
             f"<td style='padding:5px 10px;border-bottom:1px solid #eee;'><b>{html.escape(r['ticker'])}</b></td>"
             f"<td style='padding:5px 10px;border-bottom:1px solid #eee;color:{color};font-weight:bold;'>{r['score']:.2f}</td>"
             f"<td style='padding:5px 10px;border-bottom:1px solid #eee;font-size:12px;color:#666;'>{r.get('days_left',0)}d left</td>"
-            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;font-size:12px;'>{html.escape((r.get('thesis') or '')[:140])}</td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;font-size:12px;'>{html.escape(strip_md(r.get('thesis'))[:140])}</td>"
             f"</tr>"
         )
     sl_block = (
@@ -315,24 +318,112 @@ def build_growth_section_html(target_date: str) -> str:
         return ""
 
 
-def build_card_html(row: dict) -> str:
+_MD_INLINE_RE = re.compile(r"\*+|__|`")  # emphasis markers; literal * is not used in thesis text
+
+
+def strip_md(text: str | None) -> str:
+    """Drop inline markdown emphasis markers from text snippets rendered as plain
+    HTML (cards / shortlist rows), where **bold** would otherwise show literally."""
+    return _MD_INLINE_RE.sub("", text) if text else ""
+
+
+def bundle_meta(bundle: dict | None, row: dict) -> dict:
+    """Slim-report dict from the dashboard bundle matching this _log.csv row
+    (ticker + date). Empty dict when the bundle or the report is missing, so
+    cards degrade to the log-only fields."""
+    if not bundle:
+        return {}
+    for r in bundle.get("reports", []) or []:
+        if r.get("ticker") == row.get("ticker") and r.get("date") == row.get("date"):
+            return r
+    return {}
+
+
+def _chip(text: str, fg: str, bg: str) -> str:
+    return (
+        f"<span style='display:inline-block;padding:2px 8px;border-radius:10px;"
+        f"font-size:11px;font-weight:bold;color:{fg};background:{bg};margin-right:6px;'>{text}</span>"
+    )
+
+
+def build_card_html(row: dict, meta: dict | None = None) -> str:
+    meta = meta or {}
     score = float(row.get("score", 0) or 0)
     emoji, _tag, label, color = verdict_style(row.get("verdict", ""), score)
     fn = report_filename(row)
     link = obsidian_link(fn)
-    notes = html.escape(row.get("notes", "") or "")
+    company = html.escape(meta.get("company") or "")
+    company_html = f" <span style='font-weight:normal;color:#555;'>{company}</span>" if company else ""
+
+    # Chips: fair-price upside, technical GO/NO-GO, management flag
+    chips = []
+    fair, price = meta.get("fair_price"), meta.get("price")
+    if fair and price:
+        upside = (fair / price - 1) * 100
+        chips.append(_chip(
+            f"Fair {fair:,.0f} {meta.get('currency') or ''} ({upside:+.0f}%)".strip(),
+            "#0a6640" if upside >= 0 else "#a03000",
+            "#e3f4ec" if upside >= 0 else "#fdeee4",
+        ))
+    gng = (meta.get("go_no_go") or "").upper()
+    if gng == "GO":
+        chips.append(_chip(f"GO · entry {html.escape(meta.get('entry_zone') or '—')}", "#0a6640", "#e3f4ec"))
+    elif gng in ("NO-GO", "NOGO", "NO_GO"):
+        chips.append(_chip("NO-GO — wait", "#8a6d00", "#fdf3d7"))
+    if meta.get("mgmt_flag"):
+        chips.append(_chip("⚠ mgmt flag", "#a03000", "#fdeee4"))
+    chips_html = f"<div style='margin:2px 0 6px;'>{''.join(chips)}</div>" if chips else ""
+
+    def _line(label_txt: str, value: str | None) -> str:
+        if not value:
+            return ""
+        return (
+            f"<div style='font-size:13px;color:#333;margin:2px 0;'>"
+            f"<b>{label_txt}:</b> {html.escape(strip_md(value)[:220])}</div>"
+        )
+
     return f"""
-    <div style="border-left: 4px solid {color}; padding: 10px 15px; margin: 10px 0; background: #fafafa; border-radius: 4px;">
-      <div style="font-size: 18px; font-weight: bold; color: {color}; margin-bottom: 5px;">
-        {emoji} {html.escape(row['ticker'])} — Score {score:.1f}/10 — {label}
+    <div style="border-left: 4px solid {color}; padding: 12px 16px; margin: 12px 0; background: #fafafa; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.06);">
+      <div style="font-size: 17px; font-weight: bold; color: {color}; margin-bottom: 3px;">
+        {emoji} {html.escape(row['ticker'])}{company_html} — {score:.1f}/10 — {label}
       </div>
-      <div style="font-size: 13px; color: #555; margin-bottom: 5px;">
-        Mode: <b>{row.get('mode','')}</b> · Round: {row.get('round','')} · Gates: {row.get('gates_passed','')}/7 · Price: {row.get('price_at_eval','')} {row.get('currency','')}
+      <div style="font-size: 12px; color: #777; margin-bottom: 4px;">
+        {row.get('mode','')} · round {row.get('round','')} · gates {row.get('gates_passed','')}/7 · {row.get('price_at_eval','')} {row.get('currency','')}
       </div>
-      <div style="font-size: 13px; color: #333; margin-bottom: 8px;">{notes}</div>
-      <div><a href="{link}" style="color: #1f77b4; text-decoration: none;">Open report in Obsidian</a></div>
+      {chips_html}
+      {_line('Thesis', meta.get('thesis'))}
+      {_line('Action', meta.get('action'))}
+      {'' if meta.get('thesis') else _line('Notes', row.get('notes'))}
+      <div style="margin-top:6px;"><a href="{link}" style="color: #1f77b4; text-decoration: none;">Open report in Obsidian →</a></div>
     </div>
     """
+
+
+def build_adviser_take_html(rows: list[dict], bundle: dict | None) -> str:
+    """One deterministic lead paragraph in adviser voice — best idea of the day,
+    or an honest 'nothing actionable' line. No LLM: composed from stored fields."""
+    scored = [(float(r.get("score", 0) or 0), r) for r in rows]
+    if not scored:
+        return ""
+    best_score, best = max(scored, key=lambda t: t[0])
+    meta = bundle_meta(bundle, best)
+    tick = html.escape(best.get("ticker", ""))
+    if best_score >= 7.5:
+        action = meta.get("action") or "review the full report before acting"
+        body = (f"Strongest idea today: <b>{tick}</b> at <b>{best_score:.1f}/10</b>. "
+                f"{html.escape(strip_md(meta.get('thesis'))[:180])} "
+                f"Suggested next step: {html.escape(strip_md(action)[:160])}")
+    elif best_score >= 6.0:
+        body = (f"Nothing to buy today. <b>{tick}</b> is the best of the batch at "
+                f"{best_score:.1f}/10 — a watchlist name, not an order. Patience is a position.")
+    else:
+        body = (f"No actionable ideas today — best was <b>{tick}</b> at {best_score:.1f}/10. "
+                f"Capital stays where it is; the pipeline keeps screening.")
+    return (
+        f"<p style='font-size:14.5px;line-height:1.5;color:#222;background:#f2f7fd;"
+        f"border-left:4px solid #1f77b4;border-radius:6px;padding:12px 16px;margin:0 0 20px;'>"
+        f"💼 <b>Adviser's take</b> — {body}</p>"
+    )
 
 
 def _strip_frontmatter(md: str) -> str:
@@ -461,7 +552,8 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     # is kept as the attachment for full functionality.
     bundle = extract_dashboard_bundle()
     dashboard_inline_html = build_dashboard_inline_html(bundle, target_date) if bundle else ""
-    cards_html = "\n".join(build_card_html(r) for r in rows)
+    adviser_take_html = build_adviser_take_html(rows, bundle)
+    cards_html = "\n".join(build_card_html(r, bundle_meta(bundle, r)) for r in rows)
     growth_section_html = build_growth_section_html(target_date)  # Phase 7 — "" when no growth data
     reports_html = "\n".join(build_full_report_html(r) for r in rows)
     html_body = f"""
@@ -485,6 +577,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         <p style="color: #666; font-size: 13px;">
           Auto-generated. Not investment advice. Verify all figures before acting.
         </p>
+        {adviser_take_html}
         {dashboard_inline_html}
         <h2 style="margin-top: 25px;">Today's reports — summary</h2>
         {cards_html}
@@ -674,7 +767,8 @@ def main() -> int:
         return 0
     except Exception as e:
         log(f"email FAIL (not fatal): {type(e).__name__}: {e}")
-        print(f'{{"email_sent": false, "error": "{type(e).__name__}: {e}"}}')
+        import json as _json
+        print(_json.dumps({"email_sent": False, "error": f"{type(e).__name__}: {e}"}))
         return 0  # non-fatal
 
 

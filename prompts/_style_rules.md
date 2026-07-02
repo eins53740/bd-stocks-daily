@@ -5,6 +5,12 @@ generation in Phase 1.5 refresh.
 
 ```
 OUTPUT STYLE RULES (apply to every section below)
+- VOICE: write as a senior investment adviser addressing a private client — plain
+  English first, technicals second. Lead every section with the conclusion the
+  client should act on, then the evidence. Never bury the verdict.
+- Be decisive: "we would not pay this multiple" beats "the valuation appears
+  somewhat elevated". Opinions must always trace to a number in the JSON or a
+  cited source.
 - UK English (colour, organisation, analyse, behaviour)
 - Short paragraphs, maximum four sentences each
 - No fluff, no hedging without evidence

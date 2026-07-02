@@ -193,7 +193,7 @@ python "%SCRIPTS%\analyze_ticker.py" --ticker ASML.AS --mode deep
 **After each analyse call, check these flags in the JSON output:**
 
 - `earnings_today: true` → material event risk within hours. For the **deep** ticker, pick a replacement manually from `_prefiltered.yaml` (same `size` bucket, not in the 183-day dedupe window per `_log.csv`) and re-run `analyze_ticker.py` on it; do NOT re-run `pick_candidates.py` — it's date-seeded and will return the same ticker. For a **screen** ticker, annotate the screen report with an explicit "⚠️ Earnings today" banner and keep going (cheaper to note than to re-pick).
-- `dcf_valid: false` → **do not quote `dcf_intrinsic` as a price target anywhere in the narrative.** The `dcf_reason` field explains why the model can't be trusted (negative FCF, TTM/annual divergence, or |upside|>70% sanity trip). Section 2.9 should reference the reason verbatim and mark the intrinsic as "not meaningful".
+- `dcf_valid: false` → **do not quote `dcf_intrinsic` as a price target anywhere in the narrative.** The `dcf_reason` field explains why the model can't be trusted (negative FCF, TTM/annual divergence, or |upside|>70% sanity trip). Section 2.11 should reference the reason verbatim and mark the intrinsic as "not meaningful".
 - `score_details.peer_info.peers_source` → `by_ticker` means a precise sub-industry peer set was used; `by_industry` means yfinance's industry bucket; `by_sector` is a coarse fallback; `none` means no peers and the peer score is a neutral 5.0 placeholder. Mention the source in §2.10 so the reader can calibrate trust in the ranking.
 - `fundamentals.revenue_cagr_basis` → `5y_financials` / `4y_financials` / `3y_financials` / `3y_income_stmt` / `1y_yoy_fallback` / `unavailable`. v2.1+ tolerates NaN years and short series. When basis is `1y_yoy_fallback`, mention it in §2.9 (Growth decomposition) so the reader knows the CAGR is a single-year proxy, not a multi-year trend.
 - `data_quality` → `ok` / `corrected` / `suspect` (3 validation layers).
@@ -264,12 +264,14 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
    Use the returned JSON for Phase 5. Sets `management_score`, `management_flag`, recomputes `scores.composite` and `verdict`.
    
    **Then write `finalize_score.py` stdout to `%OUT_DIR%\_tmp\{date}_{ticker}.json` (overwrite Phase 2's intermediate).** Phase 3 (`render_charts.py`) reads from this file via `--analysis-json`. Without this step, the radar PNG will be skipped (validation gate) and the report loses its score breakdown.
+   
+   *(This is step 8 of Phase 2.5 — referenced from Phase 3's pre-condition below.)*
 
 If any Phase 2.5 step fails, log a warning and continue with what you have — the report degrades gracefully (missing section + `(assumption — evidence gap)` note), it does not abort.
 
 ### Phase 3 — Render charts (deep only)
 
-**Pre-condition (CRITICAL):** the analysis JSON for this ticker MUST have been written to `%OUT_DIR%\_tmp\{date}_{ticker}.json` first, with all 7 score components populated. For deep mode, this means writing the `finalize_score.py` stdout (Phase 2.5 step 7) to that file. For screens, write Phase 2's stdout. **Without this file, render_charts will validate-skip the radar chart and the report will lose its score-breakdown PNG.** A canonical `--analysis-json` argument prevents the silent-empty-stdin bug that produced misleading 0/10 radars.
+**Pre-condition (CRITICAL):** the analysis JSON for this ticker MUST have been written to `%OUT_DIR%\_tmp\{date}_{ticker}.json` first, with all 7 score components populated. For deep mode, this means writing the `finalize_score.py` stdout (Phase 2.5 step 8) to that file. For screens, write Phase 2's stdout. **Without this file, render_charts will validate-skip the radar chart and the report will lose its score-breakdown PNG.** A canonical `--analysis-json` argument prevents the silent-empty-stdin bug that produced misleading 0/10 radars.
 
 Filename rule: dots in tickers are kept (`JMT.LS` → `2026-04-30_JMT.LS.json`); only `/` and `\` are sanitised. Already handled by `safe_ticker_filename()`.
 
@@ -396,12 +398,17 @@ schema_version: "2.2"
 
 > [!tldr] ⚡ TL;DR (leitura 2 minutos)
 > **Veredicto**: {emoji} {verdict_label} ({score}/10, {gates_passed}/7 gates, Piotroski {fscore}/9, Mgmt {mgmt_score}/10)
+> **Conviction**: {High | Medium | Low} — {razão em meia linha, e.g. "all pillars intact, but valuation leaves no margin of safety"}
 > **Fair price**: {fair_price} {currency} ({fair_price_basis}) → upside {pct}% vs {price_at_eval} — omitir a linha quando não há fair_price
 > **Thesis**: {1-line bull case}
 > **Risks**: {2-3 key risks}
 > **Bear trigger**: {bear_case_trigger}
 > **Action**: {explicit next step}
+> **Position size**: {sizing band da tabela abaixo, e.g. "Starter 1.5–3% of equity book; build to 4% on execution"} — always end with "(guideline, not advice)"
+> **Entry plan**: {se GO + entry_zone: "accumulate inside {entry_zone}; invalidation below {stop_loss}"; se NO-GO: "thesis ok, timing not — wait for {condição concreta}"; se sem tech read: "no timing read — size entry in thirds"}
 > **Earnings watch**: próximos earnings em {earnings_date_next}
+
+**Position-size guideline (deterministic — apply, don't improvise):** start from the verdict band — `great` ≥9.0 → core 4–6%; `invest` 7.5–8.9 → starter 1.5–3%, build to 4%; `review` 6.0–7.4 → watchlist only (0%, define a trigger); `fair`/`reject` → no position. Then shift **one band down** (core→starter, starter→watchlist) for each of: `management_flag: true`, `tech_risk_level: High`, `go_no_go: NO-GO`, `data_quality: suspect` — applied at most once in total, not cumulatively below watchlist. Conviction line: High = no downshift triggered and ≥6 gates; Low = any downshift triggered; Medium otherwise.
 
 ![Price 1Y](IMG/{date}_{ticker}_price.png)
 
@@ -535,7 +542,7 @@ schema_version: "2.2"
 | Suporte / Resistência (60d) | {support} / {resistance} | {breakout: sim/não} |
 | Drawdown máx 1Y | {max_drawdown_1y} | — |
 
-*GO/NO-GO timing-only: requer technical_score ≥ 6.0, preço acima da SMA200, RSI ≤ 80 e MACD não profundamente baixista. Um NO-GO não invalida a tese fundamental — apenas sinaliza que o momento de entrada não está alinhado. Só corre para tickers com fundamental score ≥ 7.0 (ver Phase 3 abaixo).*
+*GO/NO-GO timing-only: requer technical_score ≥ 6.0, preço acima da SMA200, RSI ≤ 80 e MACD não profundamente baixista. Um NO-GO não invalida a tese fundamental — apenas sinaliza que o momento de entrada não está alinhado. Só corre para tickers com fundamental score ≥ 7.0 (ver Phase 3.5).*
 
 ### 2.11 DCF + Intrinsic value
 {If dcf_valid=true:}
@@ -586,8 +593,14 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 ### 2.17 Operator vs Investor view
 ({2 short paragraphs — Operator lens (execução, bottlenecks) e Investor lens (profit pools, moats). Cross-cutting summary destilado das secções anteriores.})
 
-### 2.18 Veredicto final
-**{verdict_label}** — {2-3 linhas justificando o score e a action recomendada. Se management_flag=true, referenciar explicitamente.}
+### 2.18 Veredicto final — Adviser's letter
+Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 1-3 frases, sem headers):
+
+1. **The call** — {verdict_label} + conviction, em linguagem corrente ("This is a business we'd own; the price is the problem").
+2. **Why now** — o que nos números de hoje sustenta (ou trava) a decisão. Se management_flag=true, referenciar explicitamente.
+3. **How to act** — position size band + entry plan (repetir os do TL;DR, coerentes).
+4. **What we're watching** — 2-3 monitorização concreta com números (e.g. "net margin holding >25% at Q3 print", ligada aos pillars e ao bear trigger).
+5. **When we'd walk away** — o bear trigger reformulado como instrução de saída.
 
 ## 3. Links para ir mais fundo
 - 📘 [Annual report {year}]({annual_url}) — publicado {annual_date}
@@ -610,7 +623,9 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 
 > [!info] Screen rápido (1 min) — 6-component score (Management não avaliado em screens)
 > {emoji} {verdict_label} ({score}/10, {gates}/7 gates).
-> {1-line thesis}. {1-line risk}.
+> **Thesis**: {1-line thesis}
+> **Risks**: {1-line risk}
+> **Action**: {explicit next step — e.g. "queue for deep-dive", "revisit after Q3 print", "pass — valuation"}
 
 ## 7-Gate checklist
 - {gate traffic lights, 1 linha cada}
