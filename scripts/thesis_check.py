@@ -53,7 +53,12 @@ def find_prior_row(log_path: Path, ticker: str, today_date: str) -> dict | None:
                 rows.append(row)
     if not rows:
         return None
-    rows.sort(key=lambda r: r.get("date", ""), reverse=True)
+    # Most recent date first; within a date prefer the deep row (fuller baseline
+    # than a same-day screen), then the higher round.
+    rows.sort(
+        key=lambda r: (r.get("date", ""), r.get("mode", "") == "deep", r.get("round", "")),
+        reverse=True,
+    )
     return rows[0]
 
 

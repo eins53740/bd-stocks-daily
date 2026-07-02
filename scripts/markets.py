@@ -64,11 +64,17 @@ _US_META = ("US", "USD", "US-GAAP", "US (NYSE/Nasdaq)")
 
 
 def suffix_of(ticker: str) -> str:
-    """Return the Yahoo exchange suffix (without dot), or '' for US/no-suffix."""
+    """Return the Yahoo exchange suffix (without dot), or '' for US/no-suffix.
+
+    Dot-form US class shares (BRK.B, BF.B) are NOT exchange suffixes: a single
+    trailing letter that isn't a known exchange code resolves to '' (US)."""
     base, dot, suffix = ticker.rpartition(".")
     if not dot:
         return ""
-    return suffix.upper()
+    up = suffix.upper()
+    if len(up) == 1 and up not in _SUFFIX_META and base and not base[0].isdigit():
+        return ""  # class-share letter, not an exchange
+    return up
 
 
 def market_meta(ticker: str) -> dict:

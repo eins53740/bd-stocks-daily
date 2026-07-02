@@ -86,8 +86,14 @@ def load_existing() -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def ticker_count(ticker: str, rows: list[dict]) -> int:
-    return sum(1 for r in rows if r.get("ticker") == ticker)
+def round_for(ticker: str, entry_date: str, rows: list[dict]) -> int:
+    """Round = distinct PRIOR evaluation dates + 1. A same-day screen+deep pair
+    (or same-day re-run) is one visit, not two, so `round` counts real revisits."""
+    prior_dates = {
+        r.get("date") for r in rows
+        if r.get("ticker") == ticker and r.get("date") != entry_date
+    }
+    return len(prior_dates) + 1
 
 
 def main() -> int:
@@ -112,7 +118,7 @@ def main() -> int:
             writer.writeheader()
         for e in entries:
             e = dict(e)
-            e["round"] = ticker_count(e["ticker"], existing) + 1
+            e["round"] = round_for(e["ticker"], e.get("date", ""), existing)
             existing.append(e)
             for h in HEADERS_V2:
                 e.setdefault(h, "")

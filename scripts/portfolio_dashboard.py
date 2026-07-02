@@ -93,7 +93,9 @@ def decide(h: dict) -> dict:
     thesis = (h.get("thesis_status") or "").lower()
     fund = h.get("fund_score")
     overall = h.get("overall")
-    weight = h.get("weight")
+    # company_weight aggregates dual listings sharing a canon ticker; falls back
+    # to the per-listing weight when the caller didn't compute it.
+    weight = h.get("company_weight", h.get("weight"))
     live = h.get("live_price")
     avg = h.get("avg_buy_price")
 
@@ -164,8 +166,9 @@ def decide(h: dict) -> dict:
 # I/O: enrich holdings from _log.csv + reports, then write _portfolio.json
 # ----------------------------------------------------------------------------
 
-def load_log_scores(log_path: Path) -> dict[str, dict]:
-    """Most-recent _log.csv row per (canonical) ticker: fund score, verdict, date, bear trigger."""
+def load_log_scores(log_path: Path) -> tuple[dict[str, dict], "callable"]:
+    """Most-recent _log.csv row per (canonical) ticker: fund score, verdict, date,
+    bear trigger. Returns (scores, canon) — canon is reused by the caller."""
     from importlib import util as _il_util
 
     # reuse canon() from portfolio_sync (which reused the gap script)
@@ -176,7 +179,7 @@ def load_log_scores(log_path: Path) -> dict[str, dict]:
 
     out: dict[str, dict] = {}
     if not log_path.exists():
-        return out
+        return out, canon
     with log_path.open("r", encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
             t = (row.get("ticker") or "").strip()
@@ -233,6 +236,14 @@ def load_report_technical(root: Path, canon) -> dict[str, dict]:
 
 
 def enrich(holdings: list[dict], log_scores: dict, tech_reads: dict, today: date) -> list[dict]:
+    # Concentration is per COMPANY, not per listing — dual listings (.AS + .L)
+    # share a canon_ticker and their weights must be summed before the >20% guard.
+    company_weight: dict[str, float] = {}
+    for h in holdings:
+        if h.get("is_equity") and h.get("weight") is not None:
+            c = h.get("canon_ticker")
+            company_weight[c] = company_weight.get(c, 0.0) + h["weight"]
+
     enriched = []
     for h in holdings:
         if not h.get("is_equity"):
@@ -258,6 +269,7 @@ def enrich(holdings: list[dict], log_scores: dict, tech_reads: dict, today: date
             "currency": h.get("currency"),
             "market_value": h.get("market_value"),
             "weight": h.get("weight"),
+            "company_weight": company_weight.get(c),
             "unrealized_pnl": h.get("unrealized_pnl"),
             "fund_score": fund_score,
             "fund_date": fund_date,

@@ -245,9 +245,20 @@ def reconcile(rows: list[dict], live: dict[str, float], fx: dict[str, float] | N
         cost_basis = float(avg) * qty if avg not in (None, "") else None
         # Original listing first: its quote currency matches `currency`. The canon
         # symbol may be a cross-listing in another currency (SHELL.AS -> SHEL.L
-        # quotes in GBp and would distort the EUR value 100x).
-        live_price = live.get(ticker) or live.get(cticker)
+        # quotes in GBp and would distort the EUR value 100x), so when the quote
+        # falls back to the canon symbol, re-derive the currency from ITS market.
+        live_price = live.get(ticker)
+        price_symbol = ticker
+        if live_price is None and live.get(cticker) is not None:
+            live_price = live.get(cticker)
+            price_symbol = cticker
         currency = (r["currency"] or "EUR").upper()
+        if live_price is not None:
+            if price_symbol != ticker:
+                currency = (markets.market_meta(price_symbol)["currency"] or currency).upper()
+            # LSE quotes come in pence (GBp) — collapse to GBP before EUR conversion.
+            if markets.suffix_of(price_symbol) == "L" and currency in ("GBP", "GBX"):
+                live_price, currency = markets.normalize_gbx(live_price, "GBp")
 
         # Market value: live price * qty, else stored EUR value, else CSV's last
         # quote * qty. Track whether the figure is native-currency or already EUR.
@@ -267,6 +278,15 @@ def reconcile(rows: list[dict], live: dict[str, float], fx: dict[str, float] | N
         if fx is not None and market_value is not None and value_currency != "EUR":
             market_value = markets.to_eur(market_value, value_currency, fx.get(value_currency))
 
+        # P&L must land in the same currency as market_value (EUR when fx given).
+        # stored_pnl comes from BankBD already in EUR; the live-computed one is native.
+        if live_price is not None and avg not in (None, ""):
+            unrealized_pnl = (live_price - float(avg)) * qty
+            if fx is not None and currency != "EUR":
+                unrealized_pnl = markets.to_eur(unrealized_pnl, currency, fx.get(currency))
+        else:
+            unrealized_pnl = float(r["stored_pnl"]) if r["stored_pnl"] not in (None, "") else None
+
         holdings.append({
             "ticker": ticker,
             "canon_ticker": cticker,
@@ -284,11 +304,7 @@ def reconcile(rows: list[dict], live: dict[str, float], fx: dict[str, float] | N
             "stored_value_eur": float(stored_value) if stored_value not in (None, "") else None,
             "value_date": r["value_date"],
             "market_value": market_value,
-            "unrealized_pnl": (
-                (live_price - float(avg)) * qty
-                if live_price is not None and avg not in (None, "")
-                else (float(r["stored_pnl"]) if r["stored_pnl"] not in (None, "") else None)
-            ),
+            "unrealized_pnl": unrealized_pnl,
         })
 
     # Portfolio weight over EQUITY market value only (the dashboard is an equity view).

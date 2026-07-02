@@ -32,6 +32,7 @@ import argparse
 import json
 import sys
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 for _name in ("stdout", "stderr"):
@@ -100,12 +101,18 @@ def fetch_narrative(ticker: str, max_news: int = 5) -> dict:
                     "published_at": c.get("pubDate") or "",
                 })
             elif isinstance(n, dict):
+                # Legacy schema carries a Unix epoch — normalise to ISO like pubDate
+                ts = n.get("providerPublishTime")
+                try:
+                    published = datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
+                except (TypeError, ValueError, OSError):
+                    published = str(ts or "")
                 out["recent_news"].append({
                     "title": n.get("title", ""),
                     "publisher": n.get("publisher", ""),
                     "link": n.get("link", ""),
                     "summary": n.get("summary", ""),
-                    "published_at": str(n.get("providerPublishTime", "")),
+                    "published_at": published,
                 })
         if out["recent_news"]:
             out["sources_used"].append("yfinance.news")

@@ -61,11 +61,29 @@ def load_log() -> list[dict]:
         return list(csv.DictReader(f))
 
 
+PREFILTERED = OUT / "_prefiltered.yaml"
+
+
+def load_prefilter_meta() -> dict[str, dict]:
+    """{ticker: {region, sector}} from _prefiltered.yaml. The log rows don't carry
+    region/sector, so the shortlist looks them up here. Empty on any failure."""
+    try:
+        import yaml
+        data = yaml.safe_load(PREFILTERED.read_text(encoding="utf-8")) or {}
+        return {
+            t["ticker"]: {"region": t.get("region", ""), "sector": t.get("sector", "")}
+            for t in data.get("tickers", []) if t.get("ticker")
+        }
+    except Exception as e:
+        log(f"prefilter meta unavailable (non-fatal): {e}")
+        return {}
+
+
 def is_active(row: dict, today: date) -> bool:
     try:
         d = datetime.strptime(row["date"], "%Y-%m-%d").date()
         score = float(row["score"])
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, TypeError):  # TypeError: short row -> None cells
         return False
     if (today - d).days > EXPIRY_DAYS:
         return False
@@ -91,6 +109,7 @@ def safe_filename(ticker: str, date_str: str, verdict: str) -> str:
 
 def build_shortlist(rows: list[dict], manual_flags: dict) -> str:
     today = date.today()
+    pf_meta = load_prefilter_meta()
     active = [r for r in rows if is_active(r, today)]
     # Latest per ticker (keep most recent)
     latest = {}
@@ -140,9 +159,8 @@ def build_shortlist(rows: list[dict], manual_flags: dict) -> str:
         scores_total += score
         verdict_raw = r.get("verdict", "")
         verdict = fmt_verdict(verdict_raw, score)
-        region = r.get("notes", "").split("|")[0] if "|" in (r.get("notes") or "") else ""
         size = r.get("size", "")
-        # Try to pull region/sector from notes
+        # region/sector: notes token first (region=..;sector=..), else _prefiltered.yaml
         notes = r.get("notes", "") or ""
         region = ""
         sector = ""
@@ -156,6 +174,9 @@ def build_shortlist(rows: list[dict], manual_flags: dict) -> str:
                 sector = notes.split("sector=")[1].split(";")[0].strip()
             except Exception:
                 pass
+        meta = pf_meta.get(ticker, {})
+        region = region or meta.get("region", "")
+        sector = sector or meta.get("sector", "")
         region_count[region or "?"] += 1
         sector_count[sector or "?"] += 1
         mr = manual_flags.get((ticker, date_str), "no")
@@ -198,7 +219,7 @@ def append_expired(rows: list[dict]) -> None:
         try:
             d = datetime.strptime(r["date"], "%Y-%m-%d").date()
             score = float(r["score"])
-        except (KeyError, ValueError):
+        except (KeyError, ValueError, TypeError):  # TypeError: short row -> None cells
             continue
         if (today - d).days > EXPIRY_DAYS and score >= 7.5:
             expiring.append(r)

@@ -33,7 +33,14 @@ def log(msg: str) -> None:
 
 
 def is_us_ticker(ticker: str) -> bool:
-    return "." not in ticker and "-" not in ticker.split(".")[0]
+    """No exchange suffix => US. Yahoo's dash form for US class shares (BRK-B,
+    BF-B) is US too; dot-suffix forms stay non-US (.L/.T/... are exchanges)."""
+    if "." in ticker:
+        return False
+    base, _, suffix = ticker.rpartition("-")
+    if base and len(suffix) == 1 and suffix.isalpha():
+        return True  # class-share letter
+    return "-" not in ticker
 
 
 def edgar_urls(ticker: str) -> dict:

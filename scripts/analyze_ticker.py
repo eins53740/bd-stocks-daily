@@ -106,26 +106,23 @@ def piotroski_fscore(bs, fs, cf, info) -> tuple[int, dict]:
     except Exception:
         c["pos_net_income"] = 0
 
+    # Shared inputs for components 2-4, guarded independently so a missing
+    # "Total Assets" row can't NameError the unrelated earnings-quality point.
+    ni = safe(lambda: fs.loc["Net Income"].iloc[0])
+    ocf = safe(lambda: cf.loc["Operating Cash Flow"].iloc[0] if "Operating Cash Flow" in cf.index else cf.loc["Total Cash From Operating Activities"].iloc[0])
+
     # 2. Positive ROA
     try:
         ta = bs.loc["Total Assets"].iloc[0]
-        ni = fs.loc["Net Income"].iloc[0]
         c["pos_roa"] = 1 if (ni and ta and ni / ta > 0) else 0
     except Exception:
         c["pos_roa"] = 0
 
     # 3. Positive operating cash flow
-    try:
-        ocf = cf.loc["Operating Cash Flow"].iloc[0] if "Operating Cash Flow" in cf.index else cf.loc["Total Cash From Operating Activities"].iloc[0]
-        c["pos_ocf"] = 1 if (ocf and ocf > 0) else 0
-    except Exception:
-        c["pos_ocf"] = 0
+    c["pos_ocf"] = 1 if (ocf and ocf > 0) else 0
 
     # 4. OCF > Net Income (earnings quality)
-    try:
-        c["ocf_gt_ni"] = 1 if (ocf > ni) else 0
-    except Exception:
-        c["ocf_gt_ni"] = 0
+    c["ocf_gt_ni"] = 1 if (ni is not None and ocf is not None and ocf > ni) else 0
 
     # 5. Decrease in long-term debt ratio (D/A)
     try:
@@ -220,7 +217,7 @@ def evaluate_gates(fund: dict) -> tuple[int, dict]:
     peg = fund.get("peg")
     roe = fund.get("roe_ttm")
     gate2_pass = (pe is not None and pe > 0 and pe < 35) or (
-        peg is not None and peg < 2.5 and roe is not None and roe > 0.20
+        peg is not None and 0 < peg < 2.5 and roe is not None and roe > 0.20
     )
     gates["gate_2_valuation"] = {
         "pass": gate2_pass,
@@ -670,8 +667,12 @@ def _rank_metric(values: dict, lower_is_better: bool) -> dict:
         return {}
     sorted_items = sorted(clean.items(), key=lambda kv: kv[1], reverse=not lower_is_better)
     ranks = {}
-    for i, (k, _) in enumerate(sorted_items, start=1):
-        ranks[k] = i
+    prev_val = None
+    prev_rank = 0
+    for i, (k, v) in enumerate(sorted_items, start=1):
+        rank = prev_rank if v == prev_val else i  # ties share the better rank
+        ranks[k] = rank
+        prev_val, prev_rank = v, rank
     return ranks
 
 
@@ -924,7 +925,7 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         warnings_.append("cashflow missing")
 
     # --- Basics ---
-    price_curr = safe(lambda: info.get("currentPrice") or info.get("regularMarketPrice") or hist["Close"].iloc[-1] if hist is not None and not hist.empty else None)
+    price_curr = safe(lambda: info.get("currentPrice") or info.get("regularMarketPrice") or (hist["Close"].iloc[-1] if hist is not None and not hist.empty else None))
 
     # --- Phase 6: global-market metadata (suffix-driven currency/region/accounting) ---
     mkt_meta = markets.market_meta(ticker)
@@ -973,7 +974,7 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         "net_margin_ttm": info.get("profitMargins"),
         "gross_margin_ttm": info.get("grossMargins"),
         "operating_margin_ttm": info.get("operatingMargins"),
-        "debt_to_equity": (info.get("debtToEquity") or 0) / 100.0 if info.get("debtToEquity") else None,
+        "debt_to_equity": (info["debtToEquity"] / 100.0) if info.get("debtToEquity") is not None else None,
         "total_debt": info.get("totalDebt"),
         "total_cash": info.get("totalCash"),
         "quick_ratio": info.get("quickRatio"),
@@ -1234,8 +1235,11 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     moat_score, buffett_applied = apply_buffett_moat(moat_score, fund.get("roic_ttm"))
     moat_details["buffett_moat_applied"] = buffett_applied
     moat_details["roic_ttm"] = fund.get("roic_ttm")
+    # An invalid DCF must not feed the valuation sub-score — its upside is a
+    # flagged distortion, not a signal (dcf_upside_pct stays in the JSON for context).
     val_score, val_details = score_valuation(
-        fund["pe_ratio"], fund["peg"], fund["fcf_yield"], dcf_upside, fund.get("ev_ebit")
+        fund["pe_ratio"], fund["peg"], fund["fcf_yield"],
+        dcf_upside if dcf_valid else None, fund.get("ev_ebit")
     )
     category = lynch_category(fund["revenue_cagr_5y"], fund["roe_5y_avg"], fund["net_margin_5y_avg"])
     growth_score, growth_details = score_growth_durability(

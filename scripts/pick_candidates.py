@@ -76,9 +76,10 @@ def ticker_last_date(ticker: str, log_rows: list[dict]) -> date | None:
 
 
 def ticker_round(ticker: str, log_rows: list[dict]) -> int:
-    """1-based: first evaluation is round 1, second is round 2, ..."""
-    count = sum(1 for r in log_rows if r.get("ticker") == ticker)
-    return count + 1
+    """1-based: first evaluation is round 1, second is round 2, ...
+    Counts distinct dates — a same-day screen+deep pair is one visit."""
+    dates = {r.get("date") for r in log_rows if r.get("ticker") == ticker}
+    return len(dates) + 1
 
 
 def eligible(tickers: list[dict], log_rows: list[dict], today: date) -> list[dict]:
@@ -94,7 +95,10 @@ def eligible(tickers: list[dict], log_rows: list[dict], today: date) -> list[dic
 
 
 def pick(candidates: list[dict], size: str) -> dict | None:
-    pool = [c for c in candidates if c.get("size") == size]
+    # 'micro' names ride the small_growth slot — they have no slot of their own
+    # and would otherwise only ever surface via the extras shuffle.
+    sizes = {size, "micro"} if size == "small_growth" else {size}
+    pool = [c for c in candidates if c.get("size") in sizes]
     if not pool:
         return None
     return random.choice(pool)
@@ -129,12 +133,13 @@ def pick_fallback_deep(log_rows: list[dict], today: date) -> dict | None:
         if t not in last_seen or d > last_seen[t]:
             last_seen[t] = d
             seen_round[t] = row
-        # Round is total count of rows for this ticker
-    rounds = {}
+        # Round = distinct eval dates per ticker (same-day screen+deep = one visit)
+    round_dates: dict[str, set] = {}
     for row in log_rows:
         t = row.get("ticker")
         if t:
-            rounds[t] = rounds.get(t, 0) + 1
+            round_dates.setdefault(t, set()).add(row.get("date"))
+    rounds = {t: len(ds) for t, ds in round_dates.items()}
 
     cutoff = today - timedelta(days=FALLBACK_MIN_AGE_DAYS)
 
