@@ -4,13 +4,15 @@ description: Daily stock evaluation — picks 5 tickers (1 deep + 4 screens, 2 o
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v3.1 — scoring schema 2.2)
+# Daily Stock Evaluation (v4 wave-1, Phase B — scoring schema 2.2)
 
-Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 14 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.5 / 2.6 / 3.5 / 5.5 incluídas).
+Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 15 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.5 / 2.6 / 3.5 / 5.5 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
 **v3.1 (2026-07-15)** acrescenta ao report deep: série trimestral **EBITDA + FCF** com forecast 4Q híbrido (`financial_history.py`, Phase 2.2, cache `_fin_history/`), **metrics strip** no topo (bloco `top_strip` do analysis JSON; screens também), chart de **revenue sources** 3 anos (`_segments/`, excepção LLM documentada), chart **relative performance 30 meses** vs benchmark regional + sector ETF, tese/risco **promovidos em callouts coloridos** (labels de parser preservados), secção **§2.19 broker (€1500)** para composite ≥ 7.0, e secção **§4 macro** com cache diário `_macro/` (Phase 2.6, prompt `macro_daily.md`).
+
+**v4 wave-1 · Phase B (2026-07-22)** acrescenta ao deep a **valuation depth** (spec rev 3 §7, overlay-only): bandas P/E & P/S da própria história (`valuation_bands.py`, Phase 2.3), forward target FY+3 TIKR-style (target @ data + est. return + IRR), sensitivity table com margin-bear row, e o bloco de **intrinsic value 5-modelos com blend + margin-of-safety** (`intrinsic_value.py`). Composite v2.2 intocado; keys aditivas no analysis JSON (`valuation_bands`, `intrinsic_value`). Fases seguintes da wave 1 (A C D E G F) por construir.
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
@@ -264,6 +266,22 @@ python "%SCRIPTS%\financial_history.py" --ticker ASML.AS --analysis-json "%OUT_D
 - Falha total → JSON `{"error": ...}`, chart skipped, nota no report. Non-fatal.
 - Screens NÃO correm esta phase.
 
+### Phase 2.3 — Valuation depth (deep only, v4 Phase B)
+
+Corre logo a seguir à Phase 2.2 (usa o cache `_fin_history/` para o P/S band e o CAGR ladder) e antes da Phase 2.5. **Ordem obrigatória** — bands primeiro, intrinsic depois (lê o band do JSON):
+
+```bash
+python "%SCRIPTS%\valuation_bands.py" --ticker ASML.AS --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+python "%SCRIPTS%\intrinsic_value.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+- **Overlay-only**: composite e weights intocados; `--update` acrescenta as keys aditivas `valuation_bands` e `intrinsic_value` ao analysis JSON (schema continua 2.2).
+- **P/E band**: EPS anual via Alpha Vantage `EARNINGS` (US, 1 chamada, **budget partilhado** `_fin_history/_av_budget.json`) ou yfinance `income_stmt` (~4-5 anos, não-US — banda **esperada shallow**; `depth_years` sempre presente). Cache `_valuation/{TICKER}.json`, TTL 80 dias. **P/S band**: revenue anual do cache `_fin_history/` ÷ shares actuais.
+- **Exit multiple = MEDIANA da banda** (não a média — anos de transição com EPS≈0 inflacionam a média para >50×; caso ADSK 2026-07-22), capped no máximo histórico (`justified_exit_pe`).
+- **Guards automáticos**: rescale de histórico em pence (classe EXPN.L, GBp ×0.01); `unit_check` por banda (`ok`/`skewed`/`mismatch`/`unknown` — `mismatch` ⇒ banda degrada para "not available", nunca renderiza lixo; `skewed` = provável currency skew statements-vs-quote, renderiza com warning); `sanity_flag` no forward target quando o IRR sai de [−15%, +30%]/ano.
+- **Flags a ler no output**: `forward_target.sanity_flag` (→ apresentar como *cenário*, não como target), `blend.label` (que modelos entraram e porquê os excluídos ficaram fora — ex. "blend of 4/5 — dcf excluded: cyclical distortion"), `mos_class` (`deep_value`/`fair`/`rich`/`not_computable`), `pe_band.unit_check`.
+- Falha total → `{"error": ...}` + exit 0; a §2.11 degrada para o bloco DCF v3.1. Screens NÃO correm esta phase.
+
 ### Phase 2.5 — Qualitative LLM pass (deep only)
 
 Runs in Claude's orchestration context. Skipped entirely for screens.
@@ -423,6 +441,11 @@ price_at_eval: 842.1
 currency: EUR
 fair_price: 920                # dcf_intrinsic se dcf_valid, senão consensus target_median (≥3 analistas); OMITIR quando verdict ∈ {fair, reject} ou sem âncora fiável
 fair_price_basis: dcf          # dcf | consensus ; presente sse fair_price presente
+fair_value_low: 830            # v4 Phase B: intrinsic_value.fair_value_range (min/blend/max dos modelos válidos); omitir os 3 se blend not computable
+fair_value_mid: 940            # o blend 5-model — a âncora do MoS
+fair_value_high: 1105
+mos_class: fair                # deep_value | fair | rich ; omitir se not_computable
+valuation_depth_years: 14      # pe_band.depth_years ; omitir se banda degradada (unit mismatch) ou ausente
 earnings_date_next: 2026-04-24
 manual_reviewed: false
 narrative_quality: good        # good | partial | degraded — source quality the narrative was written from (get_narrative.py / post-WebFetch)
@@ -629,14 +652,51 @@ schema_version: "2.2"
 
 *GO/NO-GO timing-only: requer technical_score ≥ 6.0, preço acima da SMA200, RSI ≤ 80 e MACD não profundamente baixista. Um NO-GO não invalida a tese fundamental — apenas sinaliza que o momento de entrada não está alinhado. Só corre para tickers com fundamental score ≥ 7.0 (ver Phase 3.5).*
 
-### 2.11 DCF + Intrinsic value
+### 2.11 Valuation depth + Intrinsic value (v4 Phase B)
+
+**a) Own-history bands** (do bloco `valuation_bands`; sempre com depth):
+
+| Banda | Current | Min | Mediana | Média | Max | Percentil | Depth |
+|---|---|---|---|---|---|---|---|
+| P/E | {pe_band.current} | {min} | {median} | {mean} | {max} | {percentile}% | {depth_years}y ({eps source}) |
+| P/S | {ps_band...} | | | | | | {depth_years}y |
+
+{unit_check=skewed → nota "⚠️ possível currency skew statements-vs-quote"; mismatch → a linha vira "not available (unit mismatch)"; depth_years<5 → "banda shallow — histórico limitado ({source})"}
+
+**b) Forward target FY+3 (TIKR-style)** — os três números lado a lado, para um total return grande não se disfarçar de bom retorno anual:
+
+| Target @ {horizon_label} | Est. total return | IRR anualizado |
+|---|---|---|
+| **{target_price} {currency}** | {est_total_return_pct}% | **{irr_annualized_pct}%/ano** |
+
+Growth anchor g = {g} (mediana de: {basis} — nunca uma taxa isolada), exit P/E = **mediana da banda** {exit_pe} (capped no máx histórico). CAGR ladder ao lado do consensus: 1y {1y} · 3y {3y} · 5y {5y} · 10y {10y|n/a} · 15y {15y|n/a}.
+{sanity_flag → callout ⚠️ com o texto verbatim — apresentar como CENÁRIO, não target}
+
+**c) Sensitivity** ({sensitivity.rows}): fair value a múltiplo conservador (p15) / médio / máximo histórico + **margin-bear row** (margem líquida mínima 5y × múltiplo médio).
+
+**d) Intrinsic value — 5 modelos** (do bloco `intrinsic_value`):
+
+| Modelo | Valor | Válido | Nota |
+|---|---|---|---|
+| 2-min EPS-growth | {value} | ✓/✗ | {reason se inválido} |
+| Lynch PEG | ... | | |
+| P/E forward target | ... | | |
+| DCF (v3.1) | {dcf_intrinsic} | {dcf_valid} | {dcf_reason} |
+| ROE residual income | ... | | Ke = {cost_of_equity} (rf {rf} + β {beta}·5%) |
+
+**Blend**: {blend.label} → **{blend.value} {currency}** · **MoS {mos_pct}% → {mos_class}** · Range **{low} / {mid} / {high}**.
+**EV vs Market cap**: {ev_vs_market_cap.note} (wedge {wedge_pct}%).
+
+**e) DCF (modelo v3.1)**:
 {If dcf_valid=true:}
 ![DCF](IMG/{date}_{ticker}_dcf.png)
 DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} → upside **{upside}%**.
 (Assumptions: discount rate 10%, terminal growth 2.5%, based on yfinance 5y FCF)
 
 {If dcf_valid=false:}
-⚠️ **DCF not meaningful** — {dcf_reason verbatim}. Do not use the computed intrinsic as a price target; valuation is driven by P/E, PEG and FCF-yield components instead. Normalised-FCF DCF could be done manually by estimating mid-cycle FCF, but that estimate is out of scope here.
+⚠️ **DCF not meaningful** — {dcf_reason verbatim}. Do not use the computed intrinsic as a price target; the blend already excludes it (see `blend.label`).
+
+{Se a Phase 2.3 falhou por completo: manter apenas o bloco (e) como na v3.1 + nota "valuation depth unavailable".}
 
 ### 2.12 Peer comparison
 | Métrica | {ticker} | Peer 1 | Peer 2 | Peer 3 | Peer 4 | Median | Ranking |

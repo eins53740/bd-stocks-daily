@@ -1017,6 +1017,7 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         "dividend_rate": info.get("dividendRate"),
         "payout_ratio": info.get("payoutRatio"),
         "beta": info.get("beta"),
+        "eps_ttm": info.get("trailingEps"),
         "book_value": info.get("bookValue"),
         "shares_out": info.get("sharesOutstanding"),
         "float_shares": info.get("floatShares"),
@@ -1079,9 +1080,10 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     except Exception as e:
         warnings_.append(f"revenue_cagr calc: {e}")
 
-    # 5y averages
+    # 5y averages (+ v4 Phase B additive: net_margin_5y_min, eps_cagr_5y)
     fund["roe_5y_avg"] = None
     fund["net_margin_5y_avg"] = None
+    fund["net_margin_5y_min"] = None
     try:
         if fs is not None and bs is not None and "Net Income" in fs.index:
             ni = fs.loc["Net Income"].dropna()
@@ -1096,6 +1098,21 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
                 margins = [float(ni.iloc[i]) / float(rev.iloc[i]) for i in range(min(len(ni), len(rev))) if rev.iloc[i] != 0]
                 if margins:
                     fund["net_margin_5y_avg"] = statistics.mean(margins)
+                    fund["net_margin_5y_min"] = min(margins)
+            # v4 Phase B: populate the long-standing eps_cagr_5y stub. EPS per
+            # year = NI ÷ per-year Share Issued (falls back to current shares).
+            # Same fetched statements — zero extra API calls. Columns are
+            # most-recent-first, so CAGR runs oldest (iloc[-1]) → newest (iloc[0]).
+            so_label = "Share Issued" if "Share Issued" in bs.index else ("Ordinary Shares Number" if "Ordinary Shares Number" in bs.index else None)
+            so = bs.loc[so_label].dropna() if so_label else None
+            if len(ni) >= 2:
+                def _eps_at(i):
+                    sh = float(so.iloc[i]) if (so is not None and i < len(so) and float(so.iloc[i]) > 0) else fund.get("shares_out")
+                    return float(ni.iloc[i]) / sh if sh else None
+                eps_new, eps_old = _eps_at(0), _eps_at(len(ni) - 1)
+                v = cagr(eps_old, eps_new, len(ni) - 1)
+                if v is not None and eps_new is not None and eps_new > 0:
+                    fund["eps_cagr_5y"] = v
     except Exception as e:
         warnings_.append(f"5y avgs: {e}")
 
