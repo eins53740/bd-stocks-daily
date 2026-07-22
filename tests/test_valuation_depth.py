@@ -157,6 +157,17 @@ def test_ladder_windows_at_7_years():
     assert l["depth_years"] == 7
 
 
+def test_ladder_10_15y_populate_at_depth():
+    """v4 Phase E: with the financial_history annual cap lifted, a 16-year annual
+    series feeds the previously-null 10/15-yr rungs (ladder math was always
+    year-aware — the depth was the only gate)."""
+    labels, revs = _rev_10pct(16)
+    l = vb.cagr_ladder_from_annual(labels, revs)
+    assert round(l["10y"], 3) == 0.1
+    assert round(l["15y"], 3) == 0.1
+    assert l["depth_years"] == 16
+
+
 def test_ladder_year_aware_gap_nulls_rung():
     labels = ["FY2024", "FY2022", "FY2023", "FY2021"]
     revs = [133.1, 110.0, None, 100.0]

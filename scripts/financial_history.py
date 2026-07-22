@@ -56,6 +56,13 @@ API_KEYS_PATH = BD_FINANCE / "config" / "api_keys.txt"
 TTL_DAYS = 80
 AV_DAILY_LIMIT = 20        # stay well under Alpha Vantage's free 25/day
 MAX_QUARTERS = 40
+# Annual-history depth. Lifted from 6 in v4 Phase E so the 10/15-yr revenue-CAGR
+# rungs (valuation_bands.cagr_ladder_from_annual) can populate whenever a source
+# reaches back that far. Free sources rarely do (yfinance ~4y, Alpha Vantage ~5y),
+# so on most names the deep rungs stay null and are labelled by depth_years —
+# the price/total-return CAGR ladder (alpha_beta.py) is the real long-horizon
+# signal. No forced refetch: deeper annual materialises on the next TTL refetch.
+MAX_ANNUAL_YEARS = 20
 AV_BASE = "https://www.alphavantage.co/query"
 UA = "Mozilla/5.0 (compatible; bd-stocks-daily/1.0)"
 
@@ -450,7 +457,7 @@ def _av_annual_records(annual_income: list, acf_by_date: dict) -> list:
         records.append({"date": d, "revenue": rev, "ebitda": ebitda, "fcf": fcf,
                         "net_income": _av_num(r.get("netIncome"))})
     records.sort(key=lambda r: r["date"])
-    return records[-6:]
+    return records[-MAX_ANNUAL_YEARS:]
 
 
 def fetch_alphavantage(ticker: str, key: str) -> tuple[dict | None, int]:
@@ -604,7 +611,7 @@ def fetch_yfinance(ticker: str) -> tuple[dict | None, list]:
 
     af = _safe_df(lambda: tk.financials)
     acf = _safe_df(lambda: tk.cashflow)
-    annual_records = _yf_records(af, acf)[-6:]
+    annual_records = _yf_records(af, acf)[-MAX_ANNUAL_YEARS:]
 
     fy_end_month = 12
     if af is not None and len(af.columns):

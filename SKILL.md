@@ -6,7 +6,7 @@ argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional 
 
 # Daily Stock Evaluation (v4 wave-1, Phases A+B+C+D — scoring schema 2.2)
 
-Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 17 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.6 / 3.5 / 5.5 incluídas).
+Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 19 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.6 / 3.5 / 5.5 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
@@ -18,7 +18,9 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 
 **v4 wave-1 · Phase C (2026-07-22)** acrescenta ao deep o **red-flag scanner + Beneish + 3-statement review + SWOT** (spec rev 3 §8, overlay-only): bloco `red_flags` (`red_flags.py`, Phase 2.4) com veto bearish por statement (Income/Balance/Cash-Flow), **Beneish M-score** (8 índices, flag se M > −2.22; "not computable" em non-US sem line items), earnings-quality CFO-vs-NI e dois **pills positivos** (net payout yield > 4%, ROCE ≥ 20%); **três sub-scores 0-10 determinísticos** por statement (hit-rate dos flags computáveis, pass=1/warn=0.5/bad=0) que **nunca entram no composite**; prompt novo `06_swot.md` (Phase 2.5, quadrante Threats/Risks com dupla profundidade). `analyze_ticker.py` passa a persistir um snapshot aditivo `statements_raw` (2 anos) para o scanner ser **puro consumidor do JSON — zero re-fetch, zero chamadas API novas**. Secções de report: cartão red-flag traffic-light + três sub-secções de statement + cartão SWOT. Composite v2.2 intocado; keys aditivas (`statements_raw`, `red_flags`).
 
-**v4 wave-1 · Phase D (2026-07-22)** expande a secção macro (spec rev 3 §9, overlay-only, cache `_macro/`) para o "§8" que o Bruno esboçou — duas gauges **puras yfinance** (`macro_breadth.py --update`, Phase 2.6, keys aditivas `breadth` + `sectors` no `_macro/<date>.json`, nunca toca `metrics`): **breadth RSP/SPY** (equal-weight vs cap-weight, percentil na própria história multi-anos + seta de tendência; scan-2 p07) e **tendências sectoriais** (11 SPDR ETFs + linha SPY: tendência 20d-vs-60d MA + direcção de volume + check "volume confirma?"; idea #10) — mais três gauges **sourced via WebFetch** no prompt `macro_daily.md`: **valuation vs história** (P/E/P/S/CAPE/P/B vs mediana/±1SD), **Buffett Indicator + regime de liquidez M2** (FRED `M2SL`), e **forward-profit horizons** ao nível do índice (3m/6m/1Y/2Y/3Y). Cada gauge degrada de forma independente ("not available" — uma falha nunca apaga a secção). O report §4 embeda um resumo curto das novas gauges; detalhe completo no `_macro/<date>.md`. Composite v2.2 intocado. Fases seguintes da wave 1 (E G F) por construir.
+**v4 wave-1 · Phase D (2026-07-22)** expande a secção macro (spec rev 3 §9, overlay-only, cache `_macro/`) para o "§8" que o Bruno esboçou — duas gauges **puras yfinance** (`macro_breadth.py --update`, Phase 2.6, keys aditivas `breadth` + `sectors` no `_macro/<date>.json`, nunca toca `metrics`): **breadth RSP/SPY** (equal-weight vs cap-weight, percentil na própria história multi-anos + seta de tendência; scan-2 p07) e **tendências sectoriais** (11 SPDR ETFs + linha SPY: tendência 20d-vs-60d MA + direcção de volume + check "volume confirma?"; idea #10) — mais três gauges **sourced via WebFetch** no prompt `macro_daily.md`: **valuation vs história** (P/E/P/S/CAPE/P/B vs mediana/±1SD), **Buffett Indicator + regime de liquidez M2** (FRED `M2SL`), e **forward-profit horizons** ao nível do índice (3m/6m/1Y/2Y/3Y). Cada gauge degrada de forma independente ("not available" — uma falha nunca apaga a secção). O report §4 embeda um resumo curto das novas gauges; detalhe completo no `_macro/<date>.md`. Composite v2.2 intocado.
+
+**v4 wave-1 · Phase E (2026-07-22)** acrescenta ao deep o **return profile** (spec rev 3 §10, overlay-only): bloco `alpha_beta` (`alpha_beta.py`, Phase 2.56, corre sob Python312 ambiente) com **α/β** 3y vs benchmark regional (β=cov/var, α=Jensen anualizado), **linha CAPM** (realizado vs esperado, rf reutilizado de `intrinsic_value.capm.rf`), **price-CAGR ladder 1/3/5/10/15y** (closes mensais ajustados — o sinal de longo prazo, já que o CAGR de revenue raramente chega a 10/15y), **Lynch prior** (categoria → banda retorno/drawdown) e **portfolio fit** (α/β da carteira vs URTH, série ponderada FX→EUR das holdings equity, cache diário `_portfolio_riskprofile.json`) — `β 3y`/`α 3y` injectados no `top_strip` (metrics strip); secção §2.20a no report. Mais: a **watch-list price-triggered** (`watchlist.py`, Phase 2.57) — nomes de qualidade (composite ≥7) travados só pelo preço (`mos_class == "rich"`, não-held) entram no `_watchlist.csv` (target = fair-low), e o **email diário** ganha um bloco vermelho "⭐ Watch-list triggered" + tag `[WATCHLIST: n]` no assunto quando `live ≤ target`. E o cap anual de `financial_history.py` subiu de 6→20 anos (enablement dos rungs de CAGR de revenue quando a fonte for funda o suficiente). Composite v2.2 intocado. Fases seguintes da wave 1 (G F) por construir.
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
@@ -367,6 +369,33 @@ python "%SCRIPTS%\exit_plan.py" --ticker ASML.AS --analysis-json "%OUT_DIR%\_tmp
 - **`atr_context`**: lê `_technical/{TICKER}.json` se existir; **sempre `enabled: false`** — um compounder aguenta drawdowns normais de 30-40%; trailing stops pertencem ao growth skill. Sem ficheiro ⇒ `available: false`.
 - Falha total → `{"error": ...}` + exit 0; a §2.12 degrada para nota "exit plan unavailable". Screens NÃO correm esta phase.
 
+### Phase 2.56 — Return profile: α/β + CAPM + Lynch prior + portfolio fit (deep only, v4 Phase E)
+
+Corre DEPOIS da Phase 2.55 (lê `intrinsic_value.capm.rf`, já no JSON) e antes da Phase 2.6. **Corre sob o Python312 ambiente** (`C:\Program Files\Python312\python.exe`, tem yfinance+pandas) — o venv `uv` do skill não os tem:
+
+```bash
+"C:\Program Files\Python312\python.exe" "%SCRIPTS%\alpha_beta.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+- **Overlay-only**: `--update` acrescenta a key aditiva `alpha_beta` e injecta `beta_3y` + `alpha_ann_pct` no bloco `top_strip` (a metrics strip renderiza de uma só fonte). Composite/verdict **intocados**; schema continua 2.2.
+- **α/β** vs benchmark regional (mapa `BENCH_BY_SUFFIX` de `technical_score.py`, match por sufixo `.XX`; US → `^GSPC`), 3 anos de retornos mensais: **β = cov/var**, **α = intercepto anualizado (Jensen)** sobre retornos em excesso. `n < 24` meses ⇒ "not computable" (degrada, não aborta).
+- **Linha CAPM**: `realized_return_ann_pct` vs `capm_expected_return_ann_pct` (= rf + β·(retorno do benchmark − rf)); `rf` reutilizado de `intrinsic_value.capm.rf` (fallback constante 4% com `rf_source` etiquetado).
+- **`price_cagr_ladder`** 1/3/5/10/15y a partir de 15 anos de closes mensais ajustados (proxy total-return). É o sinal de longo prazo real — o CAGR de **revenue** raramente chega a 10/15y com dados grátis (rungs nulos, etiquetados por `depth_years`).
+- **`lynch_prior`**: `lynch_category` → banda de retorno/drawdown esperados (prior de report, etiquetado — **nunca entra no score**).
+- **`portfolio_comparison`** (best-effort, cache diário `_portfolio_riskprofile.json`): série de retornos mensais ponderada por valor de mercado das holdings **equity** (crypto excluído), convertida para EUR close-a-close (histórico FX mensal `EUR{ccy}=X`), regredida vs o benchmark mundial **URTH**; o ticker é regredido vs o MESMO URTH (EUR) para a linha apples-to-apples. `verdict_beta`/`verdict_alpha` = `raises`/`dilutes`/`neutral` (ticker vs portfolio; para β = mais/menos risco, para α = accretive/dilutive ao retorno). < 3 holdings usáveis ou FX em falha ⇒ `available: false` (nunca bloqueia a α/β do ticker).
+- Falha total → `{"error": ...}` + exit 0; a §2.20a degrada para nota. Screens NÃO correm esta phase.
+
+### Phase 2.57 — Watch-list maintenance (deep only, v4 Phase E)
+
+Corre DEPOIS da Phase 2.56 (precisa de `scores.composite`, `verdict`, `intrinsic_value.mos_class` + `fair_value_range.low`). Sem rede:
+
+```bash
+python "%SCRIPTS%\watchlist.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+- **Regra única** (mantém na lista **sse e só se** `scores.composite ≥ 7` **E** `intrinsic_value.mos_class == "rich"` **E** não-held **E** há `fair_value_range.low`): um nome de qualidade travado **só** pelo preço. Qualquer outro caso ⇒ garante ausência — o que subsume as três remoções da spec: comprado (agora held, via `exit_plan.find_holding`/`load_holdings` + alias SHEL.L→SHELL.AS), tese quebrada / qualidade perdida (score < 7), e graduação para barato (`mos_class` deixa de ser "rich").
+- Escreve `_watchlist.csv` (colunas `ticker,target,currency,added_date,fair_low,mos_class,score,fail_reason,thesis`; `target` = fair-low; `added_date` preservada no update). Overlay-only — **não escreve no analysis JSON**. Falha → `{"error": ...}` + exit 0.
+
 ### Phase 2.6 — Macro snapshot (once per run, v3.1)
 
 Corre UMA vez por run (não por ticker), antes da Phase 5:
@@ -496,6 +525,8 @@ red_flags_beneish: -2.8        # red_flags.beneish.m_score ; "n/a" quando not co
 red_flags_income_score: 9.3    # red_flags.income.subscore_0_10 (0-10, overlay — NÃO entra no composite); omit se null
 red_flags_balance_score: 8.6   # red_flags.balance.subscore_0_10
 red_flags_cashflow_score: 10.0 # red_flags.cashflow.subscore_0_10
+beta_3y: 0.89                  # v4 Phase E: alpha_beta.beta (3y monthly vs regional benchmark); omit se not computable (n<24m) ou screen
+alpha_ann_pct: 4.2             # alpha_beta.alpha_ann_pct (Jensen α anualizado, overlay — NÃO entra no composite); omit se not computable ou screen
 earnings_date_next: 2026-04-24
 manual_reviewed: false
 narrative_quality: good        # good | partial | degraded — source quality the narrative was written from (get_narrative.py / post-WebFetch)
@@ -553,13 +584,13 @@ schema_version: "2.2"
 
 ### 📊 Metrics strip
 
-**P/E {pe_ttm}x · Forward P/E {forward_pe}x**
+**P/E {pe_ttm}x · Forward P/E {forward_pe}x · β 3y {beta_3y} · α 3y ann. {alpha_ann_pct}%**
 
 | Rev CAGR 5y | FCF margin | FCF yield | ROE | ROIC | Gross margin | Net debt/EBITDA | Net payout | Price 1y | Price {5y ou "since {date}"} |
 |---|---|---|---|---|---|---|---|---|---|
 | {x}% | {x}% | {x}% | {x}% | {x}% | {x}% | {x}x | {x}% | {x}% | {x}% |
 
-(Fonte: bloco `top_strip` do analysis JSON — nunca recalcular à mão. Price returns são dividend-adjusted; quando `price_return_5y_span != "5y"`, o header da última coluna mostra "since {date}".)
+(Fonte: bloco `top_strip` do analysis JSON — nunca recalcular à mão. Price returns são dividend-adjusted; quando `price_return_5y_span != "5y"`, o header da última coluna mostra "since {date}". `β 3y`/`α 3y` (v4 Phase E, bloco `alpha_beta` → injectado no `top_strip`) só existem em deep-dives — omitir de screens; overlay, não afectam o composite.)
 
 ![EBITDA & FCF](IMG/{date}_{ticker}_ebitda_fcf.png)
 *EBITDA & FCF — {n} trimestres ({source}); forecast 4Q: {forecast basis} — derived estimate, not guidance. Omitir a imagem + caption se o chart foi skipped.*
@@ -893,6 +924,37 @@ Template da secção:
 
 **Mercado não coberto** (sufixo fora da tabela — .AS/.PA/.DE/.L/etc.): a secção renderiza apenas `⚠️ {exchange} não coberto em brokers.yaml — sem comparação de brokers.` e `broker_reco` é omitido do frontmatter.
 
+### 2.20a Return profile — α/β · CAPM · Lynch prior · portfolio fit  *(v4 Phase E · overlay — não afecta o composite)*
+
+Renderiza do bloco `alpha_beta` (Phase 2.56). Números ground-truth (yfinance); o LLM só escreve as 1-2 frases de leitura. **Sufixo de secção (`a`) → zero renumeração**; os parsers dependem de labels/frontmatter, não do número. Se `alpha_beta` ausente ou `"error"` ⇒ nota "return profile unavailable" e saltar a secção.
+
+```md
+**α/β (3 anos, mensal, vs {benchmark})** — β {beta} · α anualizado {alpha_ann_pct}% · R² {r2} · n={n_months}m
+{quando not computable (n<24m): "β/α não calculáveis — histórico insuficiente ({n_months}m)"}
+
+| Métrica | Valor |
+|---|---|
+| Retorno realizado (anualizado) | {realized_return_ann_pct}% |
+| CAPM esperado (rf + β·(mkt−rf)) | {capm_expected_return_ann_pct}% |
+| rf ({rf_source}) | {rf_pct}% |
+
+*Leitura: α positivo = bateu o CAPM; a diferença realizado − esperado ≈ α.*
+
+**CAGR de preço (total-return proxy, closes mensais ajustados · profundidade {depth_years}a)**
+
+| 1y | 3y | 5y | 10y | 15y |
+|---|---|---|---|---|
+| {x}% | {x}% | {x}% | {x ou "n/a"}% | {x ou "n/a"}% |
+
+*(rungs `n/a` quando o histórico não chega — etiquetado por `depth_years`. O CAGR de revenue 10/15y raramente existe em dados grátis; este é o sinal de longo prazo.)*
+
+**Lynch prior ({lynch_prior.category})** — retorno esperado {lynch_prior.expected_return_band} · drawdown típico {lynch_prior.drawdown_band}. {lynch_prior.note}
+*(Prior de categoria — orientação, nunca entra no score.)*
+
+**Portfolio fit (vs {portfolio_comparison.benchmark}, EUR)** — β do ticker {ticker_vs_world.beta} vs portfolio {portfolio.beta} ({verdict_beta}: {"aumenta"|"reduz"} o β da carteira) · α do ticker {ticker_vs_world.alpha_ann_pct}% vs portfolio {portfolio.alpha_ann_pct}% ({verdict_alpha}: {"accretive"|"dilutive"} ao α da carteira). Base: {portfolio.holdings_used} holdings equity ponderadas por valor de mercado (crypto excluído).
+{quando portfolio_comparison.available == false: "Portfolio fit não disponível — {reason}."}
+```
+
 ## 3. Links para ir mais fundo
 - 📘 [Annual report {year}]({annual_url}) — publicado {annual_date}
 - 📄 [Q{q} {year} report]({quarterly_url}) — publicado {quarterly_date}
@@ -985,6 +1047,7 @@ python "%SCRIPTS%\update_shortlist.py"
 - `update_log.py` v2 appends entries to `_log.csv`. Columns include `management_score, management_flag, bear_case_trigger`. First run against a v1 CSV migrates once in-place (non-destructive: old rows gain blank v2 fields).
 - `update_shortlist.py` relê `_log.csv` inteiro, filtra score≥7.5 e NOT expired (90 dias), regenera `_shortlist.md`. Move entradas expiradas para `_shortlist_expired.md`.
 - `update_shortlist.py` v2.1 also emits `_catalyst_calendar.md` alongside `_shortlist.md` — a rolling 30/60/90-day events table for every active shortlist ticker (earnings dates from latest `_log.csv` `earnings_date_next`, ex-div dates from yfinance). The earnings-preview cron (`bd-stocks-earnings-preview` skill) reads this file to auto-trigger 2 business days before any shortlist earnings event.
+- `watchlist.py` (v4 Phase E, Phase 2.57) mantém `_watchlist.csv` — nomes composite≥7 travados só pelo preço (`mos_class == "rich"`, não-held); target = `intrinsic_value.fair_value_range.low`. Regra idempotente (upsert preserva `added_date`; remove em compra/perda-de-qualidade/graduação). Lido por `send_email.py` para o bloco triggered. `alpha_beta.py` (Phase 2.56) mantém o cache diário `_portfolio_riskprofile.json` (α/β da carteira vs URTH, EUR) — recomputado 1×/dia, reutilizado por todos os deeps.
 
 JSON entry schema (v2):
 
@@ -1010,9 +1073,11 @@ python "%SCRIPTS%\send_email.py" --date 2026-04-30
 
 `send_email.py` now does three things in one call:
 
-1. Regenerates `_dashboard.html` via `build_dashboard.py` so the snapshot reflects today's reports.
+1. Regenerates `_dashboard.html` via `build_dashboard.py` so the snapshot reflects today's reports (this also refreshes `_live_prices.json`).
 2. Builds a multipart/mixed email: text+HTML body (cards + inline full reports) **plus** the dashboard as an `.html` attachment (named `StocksDaily_dashboard_{date}.html`).
 3. Ships via SMTP with the existing anti-spam headers.
+
+**Watch-list block (v4 Phase E):** near the top of the body (após o disclaimer, antes do adviser-take), `send_email.py` lê `_watchlist.csv` (via `watchlist.load_watchlist`) e, para cada nome, compara o preço **live** com o `target` (fair-low). Preço live: `_live_prices.json` primeiro, depois fallback yfinance para os tickers em falta (a watch-list raramente coincide com os tickers técnicos do dashboard, por isso o fallback é o caminho comum — **requer Python ambiente com yfinance**, como o bat já usa). Nomes com `live ≤ target` ⇒ bloco vermelho **"⭐ Watch-list triggered"** + tag `[WATCHLIST: n]` no assunto; os restantes vão para uma tabela `<details>` "status" com distância-ao-target %. Tudo guarded — uma falha degrada para status-only, nunca aborta o email. O corpo mantém-se markdown→HTML inline (o report HTML estilizado **nunca** é inlined).
 
 If SMTP fails, the script logs and exits 0 (non-fatal) — the report itself is already on disk in Obsidian.
 

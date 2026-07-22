@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import json
 import mimetypes
 import re
 import subprocess
@@ -55,6 +56,16 @@ DASHBOARD = OUT_DIR / "_dashboard.html"
 BUILD_DASHBOARD = Path(r"C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\build_dashboard.py")
 
 RECIPIENTS = ["eins.ist@gmail.com"]
+
+# v4 Phase E — price-triggered watch-list, wired into this digest.
+WATCHLIST = OUT_DIR / "_watchlist.csv"
+LIVE_PRICES = OUT_DIR / "_live_prices.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # scripts dir (watchlist.py)
+try:
+    from watchlist import distance_to_target_pct, load_watchlist  # noqa: E402
+except Exception as _wl_exc:  # never let a watch-list import break the digest
+    load_watchlist = None
+    distance_to_target_pct = None
 
 
 def regenerate_dashboard() -> None:
@@ -318,6 +329,96 @@ def build_growth_section_html(target_date: str) -> str:
         return ""
 
 
+def fetch_watchlist_live_prices(tickers: list[str]) -> dict:
+    """Live price per watch-list ticker. Reads the fresh _live_prices.json first
+    (written by regenerate_dashboard → live_prices.py), then best-effort yfinance
+    for any ticker missing there (watch-list names usually aren't dashboard
+    technical-read tickers, so this fallback is the common path). Degrades to a
+    partial/empty map — never raises; requires ambient Python for the yfinance leg."""
+    prices: dict[str, float] = {}
+    try:
+        data = json.loads(LIVE_PRICES.read_text(encoding="utf-8"))
+        for t, p in (data.get("prices") or {}).items():
+            if isinstance(p, (int, float)):
+                prices[t] = float(p)
+    except Exception:
+        pass
+    missing = [t for t in tickers if t and t not in prices]
+    if missing:
+        try:
+            import yfinance as yf
+            from live_prices import fetch_price
+            for t in missing:
+                px = fetch_price(yf.Ticker(t))
+                if px is not None:
+                    prices[t] = px
+        except Exception as exc:
+            log(f"watch-list live-price fetch SKIP (non-fatal): {type(exc).__name__}: {exc}")
+    return prices
+
+
+def build_watchlist_html(rows: list[dict], live_prices: dict) -> tuple[str, int]:
+    """(html, n_triggered). A red/bold '⭐ Watch-list triggered' callout for names
+    at/below their fair-low target, plus a quiet status table (distance-to-target).
+    Inline styles only (mail clients strip <style>/SVG). ("", 0) when the list is
+    empty. Never raises."""
+    if not rows:
+        return "", 0
+    triggered, status = [], []
+    for r in rows:
+        tkr = (r.get("ticker") or "").strip()
+        try:
+            target = float(r.get("target"))
+        except (TypeError, ValueError):
+            continue
+        live = live_prices.get(tkr)
+        dist = distance_to_target_pct(live, target) if distance_to_target_pct else None
+        row = {"ticker": tkr, "target": target, "live": live, "dist": dist,
+               "ccy": r.get("currency") or "", "thesis": r.get("thesis") or ""}
+        (triggered if (live is not None and live <= target) else status).append(row)
+
+    parts = []
+    if triggered:
+        items = "".join(
+            f"<li style='margin:4px 0;'><b>{html.escape(t['ticker'])}</b> — "
+            f"live {t['live']:,.2f} {html.escape(t['ccy'])} ≤ target {t['target']:,.2f}"
+            f"{(' (%+.1f%%)' % t['dist']) if t['dist'] is not None else ''} · "
+            f"<span style='color:#444;'>{html.escape(t['thesis'])}</span></li>"
+            for t in triggered
+        )
+        parts.append(
+            f"<div style='border:2px solid #d62728;border-radius:8px;padding:12px 16px;"
+            f"margin:18px 0;background:#fff5f5;'>"
+            f"<div style='color:#d62728;font-weight:bold;font-size:15px;margin-bottom:6px;'>"
+            f"⭐ Watch-list triggered ({len(triggered)}) — quality name(s) at buy target</div>"
+            f"<ul style='margin:0;padding-left:20px;font-size:13px;'>{items}</ul></div>"
+        )
+    if status:
+        body = "".join(
+            f"<tr>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;'><b>{html.escape(s['ticker'])}</b></td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;'>{s['target']:,.2f} {html.escape(s['ccy'])}</td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;'>"
+            f"{('%.2f' % s['live']) if s['live'] is not None else 'n/a'}</td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;color:#888;'>"
+            f"{('%+.1f%%' % s['dist']) if s['dist'] is not None else '—'}</td>"
+            f"</tr>"
+            for s in status
+        )
+        parts.append(
+            f"<details style='margin:10px 0;'><summary style='cursor:pointer;color:#666;font-size:13px;'>"
+            f"Watch-list status ({len(status)} not yet triggered)</summary>"
+            f"<table style='border-collapse:collapse;font-size:12px;margin-top:6px;'>"
+            f"<thead><tr style='background:#f6f6f6;'>"
+            f"<th style='padding:6px 10px;text-align:left;'>Ticker</th>"
+            f"<th style='padding:6px 10px;text-align:left;'>Target (fair-low)</th>"
+            f"<th style='padding:6px 10px;text-align:left;'>Live</th>"
+            f"<th style='padding:6px 10px;text-align:left;'>Distance</th>"
+            f"</tr></thead><tbody>{body}</tbody></table></details>"
+        )
+    return "".join(parts), len(triggered)
+
+
 _MD_INLINE_RE = re.compile(r"\*+|__|`")  # emphasis markers; literal * is not used in thesis text
 
 
@@ -546,6 +647,19 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         subject_parts.append(f"{r['ticker']} {score:.1f} [{tag}]")
     subject = f"StocksDaily {target_date} - " + " | ".join(subject_parts)
 
+    # v4 Phase E — price-triggered watch-list block + [WATCHLIST: n] subject tag.
+    # (Distinct token from verdict_style's per-ticker WATCH tag.) Fully guarded.
+    watchlist_html, n_watch = "", 0
+    if load_watchlist is not None:
+        try:
+            wl_rows = load_watchlist(OUT_DIR)
+            wl_live = fetch_watchlist_live_prices([r.get("ticker", "") for r in wl_rows])
+            watchlist_html, n_watch = build_watchlist_html(wl_rows, wl_live)
+        except Exception as exc:
+            log(f"watch-list block SKIP (non-fatal): {type(exc).__name__}: {exc}")
+    if n_watch:
+        subject += f" [WATCHLIST: {n_watch}]"
+
     # HTML body — dashboard inline (top), summary cards, then full markdown reports.
     # We embed a static no-JS render of the dashboard because mail clients
     # (Gmail/Yahoo) strip <script> tags from inline HTML. The interactive copy
@@ -577,6 +691,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         <p style="color: #666; font-size: 13px;">
           Auto-generated. Not investment advice. Verify all figures before acting.
         </p>
+        {watchlist_html}
         {adviser_take_html}
         {dashboard_inline_html}
         <h2 style="margin-top: 25px;">Today's reports — summary</h2>
@@ -603,10 +718,12 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
             f"{_strip_frontmatter(md) if md else '[report file not found]'}\n"
         )
     reports_text = "".join(reports_text_parts)
+    watch_text = f"⭐ WATCH-LIST: {n_watch} name(s) at buy target — see HTML block.\n\n" if n_watch else ""
     text_body = (
         f"StocksDaily — {target_date}\n"
         f"{'=' * 40}\n"
         f"Auto-generated. Not investment advice. Verify all figures before acting.\n\n"
+        f"{watch_text}"
         f"SUMMARY\n-------\n{cards_text}\n\n"
         f"FULL REPORTS ({len(rows)})\n"
         f"{reports_text}\n"

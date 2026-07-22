@@ -16,6 +16,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from financial_history import (  # noqa: E402
+    MAX_ANNUAL_YEARS,
     _annual_series,
     _av_annual_records,
     av_budget_allows,
@@ -329,6 +330,32 @@ def test_cache_has_net_income_key_presence_not_values():
     assert cache_has_net_income({"annual": {"labels": [], "revenue": []}}) is False
     assert cache_has_net_income({}) is False
     assert cache_has_net_income(None) is False
+
+
+def test_av_annual_records_cap_lifted_beyond_six_years():
+    """v4 Phase E: the annual cap was lifted from 6 to MAX_ANNUAL_YEARS so the
+    10/15-yr revenue-CAGR rungs can populate whenever a source is deep enough.
+    Free sources rarely are (fixture proves the code path, not live data)."""
+    assert MAX_ANNUAL_YEARS >= 15
+    annual_income = [
+        {"fiscalDateEnding": f"{year}-12-31", "totalRevenue": str(100 + year),
+         "netIncome": "10"}
+        for year in range(2009, 2025)  # 16 fiscal years
+    ]
+    records = _av_annual_records(annual_income, {})
+    assert len(records) == 16  # all 16 kept — no longer clipped to 6
+    assert records[0]["date"] == "2009-12-31"
+    assert records[-1]["date"] == "2024-12-31"
+
+
+def test_av_annual_records_still_capped_at_max_annual_years():
+    annual_income = [
+        {"fiscalDateEnding": f"{year}-12-31", "totalRevenue": "100", "netIncome": "10"}
+        for year in range(2000, 2030)  # 30 fiscal years — beyond the cap
+    ]
+    records = _av_annual_records(annual_income, {})
+    assert len(records) == MAX_ANNUAL_YEARS
+    assert records[-1]["date"] == "2029-12-31"  # newest retained
 
 
 def test_pre_phase_a_cache_is_treated_as_stale():
