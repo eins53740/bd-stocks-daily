@@ -808,6 +808,97 @@ def compute_shareholder_structure(tk, info: dict) -> dict:
     return out
 
 
+# Row-label fallbacks for the raw 2-year statement snapshot persisted for the
+# v4 Phase-C red-flag scanner / Beneish M-score. canonical_key -> yfinance row
+# labels to try (first hit wins). Missing rows serialize as null, never
+# fabricated; yfinance normally exposes 3-4 annual columns and we keep the two
+# most recent (t, t-1) — exactly what Beneish's indices and the trend flags need.
+_STMT_ROWS = {
+    "income": {
+        "revenue": ("Total Revenue", "Operating Revenue", "Revenue"),
+        "cost_of_revenue": ("Cost Of Revenue", "Reconciled Cost Of Revenue", "Cost Of Goods Sold"),
+        "gross_profit": ("Gross Profit",),
+        "operating_income": ("Operating Income", "EBIT", "Total Operating Income As Reported"),
+        "sga": ("Selling General And Administration", "Selling General And Administrative Expense", "Selling General Administrative"),
+        "depreciation": ("Reconciled Depreciation", "Depreciation Amortization Depletion Income Statement", "Depreciation And Amortization In Income Statement"),
+        "interest_expense": ("Interest Expense", "Interest Expense Non Operating"),
+        "pretax_income": ("Pretax Income", "Pretax Income Loss"),
+        "net_income": ("Net Income", "Net Income Common Stockholders", "Net Income Continuous Operations"),
+        "unusual_items": ("Total Unusual Items", "Special Income Charges", "Total Unusual Items Excluding Goodwill"),
+    },
+    "balance": {
+        "total_assets": ("Total Assets",),
+        "total_liabilities": ("Total Liabilities Net Minority Interest", "Total Liab"),
+        "current_assets": ("Current Assets", "Total Current Assets"),
+        "current_liabilities": ("Current Liabilities", "Total Current Liabilities"),
+        "receivables": ("Accounts Receivable", "Net Receivables", "Receivables", "Gross Accounts Receivable"),
+        "inventory": ("Inventory",),
+        "ppe_net": ("Net PPE", "Net Property Plant Equipment", "Property Plant Equipment Net"),
+        "ppe_gross": ("Gross PPE", "Gross Property Plant Equipment", "Properties"),
+        "long_term_debt": ("Long Term Debt", "Long Term Debt And Capital Lease Obligation"),
+        "total_debt": ("Total Debt",),
+        "stockholders_equity": ("Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity"),
+        "retained_earnings": ("Retained Earnings",),
+        "shares": ("Share Issued", "Ordinary Shares Number", "Common Stock"),
+    },
+    "cashflow": {
+        "operating_cash_flow": ("Operating Cash Flow", "Total Cash From Operating Activities", "Cash Flow From Continuing Operating Activities"),
+        "capex": ("Capital Expenditure", "Capital Expenditures", "Purchase Of PPE"),
+        "free_cash_flow": ("Free Cash Flow",),
+        "dividends_paid": ("Cash Dividends Paid", "Common Stock Dividend Paid", "Cash Dividend Paid"),
+        "depreciation": ("Depreciation And Amortization", "Depreciation Amortization Depletion", "Depreciation"),
+    },
+}
+
+
+def _stmt_two_years(frame, labels) -> list:
+    """[value_t, value_t-1] for the first matching row label, else [None, None].
+    Columns the frame doesn't provide degrade to None (never fabricated)."""
+    vals = [None, None]
+    if frame is None or getattr(frame, "empty", True):
+        return vals
+    for lab in labels:
+        if lab in frame.index:
+            row = frame.loc[lab]
+            for i in range(2):
+                try:
+                    v = row.iloc[i]
+                    vals[i] = float(v) if (v is not None and v == v) else None  # v==v filters NaN
+                except (IndexError, TypeError, ValueError):
+                    vals[i] = None
+            return vals
+    return vals
+
+
+def _fiscal_dates(frame) -> list:
+    out = [None, None]
+    if frame is None or getattr(frame, "empty", True):
+        return out
+    for i in range(min(2, len(frame.columns))):
+        try:
+            out[i] = str(frame.columns[i])[:10]
+        except Exception:
+            out[i] = None
+    return out
+
+
+def extract_statement_rows(fs, bs, cf) -> dict:
+    """Compact 2-year snapshot of raw statement line items so the Phase-C
+    red-flag scanner (red_flags.py) runs as a pure JSON consumer — no re-fetch,
+    no extra API call. Overlay-only: additive JSON, no scalar/score/gate change.
+    Missing rows -> null (expected often on non-US names; Beneish then degrades
+    to 'not computable'). Values are [latest, prior] per canonical key."""
+    frames = {"income": fs, "balance": bs, "cashflow": cf}
+    out = {}
+    for stmt, cols in _STMT_ROWS.items():
+        frame = frames[stmt]
+        block = {"fiscal_dates": _fiscal_dates(frame)}
+        for key, labels in cols.items():
+            block[key] = _stmt_two_years(frame, labels)
+        out[stmt] = block
+    return out
+
+
 def compute_capital_returns(fund: dict, cf) -> dict:
     """§2.5 — Capital returns & shareholder yield. Net Payout Yield is the Borja signature metric."""
     out = {
@@ -1378,6 +1469,9 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     shareholder_structure = compute_shareholder_structure(tk, info)
     capital_returns = compute_capital_returns(fund, cf)
     consensus = compute_consensus(tk)
+    # v4 Phase C: persist a 2-year raw statement snapshot for red_flags.py
+    # (pure JSON consumer, no re-fetch). Additive, overlay-only.
+    statements_raw = extract_statement_rows(fs, bs, cf)
 
     # --- Phase 6: local -> EUR conversion (local currency + EUR everywhere) ---
     eur_rate = fetch_eur_rate(currency)
@@ -1456,6 +1550,7 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         "management_flag": False,   # set true by finalize_score.py if mgmt<7 and mode==deep
         "shareholder_structure": shareholder_structure,
         "capital_returns": capital_returns,
+        "statements_raw": statements_raw,
         "consensus": consensus,
         "schema_version": "2.2",
         "weights": WEIGHTS_V2_DEEP,

@@ -4,9 +4,9 @@ description: Daily stock evaluation — picks 5 tickers (1 deep + 4 screens, 2 o
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v4 wave-1, Phases A+B — scoring schema 2.2)
+# Daily Stock Evaluation (v4 wave-1, Phases A+B+C — scoring schema 2.2)
 
-Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 16 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.5 / 2.55 / 2.6 / 3.5 / 5.5 incluídas).
+Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 17 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.6 / 3.5 / 5.5 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
@@ -14,7 +14,9 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 
 **v4 wave-1 · Phase B (2026-07-22)** acrescenta ao deep a **valuation depth** (spec rev 3 §7, overlay-only): bandas P/E & P/S da própria história (`valuation_bands.py`, Phase 2.3), forward target FY+3 TIKR-style (target @ data + est. return + IRR), sensitivity table com margin-bear row, e o bloco de **intrinsic value 5-modelos com blend + margin-of-safety** (`intrinsic_value.py`). Composite v2.2 intocado; keys aditivas no analysis JSON (`valuation_bands`, `intrinsic_value`).
 
-**v4 wave-1 · Phase A (2026-07-22)** acrescenta ao deep o **exit & thesis plan** (spec rev 3 §6, overlay-only): bloco `exit_plan` (`exit_plan.py`, Phase 2.55) com target exit P/E (mediana da banda própria, capped), fair-value range, **profit-take ladder** ancorada no fair value (+ rung de custo 2× só para tickers held — cost basis de `_portfolio_holdings.yaml`, NÃO BankBD: positions vazias, decisão 2026-07-22), thesis-broken trigger, ATR context (OFF by default) e **yield-on-cost**; chart dual-axis **Net Income vs P/E** (`ni_pe.png`, série `pe_band.series` + `annual.net_income` novos); secção §2.12 no report + linha `Exit:` no TL;DR. Fases seguintes da wave 1 (C D E G F) por construir.
+**v4 wave-1 · Phase A (2026-07-22)** acrescenta ao deep o **exit & thesis plan** (spec rev 3 §6, overlay-only): bloco `exit_plan` (`exit_plan.py`, Phase 2.55) com target exit P/E (mediana da banda própria, capped), fair-value range, **profit-take ladder** ancorada no fair value (+ rung de custo 2× só para tickers held — cost basis de `_portfolio_holdings.yaml`, NÃO BankBD: positions vazias, decisão 2026-07-22), thesis-broken trigger, ATR context (OFF by default) e **yield-on-cost**; chart dual-axis **Net Income vs P/E** (`ni_pe.png`, série `pe_band.series` + `annual.net_income` novos); secção §2.12 no report + linha `Exit:` no TL;DR.
+
+**v4 wave-1 · Phase C (2026-07-22)** acrescenta ao deep o **red-flag scanner + Beneish + 3-statement review + SWOT** (spec rev 3 §8, overlay-only): bloco `red_flags` (`red_flags.py`, Phase 2.4) com veto bearish por statement (Income/Balance/Cash-Flow), **Beneish M-score** (8 índices, flag se M > −2.22; "not computable" em non-US sem line items), earnings-quality CFO-vs-NI e dois **pills positivos** (net payout yield > 4%, ROCE ≥ 20%); **três sub-scores 0-10 determinísticos** por statement (hit-rate dos flags computáveis, pass=1/warn=0.5/bad=0) que **nunca entram no composite**; prompt novo `06_swot.md` (Phase 2.5, quadrante Threats/Risks com dupla profundidade). `analyze_ticker.py` passa a persistir um snapshot aditivo `statements_raw` (2 anos) para o scanner ser **puro consumidor do JSON — zero re-fetch, zero chamadas API novas**. Secções de report: cartão red-flag traffic-light + três sub-secções de statement + cartão SWOT. Composite v2.2 intocado; keys aditivas (`statements_raw`, `red_flags`). Fases seguintes da wave 1 (D E G F) por construir.
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
@@ -101,6 +103,7 @@ Source-framework lineage (the two reference docs at `OneDrive/Ambiente de Trabal
 | `03c_growth_assumption_check.md` | `5_step_system.md` Step 3 Part C                               | Supported / Weakly / Not supported                                           | §2.7 part C              |
 | `04_risk_audit.md`               | `5_step_system.md` Step 4                                      | 3 layers + leading indicators                                                | §2.14                    |
 | `05_bear_case.md`                | `5_step_system.md` Step 5                                      | "If X happens, thesis is broken."                                            | §2.16                    |
+| `06_swot.md`                     | v4 Phase C (idea #3)                                           | SWOT 2×2, Threats/Risks-weighted; cites `red_flags` + numbers JSON           | SWOT card (§2.18a)       |
 | `industry_macro.md`              | `ai_industry_analysis_framework.md` Step 1                     | Market, value chain, players, disruption                                     | `_industry/<slug>.md` §1 |
 | `industry_customer.md`           | `ai_industry_analysis_framework.md` Step 2                     | Buyer journey, switching costs                                               | `_industry/<slug>.md` §2 |
 | `industry_architecture.md`       | `ai_industry_analysis_framework.md` Step 3                     | Winning models, moats, top-15 KPIs                                           | `_industry/<slug>.md` §3 |
@@ -284,6 +287,22 @@ python "%SCRIPTS%\intrinsic_value.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ti
 - **Flags a ler no output**: `forward_target.sanity_flag` (→ apresentar como *cenário*, não como target), `blend.label` (que modelos entraram e porquê os excluídos ficaram fora — ex. "blend of 4/5 — dcf excluded: cyclical distortion"), `mos_class` (`deep_value`/`fair`/`rich`/`not_computable`), `pe_band.unit_check`.
 - Falha total → `{"error": ...}` + exit 0; a §2.11 degrada para o bloco DCF v3.1. Screens NÃO correm esta phase.
 
+### Phase 2.4 — Red-flag scanner + Beneish (deep only, v4 Phase C)
+
+Corre a seguir à Phase 2.3 e **antes da Phase 2.5** (o `red_flags` fica disponível como contexto quando o LLM escreve o SWOT e a commentary por statement). **Puro consumidor do JSON — zero rede, zero chamadas API** (lê o `statements_raw` que `analyze_ticker.py` persiste na Phase 2):
+
+```bash
+python "%SCRIPTS%\red_flags.py" --ticker ASML.AS --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+- **Overlay-only**: `--update` acrescenta a key aditiva `red_flags` (schema continua 2.2; composite e `scores` **intocados**). O scanner **surface-a um veto** (glyph + cor) mas **nunca auto-demota** o veredicto (mesmo padrão do `management_flag`).
+- **Checks** (spec §8, lista completa; cada check degrada a `na` independentemente quando falta o line item — esperado em non-US): Income (gross margin <10% · operating margin <15% · interest coverage <2× · SG&A >30% · one-time items >15% NI · gross-margin YoY swing >5pts · receivables-vs-revenue divergence); Balance (current <1.0 · quick <0.6 · D/E >2.0 · **Net Debt/EBITDA >3.0** · working capital <0 · inventory turnover <2× · AR days >60 · book value/share a cair); Cash-flow (OCF <0 · FCF <0 · earnings-quality CFO-vs-NI · capex <10% OCF · dividends >OCF · cash interest coverage <1×).
+- **Beneish M-score** (8 índices: DSRI/GMI/AQI/SGI/DEPI/SGAI/LVGI/TATA; flag se **M > −2.22**). Qualquer índice sem inputs ⇒ `m_score: null`, `status: na`, lista `missing` — **esperado em non-US** (receivables/SG&A/depreciation são as linhas mais finas do yfinance lá fora). Par natural do Altman Z.
+- **Pills positivos** (nunca vetos, ✓ met / ○ neutral): **net payout yield > 4%** e **ROCE ≥ 20%** (valores já no JSON, `capital_returns` / `fundamentals`).
+- **Três sub-scores 0-10 determinísticos** (`income`/`balance`/`cashflow` `.subscore_0_10`), calculados só sobre os checks **computáveis** de cada statement (pass=1 · warn=0.5 · bad=0; `round(10·earned/computable, 1)`). Mesmo JSON → mesmo 0-10. **Nunca entram no composite** — são overlay para render.
+- **Flags a ler no output**: `summary.verdict` (`clean`/`watch`/`elevated`) + `summary.glyph`, `beneish.flag`, `beneish.missing`, cada `*.subscore_0_10`. Frontmatter aditivo sugerido (single-line, tolerado pelos parsers): `red_flags_verdict`, `red_flags_bad`, `red_flags_beneish` (número ou `n/a`), `red_flags_income_score` / `_balance_score` / `_cashflow_score`.
+- Falha total → `{"error": ...}` + exit 0; o cartão degrada para nota "red-flag scan unavailable". Screens NÃO correm esta phase.
+
 ### Phase 2.5 — Qualitative LLM pass (deep only)
 
 Runs in Claude's orchestration context. Skipped entirely for screens.
@@ -311,6 +330,10 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
    ```
 
    para `%OUT_DIR%\_segments\{TICKER}.json`. **Esta é a ÚNICA situação em que números vêm do LLM** — porque nenhuma API free tem segment data. O chart e a §2.1 marcam sempre a origem ("company filings, LLM-extracted") + `source_url`. Sem filing disponível → não escrever JSON, chart skipped, `segments_available: false` + `⚠️ Segment data unavailable` na §2.1. Valores só da tabela oficial — nunca estimar nem interpolar.
+
+7c. **SWOT (v4 Phase C)** — run `06_swot.md` with `{RED_FLAGS_JSON}` = the `red_flags` block from Phase 2.4 and `{BULL_THESIS}` (same as step 7). Output → the SWOT card (§2.18a). The **Threats/Risks quadrant leads and gets double depth**, and must reconcile every `bad`/`warn` scanner flag + the Beneish verdict. Overlay-only narrative — no number enters the composite.
+
+7d. **Statement commentary (v4 Phase C)** — for each of the three statement sub-sections (Income / Balance / Cash-Flow, §2.6a–c), write a 2–3 sentence anomaly note. **The 0-10 sub-score is the deterministic number from `red_flags.py` (Phase 2.4) — do NOT recompute it in the LLM**; the LLM only names the anomalies behind the flagged checks (ground-truth rule). Skip a statement's commentary if its sub-score is `null` (all checks n/a).
 
 8. **Finalise composite**:
    
@@ -465,6 +488,12 @@ fair_value_mid: 940            # o blend 5-model — a âncora do MoS
 fair_value_high: 1105
 mos_class: fair                # deep_value | fair | rich ; omitir se not_computable
 valuation_depth_years: 14      # pe_band.depth_years ; omitir se banda degradada (unit mismatch) ou ausente
+red_flags_verdict: clean       # v4 Phase C: red_flags.summary.verdict (clean|watch|elevated); omit se scanner falhou
+red_flags_bad: 0               # nº de checks bad (red_flags.summary.bad)
+red_flags_beneish: -2.8        # red_flags.beneish.m_score ; "n/a" quando not computable (non-US)
+red_flags_income_score: 9.3    # red_flags.income.subscore_0_10 (0-10, overlay — NÃO entra no composite); omit se null
+red_flags_balance_score: 8.6   # red_flags.balance.subscore_0_10
+red_flags_cashflow_score: 10.0 # red_flags.cashflow.subscore_0_10
 earnings_date_next: 2026-04-24
 manual_reviewed: false
 narrative_quality: good        # good | partial | degraded — source quality the narrative was written from (get_narrative.py / post-WebFetch)
@@ -506,6 +535,7 @@ schema_version: "2.2"
 > **Risks**: {2-3 key risks}
 > **Bear trigger**: {bear_case_trigger}
 > **Exit**: {1 linha do bloco `exit_plan`, e.g. "trim ⅓ @ {fair_high} / ⅓ @ {fair_high×1.5}; exit P/E {target_exit_pe}; broken if {trigger curto}" — held: acrescentar "YoC {yield_on_cost}%"; omitir a linha se o exit_plan falhou}
+> **Red flags**: {red_flags.summary.glyph} {verdict} — {bad} bad · {warn} watch; Beneish {m_score|n/a} — omitir a linha se o scanner falhou (§2.12a)
 > **Action**: {explicit next step}
 > **Position size**: {sizing band da tabela abaixo, e.g. "Starter 1.5–3% of equity book; build to 4% on execution"} — always end with "(guideline, not advice)"
 > **Entry plan**: {se GO + entry_zone: "accumulate inside {entry_zone}; invalidation below {stop_loss}"; se NO-GO: "thesis ok, timing not — wait for {condição concreta}"; se sem tech read: "no timing read — size entry in thirds"}
@@ -644,6 +674,15 @@ schema_version: "2.2"
 | #14 | **Net payout yield** | {net_payout_yield}% | — | see §2.5 |
 | —   | FCF | {fcf_ttm:,} | FCF yield {fcf_yield}% | |
 
+#### 2.6a Income-statement review — {red_flags.income.subscore_0_10}/10  *(v4 Phase C · does not affect the composite)*
+({Deterministic sub-score from `red_flags.py`. Render the income checks as a mini traffic-light list: for each `red_flags.income.checks[]` a ✓/⚠/✗ glyph from `status` (pass/warn/bad; `na` → "n/a") + `label` + `value` vs `threshold`. Then the LLM 2–3-sentence anomaly note from Phase 2.5 step 7d — names what drives any warn/bad flag. Skip the note if sub-score is null.})
+
+#### 2.6b Balance-sheet review — {red_flags.balance.subscore_0_10}/10  *(v4 Phase C · does not affect the composite)*
+({Same pattern over `red_flags.balance.checks[]` — leverage, liquidity, working capital, inventory turnover, AR days, book-value trend. + anomaly note.})
+
+#### 2.6c Cash-flow review — {red_flags.cashflow.subscore_0_10}/10  *(v4 Phase C · does not affect the composite)*
+({Same pattern over `red_flags.cashflow.checks[]` — OCF, FCF, earnings quality (CFO vs NI), capex intensity, dividends vs OCF, cash interest coverage. + anomaly note.})
+
 ### 2.7 Wrap-up Annual Report {year}
 **Link**: [{annual_url}]({annual_url}) — publicado {annual_date}
 ({Narrativa do management discussion — tese de crescimento, strategic priorities, capital allocation. NÃO repete números, esses estão em 2.6})
@@ -746,6 +785,22 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 
 *A carta do adviser (§2.19, "When we'd walk away") é a versão narrativa desta disciplina — os números vivem aqui.*
 
+### 2.12a Red-flag scanner {red_flags.summary.glyph} {red_flags.summary.verdict}  *(v4 Phase C · overlay — surfaces a veto, never demotes)*
+(Do bloco `red_flags` (Phase 2.4) — números do Python. **Bearish veto independente do composite; o utilizador decide.**)
+
+**Traffic-light** ({red_flags.summary.bad} bad · {red_flags.summary.warn} watch · {red_flags.summary.pass} pass): render each `red_flags.{income,balance,cashflow}.checks[]` as one line — ✓ (pass) / ⚠ (warn) / ✗ (bad) / — (n/a) glyph + `label` + `value` vs `threshold`. Colour never stands alone (always paired with a glyph).
+
+| Integrity | Valor | Threshold | Estado |
+|---|---|---|---|
+| **Beneish M-score** | {red_flags.beneish.m_score \| "n/a"} | M > −2.22 | {beneish.status} {beneish.missing → "missing: …"} |
+| Altman Z-Score | {red_flags.summary.altman_zscore} | <1.8 distress | see §2.6 |
+| Earnings quality (CFO vs NI) | {cashflow earnings_quality.value}× | CFO ≥ NI | {status} |
+
+**Quality pills** (positivos, nunca vetos): {net payout yield ✓/○ {value}% (rule >4%)} · {ROCE ✓/○ {value}% (rule ≥20%)}.
+
+{Beneish "not computable" (non-US sem line items) → mostrar "Beneish M: n/a — {missing}" e continuar; o cartão nunca desaparece.}
+{Se o bloco `red_flags` falhou/ausente: "⚠️ red-flag scan unavailable" e nada mais.}
+
 ### 2.13 Peer comparison
 | Métrica | {ticker} | Peer 1 | Peer 2 | Peer 3 | Peer 4 | Median | Ranking |
 |---------|----------|--------|--------|--------|--------|--------|---------|
@@ -785,6 +840,17 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 
 ### 2.18 Operator vs Investor view
 ({2 short paragraphs — Operator lens (execução, bottlenecks) e Investor lens (profit pools, moats). Cross-cutting summary destilado das secções anteriores.})
+
+### 2.18a SWOT  *(v4 Phase C · overlay — qualitative, no score into the composite)*
+(Output de `06_swot.md` (Phase 2.5 step 7c). Render como um cartão 2×2 com o quadrante **Threats/Risks primeiro e com dupla profundidade**. Cada facto cita um número da JSON entre parênteses ou é marcado `(inferred)`.)
+
+| ⚠️ **Threats / Risks** *(leads · deepest)* | ✅ **Strengths** |
+|---|---|
+| ({external/downside forces; reconcilia cada flag `bad`/`warn` do §2.12a + o veredicto Beneish; cross-link §2.14 risco + §2.16 bear}) | ({vantagens competitivas evidenciadas pelos números — margens, ROIC/ROCE, net-payout, balanço}) |
+| 🔸 **Weaknesses** | 🚀 **Opportunities** |
+| ({soft spots internos — os `warn`/`bad` company-internal: leverage, tendência de margem, cash conversion}) | ({optionality realista de upside — TAM, pricing, capital allocation}) |
+
+{Se o SWOT não foi gerado: omitir a secção (não é blocker).}
 
 ### 2.19 Veredicto final — Adviser's letter
 Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 1-3 frases, sem headers):
