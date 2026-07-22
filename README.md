@@ -18,9 +18,11 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 
 **v4 wave-1 · Phase E (2026-07-22)**: return profile + watch-list, overlay-only (spec rev 3 §10) — `alpha_beta.py` (node 2.56, ambient Python) adds α/β (3y monthly vs regional benchmark, β=cov/var, Jensen α), a CAPM realized-vs-expected line, a 1/3/5/10/15-yr price/total-return CAGR ladder, a Lynch-category return/drawdown prior, and a portfolio-fit line (portfolio α/β vs URTH from FX→EUR weighted equity holdings, cached daily in `_portfolio_riskprofile.json`); β/α are injected into `top_strip`. `watchlist.py` (node 2.57) maintains `_watchlist.csv` (quality names ≥7 held back only by price → target = fair-low), and `send_email.py` shows a red "⭐ Watch-list triggered" block + `[WATCHLIST: n]` subject tag when live ≤ target. `financial_history.py` annual cap lifted 6→20y. Additive JSON key `alpha_beta`; composite untouched.
 
+**v4 wave-1 · Phase G (2026-07-22)**: 3-persona opinion panel, overlay-only (spec rev 3 §10b) — `second_opinion.py` (node 2.58, ambient Python) asks an **independent** model chain (Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.0-flash`, via the new reusable `llm_client.py`) for three prompted personas (value/growth/contrarian), each a 0–100 conviction (50=neutral). The panel sees the evidence but **not** the composite/verdict (independence); consensus = median, divergence flagged on ≥25pt spread or gap vs composite×10. A dead persona degrades to "not available" without blocking the run. Additive JSON key `opinion_panel`; composite untouched.
+
 ---
 
-## What it does — the 19-node pipeline
+## What it does — the 20-node pipeline
 
 | Node | Stage | Runs on |
 |------|-------|---------|
@@ -35,6 +37,7 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 | 2.55 | **Exit & thesis plan (v4-A)** — target exit P/E, profit ladder, thesis-broken trigger, yield-on-cost → `exit_plan` | deep |
 | 2.56 | **Return profile (v4-E)** — α/β + CAPM + 10/15y price CAGR + Lynch prior + portfolio fit vs URTH (`alpha_beta.py`) → `alpha_beta` | deep |
 | 2.57 | **Watch-list maintenance (v4-E)** — quality-name-held-back-by-price → `_watchlist.csv` (`watchlist.py`) | deep |
+| 2.58 | **Opinion panel (v4-G)** — 3 independent-model personas (value/growth/contrarian) 0–100 via Groq→Gemini (`second_opinion.py` + `llm_client.py`) → `opinion_panel` | deep |
 | 2.6 | **Macro §8 snapshot** — indices/valuation-vs-history/country + RSP/SPY breadth & 11-sector tendencies (yfinance `macro_breadth.py`) + Buffett/M2/forward-profit; cache `_macro/{date}.md` | once per run |
 | 3 | Render charts (price, 7-axis radar, peers, DCF fan, EBITDA+FCF, rel-perf 30mo, segments) | deep |
 | 3.5 | **Technical score + GO/NO-GO** (for fundamentally-strong names) | deep |
@@ -98,7 +101,7 @@ reads precomputed JSON / report frontmatter — the dashboard computes nothing.
 ## Scripts
 
 `analyze_ticker.py` (engine + scoring + validation) · `finalize_score.py` · `pick_candidates.py` ·
-`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
+`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `second_opinion.py` + `llm_client.py` (v4-G) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
 `technical_score.py` · `portfolio_sync.py` + `portfolio_dashboard.py` · `thesis_dashboard.py` ·
 `broker_compare.py` (+ `brokers.yaml`) · `markets.py` · `render_charts.py` · `update_log.py` ·
 `update_shortlist.py` · `build_dashboard.py` · `send_email.py` · `find_reports.py` · `get_narrative.py` ·

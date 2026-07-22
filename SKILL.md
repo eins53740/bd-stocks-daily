@@ -6,7 +6,7 @@ argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional 
 
 # Daily Stock Evaluation (v4 wave-1, Phases A+B+C+D — scoring schema 2.2)
 
-Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 19 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.6 / 3.5 / 5.5 incluídas).
+Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 20 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.6 / 3.5 / 5.5 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
@@ -20,7 +20,9 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 
 **v4 wave-1 · Phase D (2026-07-22)** expande a secção macro (spec rev 3 §9, overlay-only, cache `_macro/`) para o "§8" que o Bruno esboçou — duas gauges **puras yfinance** (`macro_breadth.py --update`, Phase 2.6, keys aditivas `breadth` + `sectors` no `_macro/<date>.json`, nunca toca `metrics`): **breadth RSP/SPY** (equal-weight vs cap-weight, percentil na própria história multi-anos + seta de tendência; scan-2 p07) e **tendências sectoriais** (11 SPDR ETFs + linha SPY: tendência 20d-vs-60d MA + direcção de volume + check "volume confirma?"; idea #10) — mais três gauges **sourced via WebFetch** no prompt `macro_daily.md`: **valuation vs história** (P/E/P/S/CAPE/P/B vs mediana/±1SD), **Buffett Indicator + regime de liquidez M2** (FRED `M2SL`), e **forward-profit horizons** ao nível do índice (3m/6m/1Y/2Y/3Y). Cada gauge degrada de forma independente ("not available" — uma falha nunca apaga a secção). O report §4 embeda um resumo curto das novas gauges; detalhe completo no `_macro/<date>.md`. Composite v2.2 intocado.
 
-**v4 wave-1 · Phase E (2026-07-22)** acrescenta ao deep o **return profile** (spec rev 3 §10, overlay-only): bloco `alpha_beta` (`alpha_beta.py`, Phase 2.56, corre sob Python312 ambiente) com **α/β** 3y vs benchmark regional (β=cov/var, α=Jensen anualizado), **linha CAPM** (realizado vs esperado, rf reutilizado de `intrinsic_value.capm.rf`), **price-CAGR ladder 1/3/5/10/15y** (closes mensais ajustados — o sinal de longo prazo, já que o CAGR de revenue raramente chega a 10/15y), **Lynch prior** (categoria → banda retorno/drawdown) e **portfolio fit** (α/β da carteira vs URTH, série ponderada FX→EUR das holdings equity, cache diário `_portfolio_riskprofile.json`) — `β 3y`/`α 3y` injectados no `top_strip` (metrics strip); secção §2.20a no report. Mais: a **watch-list price-triggered** (`watchlist.py`, Phase 2.57) — nomes de qualidade (composite ≥7) travados só pelo preço (`mos_class == "rich"`, não-held) entram no `_watchlist.csv` (target = fair-low), e o **email diário** ganha um bloco vermelho "⭐ Watch-list triggered" + tag `[WATCHLIST: n]` no assunto quando `live ≤ target`. E o cap anual de `financial_history.py` subiu de 6→20 anos (enablement dos rungs de CAGR de revenue quando a fonte for funda o suficiente). Composite v2.2 intocado. Fases seguintes da wave 1 (G F) por construir.
+**v4 wave-1 · Phase E (2026-07-22)** acrescenta ao deep o **return profile** (spec rev 3 §10, overlay-only): bloco `alpha_beta` (`alpha_beta.py`, Phase 2.56, corre sob Python312 ambiente) com **α/β** 3y vs benchmark regional (β=cov/var, α=Jensen anualizado), **linha CAPM** (realizado vs esperado, rf reutilizado de `intrinsic_value.capm.rf`), **price-CAGR ladder 1/3/5/10/15y** (closes mensais ajustados — o sinal de longo prazo, já que o CAGR de revenue raramente chega a 10/15y), **Lynch prior** (categoria → banda retorno/drawdown) e **portfolio fit** (α/β da carteira vs URTH, série ponderada FX→EUR das holdings equity, cache diário `_portfolio_riskprofile.json`) — `β 3y`/`α 3y` injectados no `top_strip` (metrics strip); secção §2.20a no report. Mais: a **watch-list price-triggered** (`watchlist.py`, Phase 2.57) — nomes de qualidade (composite ≥7) travados só pelo preço (`mos_class == "rich"`, não-held) entram no `_watchlist.csv` (target = fair-low), e o **email diário** ganha um bloco vermelho "⭐ Watch-list triggered" + tag `[WATCHLIST: n]` no assunto quando `live ≤ target`. E o cap anual de `financial_history.py` subiu de 6→20 anos (enablement dos rungs de CAGR de revenue quando a fonte for funda o suficiente). Composite v2.2 intocado.
+
+**v4 wave-1 · Phase G (2026-07-22)** acrescenta ao deep o **opinion panel** (spec rev 3 §10b, overlay-only): bloco `opinion_panel` (`second_opinion.py`, Phase 2.58, sob Python312 ambiente) — segunda opinião de um modelo **independente** (Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.0-flash`, via novo `llm_client.py` reutilizável), **3 personas** (value/growth/contrarian) que devolvem `{verdict, conviction_0_100, one_liner}` na escala 0–100 (50=neutral). **Independência garantida**: o painel vê a evidência (`compact_evidence`) mas NÃO o composite/verdict — esses são excluídos do input. Consenso = mediana; divergência sinalizada se spread≥25 ou |mediana−composite×10|≥25. Uma persona morta degrada para "not available" sem bloquear as outras. Secção §2.20b + linha no TL;DR. Composite v2.2 intocado. Fase seguinte da wave 1 (F HTML render, 2 sessões) por construir.
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
@@ -396,6 +398,19 @@ python "%SCRIPTS%\watchlist.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.
 - **Regra única** (mantém na lista **sse e só se** `scores.composite ≥ 7` **E** `intrinsic_value.mos_class == "rich"` **E** não-held **E** há `fair_value_range.low`): um nome de qualidade travado **só** pelo preço. Qualquer outro caso ⇒ garante ausência — o que subsume as três remoções da spec: comprado (agora held, via `exit_plan.find_holding`/`load_holdings` + alias SHEL.L→SHELL.AS), tese quebrada / qualidade perdida (score < 7), e graduação para barato (`mos_class` deixa de ser "rich").
 - Escreve `_watchlist.csv` (colunas `ticker,target,currency,added_date,fair_low,mos_class,score,fail_reason,thesis`; `target` = fair-low; `added_date` preservada no update). Overlay-only — **não escreve no analysis JSON**. Falha → `{"error": ...}` + exit 0.
 
+### Phase 2.58 — Opinion panel: 3 personas (deep only, v4 Phase G)
+
+Corre DEPOIS da Phase 2.57 e antes da Phase 2.6. **Sob Python312 ambiente** (SDKs `groq` + `google.generativeai`; o venv `uv` não os tem):
+
+```bash
+"C:\Program Files\Python312\python.exe" "%SCRIPTS%\second_opinion.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+- **Segunda opinião independente** (spec §10b): um modelo não-autor (Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.0-flash` fallback, via `llm_client.py`; chaves `api_key_groq`/`api_key_gemini` de `api_keys.txt` ou env `GROQ_API_KEY`/`GEMINI_API_KEY`), **3 personas prompted**: **value** (Graham/Klarman), **growth** (Fisher/Lynch), **contrarian** (bear-first). Cada uma devolve JSON estrito `{verdict, conviction_0_100, one_liner}` na escala **0–100, 50=neutral, 100=buy now**.
+- **Independência (não eco)**: o painel vê a *evidência* (`compact_evidence` — top_strip, gates, intrinsic_value, red_flags, alpha_beta, exit_plan, consensus, management) mas **NUNCA o composite nem o verdict** — esses são excluídos do input. O composite é lido só localmente para o check de divergência.
+- **Consenso** = mediana das convicções disponíveis → label (`buy_now`≥75/`accumulate`≥60/`hold`≥40/`cautious`≥25/`avoid`). **Divergência** sinalizada quando spread entre personas ≥25 pts **ou** |mediana − composite×10| ≥25 pts.
+- **Overlay-only**: `--update` funde a key aditiva `opinion_panel`; composite/verdict/top_strip intocados. Cartões etiquetados *opinion* (isentos da regra ground-truth, como o management score). Uma persona morta (JSON inválido / erro de provider / sem chave) → cartão `available:false` sem bloquear as outras. Falha total → `{"error": ...}` + exit 0. Screens NÃO correm esta phase.
+
 ### Phase 2.6 — Macro snapshot (once per run, v3.1)
 
 Corre UMA vez por run (não por ticker), antes da Phase 5:
@@ -527,6 +542,9 @@ red_flags_balance_score: 8.6   # red_flags.balance.subscore_0_10
 red_flags_cashflow_score: 10.0 # red_flags.cashflow.subscore_0_10
 beta_3y: 0.89                  # v4 Phase E: alpha_beta.beta (3y monthly vs regional benchmark); omit se not computable (n<24m) ou screen
 alpha_ann_pct: 4.2             # alpha_beta.alpha_ann_pct (Jensen α anualizado, overlay — NÃO entra no composite); omit se not computable ou screen
+opinion_median: 80             # v4 Phase G: opinion_panel.consensus_conviction (mediana 0-100 das 3 personas, overlay — NÃO entra no composite); omit se painel indisponível ou screen
+opinion_consensus: buy_now     # opinion_panel.consensus_verdict (buy_now|accumulate|hold|cautious|avoid)
+opinion_divergence: true       # opinion_panel.divergence.flag (personas discordam ou divergem do composite)
 earnings_date_next: 2026-04-24
 manual_reviewed: false
 narrative_quality: good        # good | partial | degraded — source quality the narrative was written from (get_narrative.py / post-WebFetch)
@@ -569,6 +587,7 @@ schema_version: "2.2"
 > **Bear trigger**: {bear_case_trigger}
 > **Exit**: {1 linha do bloco `exit_plan`, e.g. "trim ⅓ @ {fair_high} / ⅓ @ {fair_high×1.5}; exit P/E {target_exit_pe}; broken if {trigger curto}" — held: acrescentar "YoC {yield_on_cost}%"; omitir a linha se o exit_plan falhou}
 > **Red flags**: {red_flags.summary.glyph} {verdict} — {bad} bad · {warn} watch; Beneish {m_score|n/a} — omitir a linha se o scanner falhou (§2.12a)
+> **Opinion panel**: 🤖 {opinion_median}/100 ({opinion_consensus}), {n_available}/3 personas{se divergence: " · ⚠️ divergência"} — omitir a linha se o painel falhou (§2.20b)
 > **Action**: {explicit next step}
 > **Position size**: {sizing band da tabela abaixo, e.g. "Starter 1.5–3% of equity book; build to 4% on execution"} — always end with "(guideline, not advice)"
 > **Entry plan**: {se GO + entry_zone: "accumulate inside {entry_zone}; invalidation below {stop_loss}"; se NO-GO: "thesis ok, timing not — wait for {condição concreta}"; se sem tech read: "no timing read — size entry in thirds"}
@@ -954,6 +973,23 @@ Renderiza do bloco `alpha_beta` (Phase 2.56). Números ground-truth (yfinance); 
 **Portfolio fit (vs {portfolio_comparison.benchmark}, EUR)** — β do ticker {ticker_vs_world.beta} vs portfolio {portfolio.beta} ({verdict_beta}: {"aumenta"|"reduz"} o β da carteira) · α do ticker {ticker_vs_world.alpha_ann_pct}% vs portfolio {portfolio.alpha_ann_pct}% ({verdict_alpha}: {"accretive"|"dilutive"} ao α da carteira). Base: {portfolio.holdings_used} holdings equity ponderadas por valor de mercado (crypto excluído).
 {quando portfolio_comparison.available == false: "Portfolio fit não disponível — {reason}."}
 ```
+
+### 2.20b 🤖 Opinion panel — value · growth · contrarian  *(v4 Phase G · overlay — segunda opinião, não afecta o composite)*
+
+Renderiza do bloco `opinion_panel` (Phase 2.58). Modelo **independente** (Groq→Gemini) — cartões etiquetados *opinion* (isentos da regra ground-truth). Se `opinion_panel` ausente/`"error"` ⇒ nota "opinion panel unavailable" e saltar. Cartões `available:false` mostram "não disponível" individualmente.
+
+```md
+| Persona | Veredicto | Convicção (0–100, 50=neutral) | One-liner |
+|---|---|---|---|
+| 💰 Value | {verdict} | {conviction_0_100} {barra ▓ com marca no 50} | {one_liner} |
+| 🚀 Growth | {verdict} | {conviction_0_100} | {one_liner} |
+| 🐻 Contrarian | {verdict} | {conviction_0_100} | {one_liner} |
+
+**Consenso: {consensus_conviction}/100 ({consensus_verdict})** · {n_available}/3 personas · modelo {model_chain}
+{se divergence.flag: "⚠️ Divergência — {divergence.reason} (a discordância é o sinal: rever a tese)."}
+```
+
+*(A convicção do painel é uma opinião de modelo independente, não uma medida ground-truth; use-a como contraste ao composite, nunca como substituto.)*
 
 ## 3. Links para ir mais fundo
 - 📘 [Annual report {year}]({annual_url}) — publicado {annual_date}
