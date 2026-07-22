@@ -1,10 +1,10 @@
 """
-pick_candidates.py — Selecciona 3 tickers do pool pre-filtrado para avaliação diária.
+pick_candidates.py — Selecciona 5 tickers do pool pre-filtrado para avaliação diária.
 
 Regras:
-- 1 deep-dive + 2 screens
+- 1 deep-dive + 4 screens
 - Deep alterna big <-> small_growth stateful (last_mode em _log.csv)
-- Screens: 1 big + 1 small_growth
+- Screens: 1 big + 1 small_growth + 2 non-USA (region != US, qualquer size)
 - Dedupe: tickers avaliados nos últimos 183 dias são excluídos
 - Round: se ticker já foi avaliado antes (com gap >183d), round += 1
 
@@ -259,6 +259,15 @@ def main() -> int:
         while len(screens) < 2 and extras:
             screens.append(extras.pop())
 
+    # Non-USA focus: +2 screens guaranteed from non-US markets (any size).
+    taken = {deep["ticker"]} | {s["ticker"] for s in screens}
+    non_us = [c for c in remaining
+              if c["ticker"] not in taken and c.get("region") not in ("US", "?")]
+    random.shuffle(non_us)
+    screens.extend(non_us[:2])
+    if len(non_us) < 2:
+        log(f"WARN: only {len(non_us)} non-US candidates available for the 2 non-US screen slots")
+
     def enrich(t: dict) -> dict:
         return {
             "ticker": t["ticker"],
@@ -279,6 +288,7 @@ def main() -> int:
             "last_deep_size": last_deep,
             "big_available": sum(1 for c in pool if c.get("size") == "big"),
             "small_available": sum(1 for c in pool if c.get("size") == "small_growth"),
+            "non_us_available": sum(1 for c in pool if c.get("region") not in ("US", "?")),
         },
     }
     print(json.dumps(result, indent=2, ensure_ascii=False))

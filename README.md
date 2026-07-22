@@ -7,12 +7,16 @@ a transparent composite score, and writes tiered Obsidian reports + an HTML dash
 > **Cardinal rule:** every structured number (revenue, P/E, margins, ROE, debt, prices, ROIC, EV/EBIT) comes
 > **only** from Python helpers (yfinance/stockanalysis). The LLM writes *narrative* — it never sources numbers
 > from filings. This boundary is the system's spine; don't cross it.
+> Two documented v3.1 exceptions, each requiring source + as-of date on every figure: revenue segments
+> (LLM-extracted from the official filing → `_segments/`) and macro valuation/country data (WebFetch → `_macro/`).
 
 Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) → `C:\Github\.scripts\stocks-daily.bat`.
 
+**v3.1 (2026-07-15)**: quarterly EBITDA+FCF chart with hybrid 4Q forecast (`financial_history.py`, Alpha Vantage for US listings + yfinance fallback, 80-day cache, 20-call/day AV guard); top-of-report metrics strip (`top_strip`); 3-year revenue-segments chart; 30-month relative-performance chart vs region benchmark + sector SPDR; promoted thesis/risk callouts; €1500 broker-recommendation section (composite ≥ 7.0, reuses `broker_compare.py`); daily macro section with `_macro/` cache (`macro_snapshot.py` + `prompts/macro_daily.md`).
+
 ---
 
-## What it does — the 12-node pipeline
+## What it does — the 14-node pipeline
 
 | Node | Stage | Runs on |
 |------|-------|---------|
@@ -20,8 +24,10 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 | 1 | Pick 1 deep + 2 screens (183-day dedupe, stale-shortlist fallback) | always |
 | 1.5 | Industry-cache freshness (<90d) | deep |
 | 2 | **Analyse** — 7-gate + Piotroski + Altman + DCF + peer + provisional composite | all 3 |
-| 2.5 | LLM narrative — business model, management score, growth, 3-layer risk, bear case → finalize composite | deep |
-| 3 | Render charts (price, 7-axis radar, peers, DCF fan) | deep |
+| 2.2 | **Financial history** — quarterly EBITDA/FCF series (AV/yfinance, `_fin_history/` cache) + hybrid 4Q forecast | deep |
+| 2.5 | LLM narrative — business model, management score, growth, 3-layer risk, bear case, revenue segments → finalize composite | deep |
+| 2.6 | **Macro snapshot** — indices/valuation/country cache `_macro/{date}.md` | once per run |
+| 3 | Render charts (price, 7-axis radar, peers, DCF fan, EBITDA+FCF, rel-perf 30mo, segments) | deep |
 | 3.5 | **Technical score + GO/NO-GO** (for fundamentally-strong names) | deep |
 | 4 | Find official reports — narrative only (no numbers) | deep |
 | 5 | Write report (deep ≈2000 words / 1-min screen) | all |

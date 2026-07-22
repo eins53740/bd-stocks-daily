@@ -24,6 +24,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from technical_score import (  # noqa: E402
+    BENCH_BY_SUFFIX,
     assess,
     build_indicators,
     compute_score_components,
@@ -207,7 +208,23 @@ def test_assess_combined_score_weighting():
     assert out["entry_zone"][1] == 120
 
 
-# ----------------------- B.7 >=7.0 gate via subprocess ----------------------- #
+# ----------------------- B.7 extended benchmark map (no network) ----------------------- #
+def test_bench_by_suffix_extended_entries():
+    # Verified live against yfinance at implementation time (see technical_score
+    # comment). ^PSI20 is delisted on Yahoo, hence PSI20.LS for Lisbon.
+    expected = {
+        ".TW": "^TWII", ".TWO": "^TWII", ".IR": "^ISEQ", ".SS": "000001.SS",
+        ".SZ": "399001.SZ", ".KS": "^KS11", ".KQ": "^KQ11", ".NS": "^NSEI",
+        ".BO": "^BSESN", ".ST": "^OMX", ".SW": "^SSMI", ".MC": "^IBEX",
+        ".MI": "FTSEMIB.MI", ".LS": "PSI20.LS", ".BR": "^BFX", ".OL": "^OSEAX",
+        ".CO": "^OMXC25", ".HE": "^OMXH25", ".WA": "WIG20.WA", ".VI": "^ATX",
+        ".TO": "^GSPTSE", ".AX": "^AXJO",
+    }
+    for suffix, sym in expected.items():
+        assert BENCH_BY_SUFFIX.get(suffix) == sym, f"{suffix} -> {BENCH_BY_SUFFIX.get(suffix)!r} != {sym!r}"
+
+
+# ----------------------- B.8 >=7.0 gate via subprocess ----------------------- #
 def test_fundamental_gate_skips_below_7(tmp_path):
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS / "technical_score.py"),

@@ -61,10 +61,15 @@ TECH_DIR = STOCKSDAILY / "_technical"
 # Default benchmark per region/exchange suffix (relative-strength proxy).
 BENCH_BY_SUFFIX = {
     ".AS": "^AEX", ".PA": "^FCHI", ".DE": "^GDAXI", ".MC": "^IBEX",
-    ".LS": "^STOXX50E", ".MI": "FTSEMIB.MI", ".L": "^FTSE",
+    ".LS": "PSI20.LS", ".MI": "FTSEMIB.MI", ".L": "^FTSE",
     ".SW": "^SSMI", ".ST": "^OMX", ".CO": "^OMXC25", ".HE": "^OMXH25",
     ".BR": "^BFX", ".AX": "^AXJO", ".TO": "^GSPTSE", ".HK": "^HSI",
     ".T": "^N225",
+    # Extended coverage — all verified live against yfinance. ^PSI20 is delisted
+    # on Yahoo (use PSI20.LS); ^OMX resolves (kept over the thin ^OMXS30).
+    ".OL": "^OSEAX", ".WA": "WIG20.WA", ".VI": "^ATX", ".IR": "^ISEQ",
+    ".TW": "^TWII", ".TWO": "^TWII", ".SS": "000001.SS", ".SZ": "399001.SZ",
+    ".KS": "^KS11", ".KQ": "^KQ11", ".NS": "^NSEI", ".BO": "^BSESN",
 }
 DEFAULT_BENCH = "^GSPC"  # US / fallback
 

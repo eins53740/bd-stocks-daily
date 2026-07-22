@@ -902,6 +902,39 @@ def compute_consensus(tk) -> dict:
     return out
 
 
+def compute_price_returns(hist) -> dict:
+    """Dividend-inclusive price returns from the 5y history frame (auto_adjust
+    default → Close already reflects dividends). 1y = last close vs the close
+    ~252 trading days back; 5y = last vs first close of the frame. The span label
+    tells the report whether the "5y" number really covers 5 years or a shorter
+    listing, so short histories are labelled honestly ("since YYYY-MM-DD")."""
+    out = {
+        "price_return_1y_pct": None,
+        "price_return_5y_pct": None,
+        "price_return_5y_span": None,
+    }
+    try:
+        if hist is None or hist.empty or "Close" not in hist:
+            return out
+        close = hist["Close"].dropna()
+        if close.empty:
+            return out
+        last = float(close.iloc[-1])
+        if len(close) >= 253 and float(close.iloc[-253]) > 0:
+            out["price_return_1y_pct"] = round((last / float(close.iloc[-253]) - 1) * 100, 2)
+        first = float(close.iloc[0])
+        if first > 0:
+            out["price_return_5y_pct"] = round((last / first - 1) * 100, 2)
+        span_days = (close.index[-1] - close.index[0]).days
+        if span_days >= 4.75 * 365.25:
+            out["price_return_5y_span"] = "5y"
+        else:
+            out["price_return_5y_span"] = f"since {close.index[0].date().isoformat()}"
+    except Exception:
+        pass
+    return out
+
+
 # ------------------------- Main -------------------------
 def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     log(f"Analyzing {ticker} (mode={mode})...")
@@ -1336,6 +1369,36 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     if eur_rate is None and (currency or "").upper() != "EUR":
         warnings_.append(f"EUR FX rate for {currency} unavailable — EUR figures omitted")
 
+    # --- Price returns + report top-strip (reference already-computed fund /
+    # capital_returns values; fcf_margin is the only new derivation here). ---
+    price_returns = compute_price_returns(hist)
+
+    def _pct(x, nd=2):
+        return round(x * 100, nd) if isinstance(x, (int, float)) else None
+
+    def _rnd(x, nd=2):
+        return round(x, nd) if isinstance(x, (int, float)) else None
+
+    fcf_margin_pct = None
+    if fund.get("fcf_ttm") is not None and fund.get("revenue_ttm"):
+        fcf_margin_pct = round(fund["fcf_ttm"] / fund["revenue_ttm"] * 100, 2)
+
+    top_strip = {
+        "pe_ttm": _rnd(fund.get("pe_ratio")),
+        "forward_pe": _rnd(fund.get("forward_pe")),
+        "revenue_cagr_5y_pct": _pct(fund.get("revenue_cagr_5y")),
+        "fcf_margin_pct": fcf_margin_pct,
+        "fcf_yield_pct": _pct(fund.get("fcf_yield")),
+        "roe_ttm_pct": _pct(fund.get("roe_ttm")),
+        "roic_pct": _pct(fund.get("roic_ttm")),
+        "gross_margin_pct": _pct(fund.get("gross_margin_ttm")),
+        "net_debt_ebitda": _rnd(fund.get("net_debt_ebitda")),
+        "net_payout_yield_pct": _pct(capital_returns.get("net_payout_yield")),
+        "price_return_1y_pct": price_returns["price_return_1y_pct"],
+        "price_return_5y_pct": price_returns["price_return_5y_pct"],
+        "price_return_5y_span": price_returns["price_return_5y_span"],
+    }
+
     out = {
         "ticker": ticker,
         "mode": mode,
@@ -1351,6 +1414,10 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         "price_current": price_curr,
         "price_current_eur": price_eur,
         "market_cap_eur": market_cap_eur,
+        "price_return_1y_pct": price_returns["price_return_1y_pct"],
+        "price_return_5y_pct": price_returns["price_return_5y_pct"],
+        "price_return_5y_span": price_returns["price_return_5y_span"],
+        "top_strip": top_strip,
         "fundamentals": fund,
         "technical": tech,
         "piotroski_fscore": fscore,

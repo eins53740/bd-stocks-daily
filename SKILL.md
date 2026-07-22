@@ -1,22 +1,29 @@
 ---
 name: bd-stocks-daily
-description: Daily stock evaluation — picks 3 tickers (1 deep + 2 screens) from the pre-filtered pool, applies Quality Compounder 7-gates, Piotroski/Altman, peer comparison, management quality score (LLM), industry context (cached per sector), 3-layer risk audit, bear case, computes 0-10 composite score (v2 weights), and writes tiered reports (5min TL;DR / 30min deep) to C:\BD_Obsidian\Personal\Finance\StocksDaily\. Run via Task Scheduler daily 17:00.
+description: Daily stock evaluation — picks 5 tickers (1 deep + 4 screens, 2 of them from non-USA markets) from the pre-filtered pool, applies Quality Compounder 7-gates, Piotroski/Altman, peer comparison, management quality score (LLM), industry context (cached per sector), 3-layer risk audit, bear case, computes 0-10 composite score (v2 weights), and writes tiered reports (5min TL;DR / 30min deep) to C:\BD_Obsidian\Personal\Finance\StocksDaily\. Run via Task Scheduler daily 17:00.
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v3 — scoring schema 2.2)
+# Daily Stock Evaluation (v3.1 — scoring schema 2.2)
 
-Avaliação diária automática de 3 acções (1 deep-dive + 2 screens) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 12 nós** (sub-fases 0.5 / 1.5 / 2.5 / 3.5 / 5.5 incluídas).
+Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 14 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.5 / 2.6 / 3.5 / 5.5 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
+
+**v3.1 (2026-07-15)** acrescenta ao report deep: série trimestral **EBITDA + FCF** com forecast 4Q híbrido (`financial_history.py`, Phase 2.2, cache `_fin_history/`), **metrics strip** no topo (bloco `top_strip` do analysis JSON; screens também), chart de **revenue sources** 3 anos (`_segments/`, excepção LLM documentada), chart **relative performance 30 meses** vs benchmark regional + sector ETF, tese/risco **promovidos em callouts coloridos** (labels de parser preservados), secção **§2.19 broker (€1500)** para composite ≥ 7.0, e secção **§4 macro** com cache diário `_macro/` (Phase 2.6, prompt `macro_daily.md`).
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
 **Disclaimer obrigatório** em cada relatório e email: 🤖 Auto-generated. Not investment advice. Verify all figures before acting.
+**Footer obrigatório** — última linha de cada relatório (deep e screen), após um `---`: `*Analysis written by {model name, e.g. Claude Fable 5} · bsdias©2026*`. O model name é o modelo da sessão que escreveu a análise (visível no environment do Claude Code) — nunca hard-coded.
 
 ## Ground-truth rule (CRITICAL)
 
 **Números estruturados (revenue, P/E, margins, ROE, debt, prices) — SEMPRE de Python helpers (yfinance/stockanalysis).** Nunca extrair números de 10-K / 10-Q via WebFetch. LLM só compõe narrativa (tese, riscos, guidance management, management quality score qualitativo). Se precisares de um número, chama o helper. Qualquer secção qualitativa (§2.1, 2.3, 2.7, 2.11, 2.12, 2.14) deve citar números a partir da JSON da Phase 2 — **nunca inventar**.
+
+**Duas excepções documentadas (v3.1), ambas com fonte + data obrigatórias em cada número:**
+1. **Revenue segments** (Phase 2.5 step 7b) — nenhuma API free tem segment data; o LLM extrai a tabela oficial de segmentos do annual report para `_segments/{TICKER}.json`, sempre marcado "company filings (LLM-extracted)" + `source_url`.
+2. **Macro valuation/country data** (Phase 2.6) — S&P 500 P/E/P/S/EV/EBITDA e macro por país via WebFetch (multpl/WSJ/gurufocus/fontes oficiais), cada valor com fonte + as-of date; "not available" antes de estimar.
 
 ## Composite score v2.2 (weights)
 
@@ -93,6 +100,7 @@ Source-framework lineage (the two reference docs at `OneDrive/Ambiente de Trabal
 | `industry_macro.md`              | `ai_industry_analysis_framework.md` Step 1                     | Market, value chain, players, disruption                                     | `_industry/<slug>.md` §1 |
 | `industry_customer.md`           | `ai_industry_analysis_framework.md` Step 2                     | Buyer journey, switching costs                                               | `_industry/<slug>.md` §2 |
 | `industry_architecture.md`       | `ai_industry_analysis_framework.md` Step 3                     | Winning models, moats, top-15 KPIs                                           | `_industry/<slug>.md` §3 |
+| `macro_daily.md`                 | v3.1 (Phase 2.6)                                               | Macro diário: mercados, S&P valuation (sourced), country table (TTL 7d)      | `_macro/<date>.md` + §4  |
 
 `ai_industry_analysis_framework.md` Step 4 ("Synthesize with NotebookLM") is intentionally not wired in — that step is an external-tool synthesis, not something the skill can automate.
 
@@ -144,10 +152,14 @@ Output JSON:
   "deep": {"ticker": "ASML.AS", "size": "big", "region": "NL", "sector": "Semiconductors", "round": 1},
   "screens": [
     {"ticker": "CELH", "size": "small_growth", "region": "US", ...},
-    {"ticker": "JMT.LS", "size": "big", "region": "PT", ...}
+    {"ticker": "JMT.LS", "size": "big", "region": "PT", ...},
+    {"ticker": "6702.T", "size": "big", "region": "JP", ...},
+    {"ticker": "0700.HK", "size": "big", "region": "HK", ...}
   ]
 }
 ```
+
+Os screens são 4: 1 big + 1 small_growth (qualquer região) + **2 garantidamente non-US** (`region != US`, qualquer size — foco deliberado em mercados fora dos EUA). Se o pool elegível tiver menos de 2 nomes non-US disponíveis, o script avisa em stderr e devolve os que houver.
 
 If any ticker has `round > 1`, the report gets a `🔁 Reavaliação #N` badge at the top and a link back to the prior evaluation.
 
@@ -184,7 +196,7 @@ Screens do NOT trigger industry cache checks.
 
 ### Phase 2 — Analyse each ticker (sequential, to avoid yfinance rate limits)
 
-For **each** of the 3 tickers (deep first, then 2 screens):
+For **each** of the 5 tickers (deep first, then the 4 screens):
 
 ```bash
 python "%SCRIPTS%\analyze_ticker.py" --ticker ASML.AS --mode deep
@@ -237,6 +249,21 @@ v2 output JSON (the ground truth — USE THESE NUMBERS):
 }
 ```
 
+### Phase 2.2 — Financial history + forecast (deep only, v3.1)
+
+Runs right after `analyze_ticker.py` for the deep ticker (needs its JSON for the consensus block):
+
+```bash
+python "%SCRIPTS%\financial_history.py" --ticker ASML.AS --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json"
+```
+
+- Fetches a quarterly EBITDA/FCF/revenue series (alvo 40 trimestres): Alpha Vantage para listings US (sem sufixo), yfinance fallback (~5-6 trimestres + série anual) para o resto. Cache `_fin_history/{TICKER}.json` (TTL 80 dias) — re-runs e re-avaliações não voltam à rede.
+- **AV budget**: 2 chamadas por deep; worst case diário (1 deep + 4 cascades) = 10 vs limite free de 25. Guard automático em `_fin_history/_av_budget.json` — a partir de 20 chamadas/dia o script salta AV e usa yfinance.
+- Forecast 4 trimestres (híbrido): receita interpolada do consensus (`revenue_estimate_current/next_year`) via seasonal split histórico × margem mediana trailing → EBITDA/FCF. Sem consensus (`analyst_count < 3`) → extrapolação de tendência, labelled. Menos de 4 trimestres de histórico → forecast suprimido (`forecast_suppressed_reason`).
+- Copiar `source` e `quarters_available` para o frontmatter (`fin_history_source`, `fin_history_quarters`).
+- Falha total → JSON `{"error": ...}`, chart skipped, nota no report. Non-fatal.
+- Screens NÃO correm esta phase.
+
 ### Phase 2.5 — Qualitative LLM pass (deep only)
 
 Runs in Claude's orchestration context. Skipped entirely for screens.
@@ -255,6 +282,16 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
 
 7. **Bear case** — derive `{BULL_THESIS}` from §2.1 + §2.9 + TL;DR thesis line; run `05_bear_case.md`. Parse the FINAL LINE `If {X} happens, the thesis is broken.` → `bear_case_trigger`. Full output → §2.15.
 
+7b. **Revenue segments (v3.1 — excepção documentada à ground-truth rule)** — se `_segments/{TICKER}.json` não existe ou tem >1 ano (`extracted_at`), extrair a tabela de segment revenue do annual report já fetched na Phase 4 (a nota de segmentos do 10-K traz 3 anos numa só tabela) e escrever:
+
+   ```json
+   {"fiscal_years": ["FY2023","FY2024","FY2025"], "currency": "USD",
+    "segments": [{"name": "...", "values": [x, y, z]}],
+    "source_url": "...", "extracted_at": "ISO"}
+   ```
+
+   para `%OUT_DIR%\_segments\{TICKER}.json`. **Esta é a ÚNICA situação em que números vêm do LLM** — porque nenhuma API free tem segment data. O chart e a §2.1 marcam sempre a origem ("company filings, LLM-extracted") + `source_url`. Sem filing disponível → não escrever JSON, chart skipped, `segments_available: false` + `⚠️ Segment data unavailable` na §2.1. Valores só da tabela oficial — nunca estimar nem interpolar.
+
 8. **Finalise composite**:
    
    ```bash
@@ -268,6 +305,21 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
    *(This is step 8 of Phase 2.5 — referenced from Phase 3's pre-condition below.)*
 
 If any Phase 2.5 step fails, log a warning and continue with what you have — the report degrades gracefully (missing section + `(assumption — evidence gap)` note), it does not abort.
+
+### Phase 2.6 — Macro snapshot (once per run, v3.1)
+
+Corre UMA vez por run (não por ticker), antes da Phase 5:
+
+```bash
+python "%SCRIPTS%\macro_snapshot.py" --check
+```
+
+- `stale: false` → o `_macro/{today}.md` existe; todos os reports do dia embedam dele. Nada mais a fazer.
+- `stale: true` → duas metades:
+  1. **Python**: `python "%SCRIPTS%\macro_snapshot.py" --fetch` → índices/VIX/yields/FX/commodities/BTC com Δ1d/Δ1w → `_macro/{today}.json`.
+  2. **LLM**: correr `prompts\macro_daily.md` com `{PYTHON_METRICS_JSON}` = o JSON acima, `{COUNTRY_TABLE_FRESH}` da directive, `{PREVIOUS_MACRO_MD}` = conteúdo do `fallback_md` (ou "none"). WebFetch para S&P 500 P/E / forward P/E / P/S / EV/EBITDA (multpl.com, WSJ, gurufocus — **fonte + data em cada número; "not available" antes de estimar**). Tabela country (US/EU/China/Japão: GDP, CPI, policy rate, unemployment) só re-fetch quando `country_table_fresh: no` (TTL 7 dias — são dados mensais); caso contrário copiar do anterior. Escrever `_macro/{today}.md` com frontmatter (`date`, `country_table_date`, `sources`).
+- **Degradação**: qualquer metade falha → reports embedam o `fallback_md` mais recente com `⚠️ macro snapshot stale ({N} days)`. A §4 nunca desaparece silenciosamente.
+- Cada report do dia grava `macro_cache_date` no frontmatter.
 
 ### Phase 3 — Render charts (deep only)
 
@@ -293,6 +345,9 @@ Produz em `OUT_DIR\IMG\`:
 - `YYYY-MM-DD_TICKER_radar.png` — radar 7 eixos (Fundamentals, Valuation, Moat, Peer, Growth, Management, Market)
 - `YYYY-MM-DD_TICKER_peers.png` — bar chart vs 3-5 peers
 - `YYYY-MM-DD_TICKER_dcf.png` — DCF fan chart bear/base/bull
+- `YYYY-MM-DD_TICKER_ebitda_fcf.png` — v3.1: EBITDA (barras) + FCF (linha) trimestral, profundidade real no título, forecast 4Q tracejado (lê `_fin_history/{TICKER}.json`; skip limpo se ausente)
+- `YYYY-MM-DD_TICKER_relperf.png` — v3.1: 30 meses normalizados a 100 — ticker vs benchmark regional (`BENCH_BY_SUFFIX`) vs sector SPDR ETF; anota fallback quando não há índice regional mapeado
+- `YYYY-MM-DD_TICKER_segments.png` — v3.1: revenue por segmento, 3 anos fiscais (lê `_segments/{TICKER}.json`; skip limpo se ausente)
 
 Screens não chamam este script.
 
@@ -382,6 +437,11 @@ combined_score: 8.28            # 0.6*fund + 0.4*tech ; omit when not run
 entry_zone: "1284.39–1514.60"   # omit when not run
 suggested_stop_loss: "1400.75–1429.21"  # [1.5xATR, 2xATR] ; omit when not run
 tech_risk_level: Med            # Low | Med | High ; omit when not run
+fin_history_source: alphavantage  # alphavantage | yfinance ; omit se financial_history falhou
+fin_history_quarters: 38          # profundidade real da série; omit se falhou
+segments_available: true          # false quando não há _segments/{TICKER}.json válido
+broker_reco: "XTB — €3.80 round-trip"  # só quando composite ≥ 7.0 E mercado coberto; omit caso contrário
+macro_cache_date: 2026-07-15      # data do _macro embed usado na §4
 schema_version: "2.2"
 ---
 ```
@@ -410,7 +470,29 @@ schema_version: "2.2"
 
 **Position-size guideline (deterministic — apply, don't improvise):** start from the verdict band — `great` ≥9.0 → core 4–6%; `invest` 7.5–8.9 → starter 1.5–3%, build to 4%; `review` 6.0–7.4 → watchlist only (0%, define a trigger); `fair`/`reject` → no position. Then shift **one band down** (core→starter, starter→watchlist) for each of: `management_flag: true`, `tech_risk_level: High`, `go_no_go: NO-GO`, `data_quality: suspect` — applied at most once in total, not cumulatively below watchlist. Conviction line: High = no downshift triggered and ≥6 gates; Low = any downshift triggered; Medium otherwise.
 
+> [!success] 💚 **Thesis**: **{bull case em 1-2 frases, bold — versão expandida da linha do TL;DR}**
+
+> [!danger] 🔴 **Risks**: **{risco #1 + bear trigger, bold — versão expandida da linha do TL;DR}**
+
+*(Estes dois callouts PROMOVEM a tese/risco visualmente. CRÍTICO: mantêm os labels literais `**Thesis**:` e `**Risks**:` — `build_dashboard.py`/`send_email.py`/`thesis_dashboard.py` fazem regex-match desses labels; as linhas do TL;DR ficam também intactas.)*
+
+### 📊 Metrics strip
+
+**P/E {pe_ttm}x · Forward P/E {forward_pe}x**
+
+| Rev CAGR 5y | FCF margin | FCF yield | ROE | ROIC | Gross margin | Net debt/EBITDA | Net payout | Price 1y | Price {5y ou "since {date}"} |
+|---|---|---|---|---|---|---|---|---|---|
+| {x}% | {x}% | {x}% | {x}% | {x}% | {x}% | {x}x | {x}% | {x}% | {x}% |
+
+(Fonte: bloco `top_strip` do analysis JSON — nunca recalcular à mão. Price returns são dividend-adjusted; quando `price_return_5y_span != "5y"`, o header da última coluna mostra "since {date}".)
+
+![EBITDA & FCF](IMG/{date}_{ticker}_ebitda_fcf.png)
+*EBITDA & FCF — {n} trimestres ({source}); forecast 4Q: {forecast basis} — derived estimate, not guidance. Omitir a imagem + caption se o chart foi skipped.*
+
 ![Price 1Y](IMG/{date}_{ticker}_price.png)
+
+![Relative 2.5y](IMG/{date}_{ticker}_relperf.png)
+*{1 linha: out/underperformance vs {benchmark} e vs sector proxy {ETF} nos últimos 30 meses.}*
 
 ## 1. Sumário executivo (5 min)
 ### Score breakdown
@@ -443,6 +525,9 @@ schema_version: "2.2"
 
 ### 2.1 Business model — money engine
 ({300-500 palavras a partir de prompts\01_business_model.md})
+
+![Revenue sources](IMG/{date}_{ticker}_segments.png)
+*Fontes de receita — 3 anos fiscais. Source: company filings (LLM-extracted) — verificar contra {source_url}. Omitir imagem + caption se `segments_available: false` (nesse caso escrever `⚠️ Segment data unavailable`).*
 
 **Money-flow Sankey** (obrigatório, no fim de §2.1) — Mermaid `sankey-beta` com Revenue → COGS / Gross Profit → R&D / SG&A / Other OpEx / Operating Income → Interest & Tax / Net Income → Dividends / Buybacks / Retained Earnings. Valores TTM em milhões da moeda de reporte (arredondar à centena). Sub-linhas em falta (e.g. R&D não disclosed) ficam marcadas `(not disclosed)` e o ramo é omitido — nunca inventar. Caption de uma linha após o diagrama, do tipo *"Cada euro de receita transforma-se em ~X% de net income; o maior dreno é {bucket} ({Y}%)."* Ver template completo em `prompts\01_business_model.md`.
 
@@ -602,6 +687,36 @@ Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 
 4. **What we're watching** — 2-3 monitorização concreta com números (e.g. "net margin holding >25% at Q3 print", ligada aos pillars e ao bear trigger).
 5. **When we'd walk away** — o bear trigger reformulado como instrução de saída.
 
+### 2.19 Broker recommendation (€1500)
+
+**Só quando `scores.composite ≥ 7.0`** — omitir a secção inteira caso contrário.
+
+Dados: `python "%SCRIPTS%\broker_compare.py" --small 1500 --out "%OUT_DIR%\_tmp\{date}_brokers1500.json"` (CLI já existente; correr 1x por run, reutilizar para todos os deeps do dia). Ler a linha do mercado do ticker via o mapa suffix→MARKET_KEY:
+
+| Sufixo | MARKET_KEY (brokers.yaml) |
+|--------|---------------------------|
+| (sem sufixo — US) | US |
+| .IR | IE |
+| .LS | PT |
+| .TW / .TWO | TW |
+| .HK | HK |
+| .T | JP |
+| .SZ | CN_SZ |
+
+Template da secção:
+
+```md
+| Broker | Custo round-trip (€1500) | Notas |
+|--------|--------------------------|-------|
+| **{cheapest}** ✅ | €{cost} | {fee breakdown 1 linha} |
+| {broker 2} | €{cost} | |
+| {broker 3} | €{cost} | |
+```
+
++ 1 linha: *"Para uma posição de ~€1500 em {exchange}, o broker mais barato é **{cheapest}** (€{cost} round-trip, {pct}% da posição)."* Escrever o resultado no frontmatter `broker_reco`.
+
+**Mercado não coberto** (sufixo fora da tabela — .AS/.PA/.DE/.L/etc.): a secção renderiza apenas `⚠️ {exchange} não coberto em brokers.yaml — sem comparação de brokers.` e `broker_reco` é omitido do frontmatter.
+
 ## 3. Links para ir mais fundo
 - 📘 [Annual report {year}]({annual_url}) — publicado {annual_date}
 - 📄 [Q{q} {year} report]({quarterly_url}) — publicado {quarterly_date}
@@ -612,6 +727,17 @@ Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 
 - 📊 [Simply Wall St]({sws_url})
 - 📊 [Seeking Alpha](https://seekingalpha.com/symbol/{TICKER_BASE})
 - 🌍 [Finviz](https://finviz.com/quote.ashx?t={TICKER_BASE})
+
+## 4. Macro context ({macro_cache_date})
+
+({Embed de ~15 linhas do `_macro/{date}.md`: tabela Markets today & this week + linha de S&P 500 valuation (P/E, fwd P/E, P/S, EV/EBITDA com fontes) + 2-3 frases do read-through. Não repetir a tabela country inteira — só o embed curto.})
+
+📂 Snapshot completo: [[_macro/{date}|Full macro snapshot]]
+
+{Se o snapshot de hoje falhou: embed do mais recente disponível + `⚠️ macro snapshot stale ({N} days)` — nunca omitir a secção silenciosamente.}
+
+---
+*Analysis written by {model name} · bsdias©2026*
 ```
 
 #### Screen body (versão curta — sem charts, sem narrativa pesada, sem §2.1/2.3/2.9/2.13/2.14/2.15/2.17)
@@ -626,6 +752,14 @@ Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 
 > **Thesis**: {1-line thesis}
 > **Risks**: {1-line risk}
 > **Action**: {explicit next step — e.g. "queue for deep-dive", "revisit after Q3 print", "pass — valuation"}
+
+**P/E {pe_ttm}x · Forward P/E {forward_pe}x**
+
+| Rev CAGR 5y | FCF margin | FCF yield | ROE | ROIC | Gross margin | Net debt/EBITDA | Net payout | Price 1y | Price {5y ou "since {date}"} |
+|---|---|---|---|---|---|---|---|---|---|
+| {x}% | {x}% | {x}% | {x}% | {x}% | {x}% | {x}x | {x}% | {x}% | {x}% |
+
+(Metrics strip do bloco `top_strip` — screens ganham SÓ isto do v3.1: sem charts, sem broker, sem macro embed.)
 
 ## 7-Gate checklist
 - {gate traffic lights, 1 linha cada}
@@ -646,6 +780,9 @@ Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 
 ## Links
 - [Yahoo Finance](https://finance.yahoo.com/quote/{TICKER}/)
 - [Stock Analysis](https://stockanalysis.com/stocks/{slug}/)
+
+---
+*Analysis written by {model name} · bsdias©2026*
 ```
 
 ### Phase 5.5 — Auto-cascade screen→deep on `invest` verdict
@@ -716,6 +853,8 @@ Se o email falhar (SMTP down, creds), log-only, não aborta o run.
 DEEP:    ASML.AS → score 8.7 🟢 INVEST (round 1, mgmt 8.5/10)
 SCREEN:  CELH    → score 7.1 🟡 REVIEW (round 1)
 SCREEN:  JMT.LS  → score 5.4 🟠 FAIR (round 1)
+SCREEN:  6702.T  → score 7.8 🟢 INVEST (round 1, non-US)
+SCREEN:  0700.HK → score 6.9 🟡 REVIEW (round 1, non-US)
 Industry cache: semiconductors (fresh, 12d old)
 Shortlist: +1 entry (ASML.AS). Total active: {N}.
 Email: deferred to bat wrapper (send_email.py runs after skill exits).
