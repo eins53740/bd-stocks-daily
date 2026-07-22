@@ -4,15 +4,17 @@ description: Daily stock evaluation — picks 5 tickers (1 deep + 4 screens, 2 o
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v4 wave-1, Phase B — scoring schema 2.2)
+# Daily Stock Evaluation (v4 wave-1, Phases A+B — scoring schema 2.2)
 
-Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 15 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.5 / 2.6 / 3.5 / 5.5 incluídas).
+Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 16 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.5 / 2.55 / 2.6 / 3.5 / 5.5 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
-**v3.1 (2026-07-15)** acrescenta ao report deep: série trimestral **EBITDA + FCF** com forecast 4Q híbrido (`financial_history.py`, Phase 2.2, cache `_fin_history/`), **metrics strip** no topo (bloco `top_strip` do analysis JSON; screens também), chart de **revenue sources** 3 anos (`_segments/`, excepção LLM documentada), chart **relative performance 30 meses** vs benchmark regional + sector ETF, tese/risco **promovidos em callouts coloridos** (labels de parser preservados), secção **§2.19 broker (€1500)** para composite ≥ 7.0, e secção **§4 macro** com cache diário `_macro/` (Phase 2.6, prompt `macro_daily.md`).
+**v3.1 (2026-07-15)** acrescenta ao report deep: série trimestral **EBITDA + FCF** com forecast 4Q híbrido (`financial_history.py`, Phase 2.2, cache `_fin_history/`), **metrics strip** no topo (bloco `top_strip` do analysis JSON; screens também), chart de **revenue sources** 3 anos (`_segments/`, excepção LLM documentada), chart **relative performance 30 meses** vs benchmark regional + sector ETF, tese/risco **promovidos em callouts coloridos** (labels de parser preservados), secção **§2.20 broker (€1500)** para composite ≥ 7.0, e secção **§4 macro** com cache diário `_macro/` (Phase 2.6, prompt `macro_daily.md`).
 
-**v4 wave-1 · Phase B (2026-07-22)** acrescenta ao deep a **valuation depth** (spec rev 3 §7, overlay-only): bandas P/E & P/S da própria história (`valuation_bands.py`, Phase 2.3), forward target FY+3 TIKR-style (target @ data + est. return + IRR), sensitivity table com margin-bear row, e o bloco de **intrinsic value 5-modelos com blend + margin-of-safety** (`intrinsic_value.py`). Composite v2.2 intocado; keys aditivas no analysis JSON (`valuation_bands`, `intrinsic_value`). Fases seguintes da wave 1 (A C D E G F) por construir.
+**v4 wave-1 · Phase B (2026-07-22)** acrescenta ao deep a **valuation depth** (spec rev 3 §7, overlay-only): bandas P/E & P/S da própria história (`valuation_bands.py`, Phase 2.3), forward target FY+3 TIKR-style (target @ data + est. return + IRR), sensitivity table com margin-bear row, e o bloco de **intrinsic value 5-modelos com blend + margin-of-safety** (`intrinsic_value.py`). Composite v2.2 intocado; keys aditivas no analysis JSON (`valuation_bands`, `intrinsic_value`).
+
+**v4 wave-1 · Phase A (2026-07-22)** acrescenta ao deep o **exit & thesis plan** (spec rev 3 §6, overlay-only): bloco `exit_plan` (`exit_plan.py`, Phase 2.55) com target exit P/E (mediana da banda própria, capped), fair-value range, **profit-take ladder** ancorada no fair value (+ rung de custo 2× só para tickers held — cost basis de `_portfolio_holdings.yaml`, NÃO BankBD: positions vazias, decisão 2026-07-22), thesis-broken trigger, ATR context (OFF by default) e **yield-on-cost**; chart dual-axis **Net Income vs P/E** (`ni_pe.png`, série `pe_band.series` + `annual.net_income` novos); secção §2.12 no report + linha `Exit:` no TL;DR. Fases seguintes da wave 1 (C D E G F) por construir.
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
@@ -21,7 +23,7 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 
 ## Ground-truth rule (CRITICAL)
 
-**Números estruturados (revenue, P/E, margins, ROE, debt, prices) — SEMPRE de Python helpers (yfinance/stockanalysis).** Nunca extrair números de 10-K / 10-Q via WebFetch. LLM só compõe narrativa (tese, riscos, guidance management, management quality score qualitativo). Se precisares de um número, chama o helper. Qualquer secção qualitativa (§2.1, 2.3, 2.7, 2.11, 2.12, 2.14) deve citar números a partir da JSON da Phase 2 — **nunca inventar**.
+**Números estruturados (revenue, P/E, margins, ROE, debt, prices) — SEMPRE de Python helpers (yfinance/stockanalysis).** Nunca extrair números de 10-K / 10-Q via WebFetch. LLM só compõe narrativa (tese, riscos, guidance management, management quality score qualitativo). Se precisares de um número, chama o helper. Qualquer secção qualitativa (§2.1, 2.3, 2.7, 2.11, 2.13, 2.15) deve citar números a partir da JSON da Phase 2 — **nunca inventar**.
 
 **Duas excepções documentadas (v3.1), ambas com fonte + data obrigatórias em cada número:**
 1. **Revenue segments** (Phase 2.5 step 7b) — nenhuma API free tem segment data; o LLM extrai a tabela oficial de segmentos do annual report para `_segments/{TICKER}.json`, sempre marcado "company filings (LLM-extracted)" + `source_url`.
@@ -97,8 +99,8 @@ Source-framework lineage (the two reference docs at `OneDrive/Ambiente de Trabal
 | `03a_growth_decomposition.md`    | `5_step_system.md` Step 3 Part A                               | Volume/price/M&A; structural vs temporary                                    | §2.7 part A              |
 | `03b_constraints.md`             | `5_step_system.md` Step 3 Part B                               | Theory of Constraints bottleneck                                             | §2.7 part B              |
 | `03c_growth_assumption_check.md` | `5_step_system.md` Step 3 Part C                               | Supported / Weakly / Not supported                                           | §2.7 part C              |
-| `04_risk_audit.md`               | `5_step_system.md` Step 4                                      | 3 layers + leading indicators                                                | §2.11                    |
-| `05_bear_case.md`                | `5_step_system.md` Step 5                                      | "If X happens, thesis is broken."                                            | §2.12                    |
+| `04_risk_audit.md`               | `5_step_system.md` Step 4                                      | 3 layers + leading indicators                                                | §2.14                    |
+| `05_bear_case.md`                | `5_step_system.md` Step 5                                      | "If X happens, thesis is broken."                                            | §2.16                    |
 | `industry_macro.md`              | `ai_industry_analysis_framework.md` Step 1                     | Market, value chain, players, disruption                                     | `_industry/<slug>.md` §1 |
 | `industry_customer.md`           | `ai_industry_analysis_framework.md` Step 2                     | Buyer journey, switching costs                                               | `_industry/<slug>.md` §2 |
 | `industry_architecture.md`       | `ai_industry_analysis_framework.md` Step 3                     | Winning models, moats, top-15 KPIs                                           | `_industry/<slug>.md` §3 |
@@ -136,7 +138,7 @@ Output JSON:
 }
 ```
 
-Status values: `intact` / `weakened` / `broken`. **Surface the status in the TL;DR** as `Thesis status (round {N}): {emoji} {overall_status}`. If `broken`, the report gets a 🚨 banner at the top and §2.15 (Bear case) opens with the broken pillar.
+Status values: `intact` / `weakened` / `broken`. **Surface the status in the TL;DR** as `Thesis status (round {N}): {emoji} {overall_status}`. If `broken`, the report gets a 🚨 banner at the top and §2.16 (Bear case) opens with the broken pillar.
 
 The script reads the prior `_log.csv` row and prior report frontmatter for the comparison baseline; no LLM call.
 
@@ -208,7 +210,7 @@ python "%SCRIPTS%\analyze_ticker.py" --ticker ASML.AS --mode deep
 
 - `earnings_today: true` → material event risk within hours. For the **deep** ticker, pick a replacement manually from `_prefiltered.yaml` (same `size` bucket, not in the 183-day dedupe window per `_log.csv`) and re-run `analyze_ticker.py` on it; do NOT re-run `pick_candidates.py` — it's date-seeded and will return the same ticker. For a **screen** ticker, annotate the screen report with an explicit "⚠️ Earnings today" banner and keep going (cheaper to note than to re-pick).
 - `dcf_valid: false` → **do not quote `dcf_intrinsic` as a price target anywhere in the narrative.** The `dcf_reason` field explains why the model can't be trusted (negative FCF, TTM/annual divergence, or |upside|>70% sanity trip). Section 2.11 should reference the reason verbatim and mark the intrinsic as "not meaningful".
-- `score_details.peer_info.peers_source` → `by_ticker` means a precise sub-industry peer set was used; `by_industry` means yfinance's industry bucket; `by_sector` is a coarse fallback; `none` means no peers and the peer score is a neutral 5.0 placeholder. Mention the source in §2.10 so the reader can calibrate trust in the ranking.
+- `score_details.peer_info.peers_source` → `by_ticker` means a precise sub-industry peer set was used; `by_industry` means yfinance's industry bucket; `by_sector` is a coarse fallback; `none` means no peers and the peer score is a neutral 5.0 placeholder. Mention the source in §2.13 (peer comparison) so the reader can calibrate trust in the ranking.
 - `fundamentals.revenue_cagr_basis` → `5y_financials` / `4y_financials` / `3y_financials` / `3y_income_stmt` / `1y_yoy_fallback` / `unavailable`. v2.1+ tolerates NaN years and short series. When basis is `1y_yoy_fallback`, mention it in §2.9 (Growth decomposition) so the reader knows the CAGR is a single-year proxy, not a multi-year trend.
 - `data_quality` → `ok` / `corrected` / `suspect` (3 validation layers).
   - **`corrected`** → Layer 2 self-healed a stale `info` price using `history()`'s last close (and recomputed `market_cap`). Read `corrected_fields` for what changed — the numbers in the JSON are already the FIXED ones, safe to use. This auto-fixes the CMO.MC €8.49→€38 class. Add a small "ℹ️ price auto-corrected from history()" note.
@@ -294,11 +296,11 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
 
 4. **Growth decomposition & constraints** — run `03a_growth_decomposition.md`, then `03b_constraints.md` with 03a's output, then `03c_growth_assumption_check.md`. Combined output → §2.9.
 
-5. **3-Layer Risk Audit** — run `04_risk_audit.md`. Output → §2.13.
+5. **3-Layer Risk Audit** — run `04_risk_audit.md`. Output → §2.14.
 
-6. **Consensus color** (Borja #18) — 1 short paragraph reconciling the deep-dive verdict with the `consensus` JSON block (recommendation key, target mean/range, EPS/revenue estimates). Skip entirely if `analyst_count < 3`. Output → §2.14.
+6. **Consensus color** (Borja #18) — 1 short paragraph reconciling the deep-dive verdict with the `consensus` JSON block (recommendation key, target mean/range, EPS/revenue estimates). Skip entirely if `analyst_count < 3`. Output → §2.15.
 
-7. **Bear case** — derive `{BULL_THESIS}` from §2.1 + §2.9 + TL;DR thesis line; run `05_bear_case.md`. Parse the FINAL LINE `If {X} happens, the thesis is broken.` → `bear_case_trigger`. Full output → §2.15.
+7. **Bear case** — derive `{BULL_THESIS}` from §2.1 + §2.9 + TL;DR thesis line; run `05_bear_case.md`. Parse the FINAL LINE `If {X} happens, the thesis is broken.` → `bear_case_trigger`. Full output → §2.16. **Keep the parsed trigger at hand — Phase 2.55 receives it via `--bear-trigger`.**
 
 7b. **Revenue segments (v3.1 — excepção documentada à ground-truth rule)** — se `_segments/{TICKER}.json` não existe ou tem >1 ano (`extracted_at`), extrair a tabela de segment revenue do annual report já fetched na Phase 4 (a nota de segmentos do 10-K traz 3 anos numa só tabela) e escrever:
 
@@ -323,6 +325,22 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
    *(This is step 8 of Phase 2.5 — referenced from Phase 3's pre-condition below.)*
 
 If any Phase 2.5 step fails, log a warning and continue with what you have — the report degrades gracefully (missing section + `(assumption — evidence gap)` note), it does not abort.
+
+### Phase 2.55 — Exit & thesis plan (deep only, v4 Phase A)
+
+Corre DEPOIS da Phase 2.5 (recebe o `bear_case_trigger` fresco do step 7 — nunca persiste um placeholder) e antes da Phase 2.6. Zero chamadas de rede:
+
+```bash
+python "%SCRIPTS%\exit_plan.py" --ticker ASML.AS --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update --bear-trigger "{bear_case_trigger}" [--thesis-status {overall_status}]
+```
+
+- **Overlay-only**: `--update` acrescenta a key aditiva `exit_plan` ao analysis JSON (schema continua 2.2; composite intocado).
+- **Inputs** (tudo já no JSON ou em ficheiros locais): `target_exit_pe` = `justified_exit_pe(pe_band)` (mediana capped no máx — regra Phase B); `fair_value_range` do bloco `intrinsic_value`; **profit-take ladder** ancorada no fair value (trim ⅓ @ fair-high, trim ⅓ @ fair-high × 1.5, hold ⅓) + **rung de custo 2×** apenas quando o ticker está **held**.
+- **Cost basis & held detection**: `_portfolio_holdings.yaml` (`holdings[].avg_cost`, moeda nativa) — a fonte mantida pelo `/bd-stocks-portfolio`. **NÃO BankBD** (positions table vazia; decisão 2026-07-22). Alias `SHEL.L → SHELL.AS`. **Currency guard por labels**: rescale só GBp/GBX↔GBP (×0.01/×100); qualquer outro mismatch (e.g. cost em TWD, análise em USD) ⇒ cost rung + yield-on-cost "not computable (currency mismatch)" — nunca dividir entre moedas nem usar heurística de rácio de preços (corromperia o cost basis de um 100×).
+- **`yield_on_cost`** = `dividend_rate ÷ avg_cost` (held equity only; `dividend_rate` None/0 ⇒ "no dividend"); não-held ⇒ `"n/a (not held)"` verbatim; crypto/non-equity ⇒ sem rung de custo nem yield.
+- **`thesis_broken_trigger`**: `--bear-trigger` (fresco) → fallback última linha `bear_case_trigger` no `_log.csv` → null + warning. `--thesis-status` = `overall_status` do thesis_check (round>1).
+- **`atr_context`**: lê `_technical/{TICKER}.json` se existir; **sempre `enabled: false`** — um compounder aguenta drawdowns normais de 30-40%; trailing stops pertencem ao growth skill. Sem ficheiro ⇒ `available: false`.
+- Falha total → `{"error": ...}` + exit 0; a §2.12 degrada para nota "exit plan unavailable". Screens NÃO correm esta phase.
 
 ### Phase 2.6 — Macro snapshot (once per run, v3.1)
 
@@ -364,6 +382,7 @@ Produz em `OUT_DIR\IMG\`:
 - `YYYY-MM-DD_TICKER_peers.png` — bar chart vs 3-5 peers
 - `YYYY-MM-DD_TICKER_dcf.png` — DCF fan chart bear/base/bull
 - `YYYY-MM-DD_TICKER_ebitda_fcf.png` — v3.1: EBITDA (barras) + FCF (linha) trimestral, profundidade real no título, forecast 4Q tracejado (lê `_fin_history/{TICKER}.json`; skip limpo se ausente)
+- `YYYY-MM-DD_TICKER_ni_pe.png` — v4 Phase A: net income anual (barras) vs P/E da própria história (linha, eixo direito) — join por ano fiscal; precisa de `annual.net_income` (fin_history) + `pe_band.series` (valuation_bands); skip limpo se faltar um dos lados
 - `YYYY-MM-DD_TICKER_relperf.png` — v3.1: 30 meses normalizados a 100 — ticker vs benchmark regional (`BENCH_BY_SUFFIX`) vs sector SPDR ETF; anota fallback quando não há índice regional mapeado
 - `YYYY-MM-DD_TICKER_segments.png` — v3.1: revenue por segmento, 3 anos fiscais (lê `_segments/{TICKER}.json`; skip limpo se ausente)
 
@@ -486,6 +505,7 @@ schema_version: "2.2"
 > **Thesis**: {1-line bull case}
 > **Risks**: {2-3 key risks}
 > **Bear trigger**: {bear_case_trigger}
+> **Exit**: {1 linha do bloco `exit_plan`, e.g. "trim ⅓ @ {fair_high} / ⅓ @ {fair_high×1.5}; exit P/E {target_exit_pe}; broken if {trigger curto}" — held: acrescentar "YoC {yield_on_cost}%"; omitir a linha se o exit_plan falhou}
 > **Action**: {explicit next step}
 > **Position size**: {sizing band da tabela abaixo, e.g. "Starter 1.5–3% of equity book; build to 4% on execution"} — always end with "(guideline, not advice)"
 > **Entry plan**: {se GO + entry_zone: "accumulate inside {entry_zone}; invalidation below {stop_loss}"; se NO-GO: "thesis ok, timing not — wait for {condição concreta}"; se sem tech read: "no timing read — size entry in thirds"}
@@ -698,7 +718,35 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 
 {Se a Phase 2.3 falhou por completo: manter apenas o bloco (e) como na v3.1 + nota "valuation depth unavailable".}
 
-### 2.12 Peer comparison
+### 2.12 Plano de saída (Exit plan) — v4 Phase A
+
+(Do bloco `exit_plan` — números do Python, narrativa só a ligar. **Overlay-only: nunca altera o veredicto.**)
+
+**Sell discipline** ({held ? "posição actual: {quantity} sh @ {avg_cost} {holding.currency}" : "não held — plano hipotético"}):
+
+| Elemento | Valor | Base |
+|---|---|---|
+| Target exit P/E | **{target_exit_pe.value}×** | mediana da banda própria ({depth_years}y), capped no máx |
+| Fair value range | {low} / {mid} / **{high}** {currency} | {fair_value_range.basis} |
+| Trim ⅓ | **{ladder[0].trigger_price} {currency}** | fair-value high |
+| Trim ⅓ | **{ladder[1].trigger_price} {currency}** | fair-value high × 1.5 |
+| Hold ⅓ | — | run winners; re-avaliar em thesis break |
+| {held: Cost 2×} | {trigger_price} {currency} | 2× cost (held) |
+| {held: Yield on cost} | {yield_on_cost.pct}% | dividend_rate / avg_cost — o argumento para aguentar drawdowns |
+
+**Tese quebrada se**: {thesis_broken_trigger.text} *(ver §2.16; pillars: {pillars_status})*
+
+{atr_context.available: 1 linha — "Contexto ATR(14): {atr} ({atr_pct}%), stop sugerido {suggested_stop_loss} — **contexto apenas, OFF by default**: a disciplina de saída é fundamental (P/E + tese), não um trailing stop."}
+
+![Net income vs P/E](IMG/{date}_{ticker}_ni_pe.png)
+*Net income anual vs P/E da própria história — earnings a subir com multiple a descer = re-rating pendente; o inverso = multiple expansion sem earnings. Omitir imagem + caption se o chart foi skipped.*
+
+{yield_on_cost.reason quando não computável: mostrar a razão verbatim (e.g. "n/a (not held)") em vez das linhas held.}
+{Se o bloco `exit_plan` falhou/ausente: "⚠️ exit plan unavailable" e nada mais.}
+
+*A carta do adviser (§2.19, "When we'd walk away") é a versão narrativa desta disciplina — os números vivem aqui.*
+
+### 2.13 Peer comparison
 | Métrica | {ticker} | Peer 1 | Peer 2 | Peer 3 | Peer 4 | Median | Ranking |
 |---------|----------|--------|--------|--------|--------|--------|---------|
 | P/E | ... | ... | ... | ... | ... | ... | **{N/5}** |
@@ -711,10 +759,10 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 **Strengths vs peers**: bullet list, 2-4 items.
 **Weaknesses vs peers**: bullet list, 2-4 items.
 
-### 2.13 3-Layer Risk Audit
+### 2.14 3-Layer Risk Audit
 ({Ranked risk tables + narrative a partir de prompts\04_risk_audit.md. Três sub-secções: Operational / Financial / Structural. AI Disruption callout no fim.})
 
-### 2.14 Consensus & sell-side ("O que a rua pensa") (Borja #18)
+### 2.15 Consensus & sell-side ("O que a rua pensa") (Borja #18)
 (From `consensus` JSON block — yfinance only, no paywalled feed. Closes Borja factor #18 without subscribing to a service.)
 
 | Métrica | Valor |
@@ -729,16 +777,16 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 
 **Color** (1 short paragraph, LLM, with `_style_rules.md` appended): is consensus directionally aligned with the verdict and bear case? Where does the deep-dive disagree with the street, and why? Label inferred claims `(inferred)`. Skip the paragraph entirely if `analyst_count < 3` — note "thin coverage" instead.
 
-### 2.15 Bear case — "If X happens, thesis is broken."
+### 2.16 Bear case — "If X happens, thesis is broken."
 ({400-600 palavras a partir de prompts\05_bear_case.md. A última linha é o trigger que vai para frontmatter.})
 
-### 2.16 Market timing detalhado
+### 2.17 Market timing detalhado
 ({VIX histórico, put/call trend, FGI breakdown — discussão curta})
 
-### 2.17 Operator vs Investor view
+### 2.18 Operator vs Investor view
 ({2 short paragraphs — Operator lens (execução, bottlenecks) e Investor lens (profit pools, moats). Cross-cutting summary destilado das secções anteriores.})
 
-### 2.18 Veredicto final — Adviser's letter
+### 2.19 Veredicto final — Adviser's letter
 Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 1-3 frases, sem headers):
 
 1. **The call** — {verdict_label} + conviction, em linguagem corrente ("This is a business we'd own; the price is the problem").
@@ -747,7 +795,7 @@ Escrever como uma carta curta de um senior adviser ao cliente (5 parágrafos de 
 4. **What we're watching** — 2-3 monitorização concreta com números (e.g. "net margin holding >25% at Q3 print", ligada aos pillars e ao bear trigger).
 5. **When we'd walk away** — o bear trigger reformulado como instrução de saída.
 
-### 2.19 Broker recommendation (€1500)
+### 2.20 Broker recommendation (€1500)
 
 **Só quando `scores.composite ≥ 7.0`** — omitir a secção inteira caso contrário.
 
@@ -800,7 +848,7 @@ Template da secção:
 *Analysis written by {model name} · bsdias©2026*
 ```
 
-#### Screen body (versão curta — sem charts, sem narrativa pesada, sem §2.1/2.3/2.9/2.13/2.14/2.15/2.17)
+#### Screen body (versão curta — sem charts, sem narrativa pesada, sem §2.1/2.3/2.9/2.12/2.14/2.15/2.16/2.18)
 
 ```md
 # {TICKER} — {Company} — Score: {score}/10 {emoji} {verdict_label}

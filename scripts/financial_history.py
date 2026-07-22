@@ -115,6 +115,18 @@ def cache_is_fresh(fetched_at_iso: str, now_iso: str, ttl_days: int = TTL_DAYS) 
     return (now - fetched) <= timedelta(days=ttl_days)
 
 
+def cache_has_net_income(cached: dict | None) -> bool:
+    """Whether a cached output already carries the annual net_income series
+    (added in v4 Phase A). Key presence, not values — a ticker whose statements
+    genuinely lack net income caches a list of Nones and stays fresh. Pre-Phase-A
+    caches lack the key and must be treated as stale even inside the TTL,
+    otherwise the NI-vs-P/E chart silently skips for ~80 days."""
+    if not isinstance(cached, dict):
+        return False
+    annual = cached.get("annual")
+    return isinstance(annual, dict) and "net_income" in annual
+
+
 def av_budget_allows(budget: dict, today_iso: str, limit: int = AV_DAILY_LIMIT) -> bool:
     """Whether another Alpha Vantage call is allowed under the daily budget.
 
@@ -299,11 +311,14 @@ def _quarter_series(records: list) -> dict:
 
 
 def _annual_series(records: list) -> dict:
+    # net_income via .get(): older/partial records without the key (pre-Phase A
+    # caches, thin non-US statements) must map to None, never KeyError.
     return {
         "labels": [f"FY{r['date'][:4]}" for r in records],
         "revenue": [r["revenue"] for r in records],
         "ebitda": [r["ebitda"] for r in records],
         "fcf": [r["fcf"] for r in records],
+        "net_income": [r.get("net_income") for r in records],
     }
 
 
@@ -432,7 +447,8 @@ def _av_annual_records(annual_income: list, acf_by_date: dict) -> list:
             capex = _av_num(cf.get("capitalExpenditures"))
             if ocf is not None and capex is not None:
                 fcf = ocf - capex
-        records.append({"date": d, "revenue": rev, "ebitda": ebitda, "fcf": fcf})
+        records.append({"date": d, "revenue": rev, "ebitda": ebitda, "fcf": fcf,
+                        "net_income": _av_num(r.get("netIncome"))})
     records.sort(key=lambda r: r["date"])
     return records[-6:]
 
@@ -539,6 +555,7 @@ def _yf_records(fin_df, cf_df) -> list:
         return []
     rev_row = _row(fin_df, ["Total Revenue"])
     ebitda_row = _row(fin_df, ["EBITDA", "Normalized EBITDA"])
+    ni_row = _row(fin_df, ["Net Income", "Net Income Common Stockholders"])
     fcf_row = _row(cf_df, ["Free Cash Flow"])
     ocf_row = _row(cf_df, ["Operating Cash Flow"])
     capex_row = _row(cf_df, ["Capital Expenditure"])
@@ -555,7 +572,8 @@ def _yf_records(fin_df, cf_df) -> list:
                 # yfinance reports Capital Expenditure as a negative cash outflow,
                 # so free cash flow = operating cash flow + capex.
                 fcf = ocf + capex
-        records.append({"date": d, "revenue": rev, "ebitda": ebitda, "fcf": fcf})
+        records.append({"date": d, "revenue": rev, "ebitda": ebitda, "fcf": fcf,
+                        "net_income": _cell(ni_row, col)})
     records.sort(key=lambda r: r["date"])
     return records
 
@@ -701,7 +719,8 @@ def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> d
 
     if not force:
         cached = read_cache(cache_path)
-        if cached and cache_is_fresh(cached.get("fetched_at", ""), now_iso, TTL_DAYS):
+        if (cached and cache_is_fresh(cached.get("fetched_at", ""), now_iso, TTL_DAYS)
+                and cache_has_net_income(cached)):
             # A fresh cache serves the historical series verbatim (no network), but
             # the forecast can go stale well inside the 80-day TTL. If a fresh
             # consensus was supplied, recompute the forecast from the cached series

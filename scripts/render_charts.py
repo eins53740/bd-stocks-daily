@@ -7,6 +7,7 @@ Produces PNGs in C:\BD_Obsidian\Personal\Finance\StocksDaily\IMG\:
  - {date}_{ticker}_peers.png      : peer comparison bar (placeholder if peer_info not provided)
  - {date}_{ticker}_dcf.png        : DCF bear/base/bull fan
  - {date}_{ticker}_ebitda_fcf.png : EBITDA bars + FCF line with forecast tail (from _fin_history/)
+ - {date}_{ticker}_ni_pe.png      : annual net income bars vs own-history P/E line (v4 Phase A)
  - {date}_{ticker}_relperf.png    : 2.5y relative performance vs region index + sector ETF
  - {date}_{ticker}_segments.png   : revenue-by-segment grouped bars (from _segments/)
 
@@ -420,6 +421,77 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
         return False
 
 
+def chart_net_income_vs_pe(fin_history: dict, valuation_bands: dict,
+                           ticker: str, out_path: Path) -> bool:
+    """Dual-axis exit-plan chart (v4 Phase A, "USAR Gráfico"): annual net income
+    as bars (left axis) vs the own-history P/E as a line (right axis).
+
+    NI comes from fin_history["annual"] (FY labels), P/E from
+    valuation_bands["pe_band"]["series"] ([{year, pe}]). The two are joined ON
+    THE YEAR LABEL — fiscal-year ends differ between the sources (EPS records
+    use fiscalDateEnding), so positional alignment would silently shift
+    non-calendar-FY names. Years missing from either side are drawn with just
+    the side they have. Missing/empty input -> False (chart skipped).
+    """
+    try:
+        if not isinstance(fin_history, dict):
+            return False
+        annual = fin_history.get("annual") or {}
+        labels = list(annual.get("labels") or [])
+        ni_vals = list(annual.get("net_income") or [])
+        currency = fin_history.get("currency", "")
+
+        ni_by_year = {}
+        for lbl, v in zip(labels, ni_vals):
+            digits = "".join(ch for ch in str(lbl) if ch.isdigit())
+            if digits and v is not None:
+                ni_by_year[int(digits)] = float(v)
+
+        pe_series = ((valuation_bands or {}).get("pe_band") or {}).get("series") or []
+        pe_by_year = {int(p["year"]): float(p["pe"]) for p in pe_series
+                      if isinstance(p, dict) and p.get("year") is not None
+                      and p.get("pe") is not None}
+
+        if not ni_by_year or not pe_by_year:
+            log("ni_pe chart: missing net-income or P/E series")
+            return False
+
+        years = sorted(set(ni_by_year) | set(pe_by_year))
+        xs = list(range(len(years)))
+        ni = [ni_by_year.get(y, float("nan")) for y in years]
+        pe = [pe_by_year.get(y, float("nan")) for y in years]
+
+        fig, ax_ni = plt.subplots(figsize=(12, 5))
+        ax_ni.bar(xs, ni, color="#1f77b4", alpha=0.8, width=0.6,
+                  label=f"Net income (annual, {currency})")
+        ax_ni.set_ylabel(f"Net income ({currency})")
+        ax_ni.yaxis.set_major_formatter(FuncFormatter(_money_fmt))
+        ax_ni.axhline(0, color="#888", linewidth=0.8)
+        ax_ni.grid(True, alpha=0.3, axis="y")
+
+        ax_pe = ax_ni.twinx()
+        ax_pe.plot(xs, pe, color="#d62728", marker="o", linewidth=1.8,
+                   label="P/E (FY mean price / EPS)")
+        ax_pe.set_ylabel("P/E (×)", color="#d62728")
+        ax_pe.tick_params(axis="y", labelcolor="#d62728")
+
+        ax_ni.set_xticks(xs)
+        ax_ni.set_xticklabels([f"FY{y}" for y in years], rotation=45, ha="right", fontsize=8)
+        ax_ni.set_title(f"{ticker} — Net income vs own-history P/E",
+                        fontsize=13, fontweight="bold")
+        lines_ni, labels_ni = ax_ni.get_legend_handles_labels()
+        lines_pe, labels_pe = ax_pe.get_legend_handles_labels()
+        ax_ni.legend(lines_ni + lines_pe, labels_ni + labels_pe,
+                     loc="upper left", fontsize=8)
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=100, bbox_inches="tight")
+        plt.close()
+        return True
+    except Exception as e:
+        log(f"ni_pe chart fail: {e}")
+        return False
+
+
 def chart_relperf(ticker: str, region_suffix_bench: str, sector: str | None, out_path: Path) -> bool:
     """2.5y relative performance: the ticker vs its region index vs the US sector
     SPDR ETF, each normalized to 100 at the common start date. Region index is
@@ -665,6 +737,14 @@ def main() -> int:
             log(f"fin_history load fail: {e}")
     results["ebitda_fcf"] = (
         chart_ebitda_fcf(fin_hist, img_dir / f"{stem}_ebitda_fcf.png") if fin_hist else False
+    )
+
+    # NI vs P/E — exit-plan chart (v4 Phase A). Needs the fin_history annual
+    # net_income series AND the pe_band.series persisted by valuation_bands.
+    results["ni_pe"] = (
+        chart_net_income_vs_pe(fin_hist, data.get("valuation_bands") or {},
+                               args.ticker, img_dir / f"{stem}_ni_pe.png")
+        if fin_hist else False
     )
 
     # Relative performance — sector from the analysis JSON, suffix from the ticker.

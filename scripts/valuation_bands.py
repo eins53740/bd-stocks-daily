@@ -117,6 +117,17 @@ def band_stats(series: list, current, source: str) -> dict:
     }
 
 
+def pe_series_records(eps_records: list, pe_series: list) -> list:
+    """[{year, pe}] pairs for the persisted band series (Phase A NI-vs-P/E
+    chart), keeping only usable positive ratios. `pe_series` is aligned 1:1
+    with `eps_records`; an emptied (degraded) series yields []."""
+    return [
+        {"year": int(r["date"][:4]), "pe": round(v, 2)}
+        for r, v in zip(eps_records, pe_series)
+        if v is not None and v > 0
+    ]
+
+
 def justified_exit_pe(pe_band: dict | None) -> float | None:
     """The justified exit multiple for forward targets: the band MEDIAN capped
     at the band max. The median, not the mean — transition years with near-zero
@@ -488,6 +499,10 @@ def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> d
         warnings.append(f"P/E band degraded: {msg}")
     elif msg:
         warnings.append(f"P/E band: {msg}")
+    # Persist the per-year series for the Phase A NI-vs-P/E chart. Placed after
+    # the mismatch degradation (pe_series is emptied there) so a degraded band
+    # never ships a garbage series. Additive key; parsers tolerate absence.
+    pe_band["series"] = pe_series_records(eps_records, pe_series)
     if pe_band["depth_years"] < 5:
         warnings.append(f"P/E band shallow: {pe_band['depth_years']}y "
                         f"(source {eps_source}; expected on non-US names)")

@@ -16,8 +16,11 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from financial_history import (  # noqa: E402
+    _annual_series,
+    _av_annual_records,
     av_budget_allows,
     build_forecast,
+    cache_has_net_income,
     cache_is_fresh,
     median_margin,
     next_quarter_label,
@@ -210,7 +213,7 @@ def test_cache_hit_recomputes_forecast_from_supplied_consensus(tmp_path):
             "ebitda": [r * 0.30 for r in rev],
             "fcf": [r * 0.20 for r in rev],
         },
-        "annual": {"labels": [], "revenue": [], "ebitda": [], "fcf": []},
+        "annual": {"labels": [], "revenue": [], "ebitda": [], "fcf": [], "net_income": []},
         "forecast": {
             "labels": ["2026Q1", "2026Q2", "2026Q3", "2026Q4"],
             "revenue": [180, 190, 200, 210],
@@ -264,7 +267,7 @@ def test_cache_hit_without_analysis_json_keeps_forecast(tmp_path):
             "ebitda": [r * 0.30 for r in rev],
             "fcf": [r * 0.20 for r in rev],
         },
-        "annual": {"labels": [], "revenue": [], "ebitda": [], "fcf": []},
+        "annual": {"labels": [], "revenue": [], "ebitda": [], "fcf": [], "net_income": []},
         "forecast": {"labels": ["2026Q1"], "revenue": [180], "ebitda": [54],
                      "fcf": [36], "basis": "trend_extrapolation_no_consensus"},
         "forecast_suppressed_reason": None,
@@ -293,3 +296,45 @@ def test_quarter_label_from_date():
     assert quarter_label_from_date("2016-07-31") == "2016Q3"
     assert quarter_label_from_date("2016-01-31") == "2016Q1"
     assert quarter_label_from_date("2016-12-31") == "2016Q4"
+
+
+# ------------------------------------------------- net_income (v4 Phase A)
+def test_annual_series_carries_net_income_and_tolerates_missing_key():
+    records = [
+        {"date": "2023-12-31", "revenue": 100, "ebitda": 30, "fcf": 20, "net_income": 15},
+        {"date": "2024-12-31", "revenue": 110, "ebitda": 33, "fcf": 22},  # pre-Phase-A record
+    ]
+    s = _annual_series(records)
+    assert s["net_income"] == [15, None]
+    assert s["labels"] == ["FY2023", "FY2024"]
+
+
+def test_av_annual_records_extract_net_income():
+    annual_income = [{
+        "fiscalDateEnding": "2025-07-31", "totalRevenue": "53800000000",
+        "ebitda": "18000000000", "netIncome": "9900000000",
+    }]
+    records = _av_annual_records(annual_income, {})
+    assert records[0]["net_income"] == 9.9e9
+
+
+def test_av_annual_records_net_income_none_string():
+    records = _av_annual_records(
+        [{"fiscalDateEnding": "2025-12-31", "totalRevenue": "100", "netIncome": "None"}], {})
+    assert records[0]["net_income"] is None
+
+
+def test_cache_has_net_income_key_presence_not_values():
+    assert cache_has_net_income({"annual": {"net_income": [None, None]}}) is True
+    assert cache_has_net_income({"annual": {"labels": [], "revenue": []}}) is False
+    assert cache_has_net_income({}) is False
+    assert cache_has_net_income(None) is False
+
+
+def test_pre_phase_a_cache_is_treated_as_stale():
+    """A fresh-TTL cache without annual.net_income must not be served verbatim —
+    otherwise the NI-vs-P/E chart silently skips for the whole 80-day TTL."""
+    cached = {"fetched_at": datetime.now().isoformat(),
+              "annual": {"labels": ["FY2024"], "revenue": [1], "ebitda": [1], "fcf": [1]}}
+    assert cache_is_fresh(cached["fetched_at"], datetime.now().isoformat()) is True
+    assert cache_has_net_income(cached) is False  # → run() refetches
