@@ -29,7 +29,7 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 | 2.2 | **Financial history** — quarterly EBITDA/FCF series (AV/yfinance, `_fin_history/` cache) + hybrid 4Q forecast | deep |
 | 2.3 | **Valuation depth (v4-B)** — own-history P/E & P/S bands, FY+3 forward target + IRR, sensitivity, 5-model intrinsic blend + MoS | deep |
 | 2.5 | LLM narrative — business model, management score, growth, 3-layer risk, bear case, revenue segments → finalize composite | deep |
-| 2.6 | **Macro snapshot** — indices/valuation/country cache `_macro/{date}.md` | once per run |
+| 2.6 | **Macro §8 snapshot** — indices/valuation-vs-history/country + RSP/SPY breadth & 11-sector tendencies (yfinance `macro_breadth.py`) + Buffett/M2/forward-profit; cache `_macro/{date}.md` | once per run |
 | 3 | Render charts (price, 7-axis radar, peers, DCF fan, EBITDA+FCF, rel-perf 30mo, segments) | deep |
 | 3.5 | **Technical score + GO/NO-GO** (for fundamentally-strong names) | deep |
 | 4 | Find official reports — narrative only (no numbers) | deep |
@@ -92,7 +92,7 @@ reads precomputed JSON / report frontmatter — the dashboard computes nothing.
 ## Scripts
 
 `analyze_ticker.py` (engine + scoring + validation) · `finalize_score.py` · `pick_candidates.py` ·
-`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `macro_snapshot.py` ·
+`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
 `technical_score.py` · `portfolio_sync.py` + `portfolio_dashboard.py` · `thesis_dashboard.py` ·
 `broker_compare.py` (+ `brokers.yaml`) · `markets.py` · `render_charts.py` · `update_log.py` ·
 `update_shortlist.py` · `build_dashboard.py` · `send_email.py` · `find_reports.py` · `get_narrative.py` ·
