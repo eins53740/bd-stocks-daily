@@ -4,9 +4,9 @@ description: Daily stock evaluation — picks 5 tickers (1 deep + 4 screens, 2 o
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v4 wave-1, Phases A+B+C+D — scoring schema 2.2)
+# Daily Stock Evaluation (v4 wave-1 complete + v4.1 wave-2 Phase H — scoring schema 2.2)
 
-Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 21 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
+Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 22 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.59 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
@@ -24,7 +24,9 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 
 **v4 wave-1 · Phase G (2026-07-22)** acrescenta ao deep o **opinion panel** (spec rev 3 §10b, overlay-only): bloco `opinion_panel` (`second_opinion.py`, Phase 2.58, sob Python312 ambiente) — segunda opinião de um modelo **independente** (Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.0-flash`, via novo `llm_client.py` reutilizável), **3 personas** (value/growth/contrarian) que devolvem `{verdict, conviction_0_100, one_liner}` na escala 0–100 (50=neutral). **Independência garantida**: o painel vê a evidência (`compact_evidence`) mas NÃO o composite/verdict — esses são excluídos do input. Consenso = mediana; divergência sinalizada se spread≥25 ou |mediana−composite×10|≥25. Uma persona morta degrada para "not available" sem bloquear as outras. Secção §2.20b + linha no TL;DR. Composite v2.2 intocado.
 
-**v4 wave-1 · Phase F (sessão 1, 2026-07-23)** entrega o **renderer HTML-primário** (spec §11): `render_report.py` (Phase 5.7, puro stdlib) + `report_template.html` (CSS portado do mockup locked `sample_report_v2.html`). Lê o `.md` (fonte, contrato congelado — teste de regressão `slim_report`) + o analysis JSON → escreve `{report}.html` self-contained/estático/JS-free. Header answer-first com **action verb determinístico** (`verdict × mos_class × go_no_go → ACCUMULATE/BUY-DIP/HOLD/WATCH/AVOID`), **snowflake 5-eixos** (Quality/Value/Growth/Health/Mgmt derivado dos 7 `scores`) em SVG inline, gauge fair-value + range bar, cartões A/B/C/E/G, peers A–D, PNGs base64 ≤1.5 MB, null-renders, moeda do JSON. Email intocado (HTML nunca inlined). 413 testes. **Sessão 2 (por construir)**: metric families Equity-vs-Enterprise + cheat-sheet greyed (`metrics_glossary.py`) + `index.html` hub → fecha a wave 1.
+**v4 wave-1 · Phase F (sessão 1, 2026-07-23)** entrega o **renderer HTML-primário** (spec §11): `render_report.py` (Phase 5.7, puro stdlib) + `report_template.html` (CSS portado do mockup locked `sample_report_v2.html`). Lê o `.md` (fonte, contrato congelado — teste de regressão `slim_report`) + o analysis JSON → escreve `{report}.html` self-contained/estático/JS-free. Header answer-first com **action verb determinístico** (`verdict × mos_class × go_no_go → ACCUMULATE/BUY-DIP/HOLD/WATCH/AVOID`), **snowflake 5-eixos** (Quality/Value/Growth/Health/Mgmt derivado dos 7 `scores`) em SVG inline, gauge fair-value + range bar, cartões A/B/C/E/G, peers A–D, PNGs base64 ≤1.5 MB, null-renders, moeda do JSON. Email intocado (HTML nunca inlined). 413 testes. **Sessão 2 (2026-07-23)**: metric families Equity-vs-Enterprise + cheat-sheet greyed em 3 modos (tooltip/`<details>`/coluna print, `metrics_glossary.py` estático) + `index.html` hub diário (`--index`); 422 testes → **wave 1 COMPLETA**.
+
+**v4.1 wave-2 · Phase H (2026-07-23)** acrescenta ao deep o **news & market sentiment** (spec §11c Phase H, idea #6, overlay-only): bloco `news_sentiment` (`news_sentiment.py`, Phase 2.59, sob Python312 ambiente). Recolhe headlines (**yfinance news primário**; opcional **1 query** NewsAPI na trial key `api_key_newsapi` — descartável quando os créditos acabarem), depois **1 chamada LLM** (via `llm_client`) classifica-as em dois diais **stock** e **market**, cada um −1..+1 com temas + citações. **NÃO entra no composite** (sentimento é contexto, não gate) — complementa o `news_freshness`. Funde a key aditiva `news_sentiment`. Cartão de report `build_news_sentiment` (dois diais + headlines) + chip 📰 no email digest (via frontmatter `news_sentiment_stock`/`_label` → `slim_report`) + linha no TL;DR. Degrada para cartão n/a sem headlines/chave. Composite v2.2 intocado. 439 testes.
 
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
@@ -413,6 +415,19 @@ Corre DEPOIS da Phase 2.57 e antes da Phase 2.6. **Sob Python312 ambiente** (SDK
 - **Consenso** = mediana das convicções disponíveis → label (`buy_now`≥75/`accumulate`≥60/`hold`≥40/`cautious`≥25/`avoid`). **Divergência** sinalizada quando spread entre personas ≥25 pts **ou** |mediana − composite×10| ≥25 pts.
 - **Overlay-only**: `--update` funde a key aditiva `opinion_panel`; composite/verdict/top_strip intocados. Cartões etiquetados *opinion* (isentos da regra ground-truth, como o management score). Uma persona morta (JSON inválido / erro de provider / sem chave) → cartão `available:false` sem bloquear as outras. Falha total → `{"error": ...}` + exit 0. Screens NÃO correm esta phase.
 
+### Phase 2.59 — News & market sentiment (deep only, v4.1 Phase H)
+
+Corre DEPOIS da Phase 2.58 e antes da Phase 2.6. **Sob Python312 ambiente** (precisa de yfinance + os SDKs groq/gemini via `llm_client`; a chamada NewsAPI é `requests` lazy + guarded):
+
+```bash
+"C:\Program Files\Python312\python.exe" "%SCRIPTS%\news_sentiment.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+- **Sentimento de notícias** (spec §11c Phase H, idea #6): recolhe headlines recentes (**yfinance news = primário**; opcionalmente **1 única** query NewsAPI na trial key `api_key_newsapi` de `api_keys.txt`), depois **1 chamada LLM** classifica-as em dois diais — **stock** e **market** — cada um −1..+1 com 2-3 temas nomeados + citações das headlines.
+- **NewsAPI é opcional e descartável**: sem chave → yfinance-only; 401/429/quota esgotada → **descarta o NewsAPI para o run** (warning) e continua. Política: quando os créditos acabarem, remover a chave de vez.
+- **Overlay-only, NÃO entra no composite** — sentimento é *contexto, não gate*. Funde a key aditiva `news_sentiment` (composite/verdict/top_strip intocados). Complementa o `news_freshness` (freshness = quão stale; sentiment = que direcção).
+- **Degradação graciosa**: sem headlines ou sem chave LLM → bloco `available:false` (o report mostra um *cartão n/a*, não crash). Falha total → `{"error": ...}` + exit 0. Screens NÃO correm esta phase.
+
 ### Phase 2.6 — Macro snapshot (once per run, v3.1)
 
 Corre UMA vez por run (não por ticker), antes da Phase 5:
@@ -547,6 +562,9 @@ alpha_ann_pct: 4.2             # alpha_beta.alpha_ann_pct (Jensen α anualizado,
 opinion_median: 80             # v4 Phase G: opinion_panel.consensus_conviction (mediana 0-100 das 3 personas, overlay — NÃO entra no composite); omit se painel indisponível ou screen
 opinion_consensus: buy_now     # opinion_panel.consensus_verdict (buy_now|accumulate|hold|cautious|avoid)
 opinion_divergence: true       # opinion_panel.divergence.flag (personas discordam ou divergem do composite)
+news_sentiment_stock: 0.40     # v4.1 Phase H: news_sentiment.stock.score (−1..+1, overlay — NÃO entra no composite); omit se indisponível ou screen
+news_sentiment_market: 0.10    # news_sentiment.market.score (−1..+1)
+news_sentiment_label: bullish  # news_sentiment.stock.label (bullish|neutral|bearish); alimenta o chip do email digest
 earnings_date_next: 2026-04-24
 manual_reviewed: false
 narrative_quality: good        # good | partial | degraded — source quality the narrative was written from (get_narrative.py / post-WebFetch)
@@ -590,6 +608,7 @@ schema_version: "2.2"
 > **Exit**: {1 linha do bloco `exit_plan`, e.g. "trim ⅓ @ {fair_high} / ⅓ @ {fair_high×1.5}; exit P/E {target_exit_pe}; broken if {trigger curto}" — held: acrescentar "YoC {yield_on_cost}%"; omitir a linha se o exit_plan falhou}
 > **Red flags**: {red_flags.summary.glyph} {verdict} — {bad} bad · {warn} watch; Beneish {m_score|n/a} — omitir a linha se o scanner falhou (§2.12a)
 > **Opinion panel**: 🤖 {opinion_median}/100 ({opinion_consensus}), {n_available}/3 personas{se divergence: " · ⚠️ divergência"} — omitir a linha se o painel falhou (§2.20b)
+> **News**: 📰 {stock_emoji} stock {news_sentiment_stock:+.2f} ({news_sentiment_label}) · market {news_sentiment_market:+.2f} — {tema #1 do dial stock} — omitir a linha se o `news_sentiment` estiver indisponível (overlay, não afecta o composite)
 > **Action**: {explicit next step}
 > **Position size**: {sizing band da tabela abaixo, e.g. "Starter 1.5–3% of equity book; build to 4% on execution"} — always end with "(guideline, not advice)"
 > **Entry plan**: {se GO + entry_zone: "accumulate inside {entry_zone}; invalidation below {stop_loss}"; se NO-GO: "thesis ok, timing not — wait for {condição concreta}"; se sem tech read: "no timing read — size entry in thirds"}

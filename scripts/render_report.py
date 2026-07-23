@@ -625,6 +625,40 @@ def build_opinion(data):
                  f'<div class="op">{"".join(cards)}</div>{cons}{divn}{note}', "op", new=True)
 
 
+def build_news_sentiment(data):
+    ns = data.get("news_sentiment") or {}
+    if not ns or ns.get("error"):
+        return ""
+    if not ns.get("available"):
+        reason = esc(ns.get("reason") or "no recent news")
+        return _card("📰 News & market sentiment",
+                     f'<p class="sub">News sentiment not available — {reason}.</p>', "news", new=True)
+
+    def dial(title, d):
+        score = _num(d.get("score"))
+        pct = ((score + 1) / 2 * 100) if score is not None else 50
+        val = f"{score:+.2f}" if score is not None else "n/a"
+        themes = ", ".join(esc(t) for t in (d.get("themes") or [])) or "—"
+        return (f'<div class="oc"><div class="k">{esc(title)}</div>'
+                f'<div class="v">{esc(d.get("label") or "n/a")} · {val}</div>'
+                f'<div class="bar"><div class="f" style="width:{pct:.0f}%"></div><div class="mid"></div></div>'
+                f'<div class="sub">{themes}</div></div>')
+
+    dials = dial("Stock", ns.get("stock") or {}) + dial("Market", ns.get("market") or {})
+    heads = ""
+    if ns.get("headlines"):
+        items = "".join(
+            f'<li>{esc(h.get("title"))}'
+            + (f' <span class="sub">({esc(h.get("publisher"))})</span>' if h.get("publisher") else "")
+            + "</li>" for h in ns["headlines"][:5])
+        heads = (f'<p class="sub">Headlines ({ns.get("n_headlines")} scanned · '
+                 f'{esc(", ".join(ns.get("sources_used") or []))}):</p><ul class="flags">{items}</ul>')
+    note = ('<p class="sub">Overlay — sentiment is context, not scored. '
+            'Complements the news-freshness decay.</p>')
+    return _card("📰 News & market sentiment",
+                 f'<div class="op">{dials}</div>{heads}{note}', "news", new=True)
+
+
 def build_peers(data):
     pi = (data.get("score_details") or {}).get("peer_info") or {}
     metrics = pi.get("peer_metrics") or pi.get("peers")
@@ -687,7 +721,8 @@ def build_footer(data, fm):
 
 NAV_ITEMS = [("tldr", "TL;DR"), ("exit", "Exit Plan"), ("val", "Valuation"),
              ("metrics", "Metric families"), ("flags", "Red Flags"),
-             ("ret", "Return profile"), ("op", "Opinion panel"), ("peer", "Peers"), ("charts", "Charts")]
+             ("ret", "Return profile"), ("op", "Opinion panel"), ("news", "News & sentiment"),
+             ("peer", "Peers"), ("charts", "Charts")]
 
 
 def build_nav(present_ids):
@@ -709,7 +744,7 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     cards = []
     cards.append(build_tldr(fm, body, data))
     for fn in (build_exit, build_valuation, build_metric_families, build_redflags,
-               build_return_profile, build_opinion, build_peers):
+               build_return_profile, build_opinion, build_news_sentiment, build_peers):
         html_ = fn(data)
         if html_:
             cards.append(html_)

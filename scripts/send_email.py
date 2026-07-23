@@ -473,6 +473,17 @@ def build_card_html(row: dict, meta: dict | None = None) -> str:
         chips.append(_chip("NO-GO — wait", "#8a6d00", "#fdf3d7"))
     if meta.get("mgmt_flag"):
         chips.append(_chip("⚠ mgmt flag", "#a03000", "#fdeee4"))
+    # Phase-H news sentiment chip (overlay — not scored)
+    sent = meta.get("news_sentiment")
+    if sent is not None:
+        lbl = (meta.get("news_label") or "").strip()
+        if sent >= 0.15:
+            em, fg, bg = "📈", "#0a6640", "#e3f4ec"
+        elif sent <= -0.15:
+            em, fg, bg = "📉", "#a03000", "#fdeee4"
+        else:
+            em, fg, bg = "➖", "#555555", "#eeeeee"
+        chips.append(_chip(f"{em} news {sent:+.2f}" + (f" {lbl}" if lbl else ""), fg, bg))
     chips_html = f"<div style='margin:2px 0 6px;'>{''.join(chips)}</div>" if chips else ""
 
     def _line(label_txt: str, value: str | None) -> str:

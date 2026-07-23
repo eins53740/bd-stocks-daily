@@ -260,6 +260,9 @@ def slim_report(path: Path, today: dt.date) -> dict | None:
         "entry_zone": fm.get("entry_zone"),
         "stop_loss": fm.get("suggested_stop_loss"),
         "tech_risk": fm.get("tech_risk_level"),
+        # ---- Phase-H news sentiment (frontmatter scalars, overlay) ----
+        "news_sentiment": safe_float(fm.get("news_sentiment_stock")),
+        "news_label": fm.get("news_sentiment_label"),
     }
 
 

@@ -20,11 +20,15 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 
 **v4 wave-1 · Phase G (2026-07-22)**: 3-persona opinion panel, overlay-only (spec rev 3 §10b) — `second_opinion.py` (node 2.58, ambient Python) asks an **independent** model chain (Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.0-flash`, via the new reusable `llm_client.py`) for three prompted personas (value/growth/contrarian), each a 0–100 conviction (50=neutral). The panel sees the evidence but **not** the composite/verdict (independence); consensus = median, divergence flagged on ≥25pt spread or gap vs composite×10. A dead persona degrades to "not available" without blocking the run. Additive JSON key `opinion_panel`; composite untouched.
 
-**v4 wave-1 · Phase F session 1 (2026-07-23)**: HTML-primary report renderer (spec §11) — `render_report.py` (node 5.7, pure stdlib) + `report_template.html` (CSS ported from the locked `docs/v4_design/sample_report_v2.html`). Reads the report `.md` (source, frozen contract — `slim_report` regression test) + the analysis JSON → writes a self-contained, static, JS-free `{report}.html`: answer-first header with a deterministic **action verb** (verdict × mos_class × go_no_go → ACCUMULATE/BUY-DIP/HOLD/WATCH/AVOID), a 5-axis Quality/Value/Growth/Health/Mgmt snowflake (inline SVG), fair-value gauge + bear/base/bull range bar, the A/B/C/E/G cards, peer A–D grades, base64 charts ≤1.5 MB, null renders, currency from JSON. Email is untouched (styled HTML never inlined). *Session 2 (metric families + cheat-sheet glossary + index hub) closes wave 1.*
+**v4 wave-1 · Phase F session 1 (2026-07-23)**: HTML-primary report renderer (spec §11) — `render_report.py` (node 5.7, pure stdlib) + `report_template.html` (CSS ported from the locked `docs/v4_design/sample_report_v2.html`). Reads the report `.md` (source, frozen contract — `slim_report` regression test) + the analysis JSON → writes a self-contained, static, JS-free `{report}.html`: answer-first header with a deterministic **action verb** (verdict × mos_class × go_no_go → ACCUMULATE/BUY-DIP/HOLD/WATCH/AVOID), a 5-axis Quality/Value/Growth/Health/Mgmt snowflake (inline SVG), fair-value gauge + bear/base/bull range bar, the A/B/C/E/G cards, peer A–D grades, base64 charts ≤1.5 MB, null renders, currency from JSON. Email is untouched (styled HTML never inlined).
+
+**v4 wave-1 · Phase F session 2 (2026-07-23)**: equity-vs-enterprise **metric families** with cheap/fair/rich value tint + a **greyed metric cheat-sheet** in 3 CSS-only modes (tooltip on screen · `<details>` on mobile · grey print column) from a static, no-API `metrics_glossary.py`, plus an optional daily `index.html` hub (`--index DATE`). 422 tests → **wave 1 complete.**
+
+**v4.1 wave-2 · Phase H (2026-07-23)**: news & market sentiment, overlay-only (spec §11c) — `news_sentiment.py` (node 2.59, ambient Python) collects headlines (**yfinance news primary**; one optional NewsAPI query on the disposable trial key `api_key_newsapi`) and runs **one LLM call** (via `llm_client`) classifying them into a **stock** dial and a **market** dial, each −1..+1 with named themes + citations. **Not in the composite** — sentiment is context, complementing `news_freshness`. Additive JSON key `news_sentiment`; a report card (`build_news_sentiment` — two dials + headlines) + a 📰 chip in the email digest (via frontmatter `news_sentiment_stock`/`_label`) + a TL;DR line. Degrades to an n/a card when there are no headlines or no LLM key. Composite untouched.
 
 ---
 
-## What it does — the 21-node pipeline
+## What it does — the 22-node pipeline
 
 | Node | Stage | Runs on |
 |------|-------|---------|
@@ -40,6 +44,7 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 | 2.56 | **Return profile (v4-E)** — α/β + CAPM + 10/15y price CAGR + Lynch prior + portfolio fit vs URTH (`alpha_beta.py`) → `alpha_beta` | deep |
 | 2.57 | **Watch-list maintenance (v4-E)** — quality-name-held-back-by-price → `_watchlist.csv` (`watchlist.py`) | deep |
 | 2.58 | **Opinion panel (v4-G)** — 3 independent-model personas (value/growth/contrarian) 0–100 via Groq→Gemini (`second_opinion.py` + `llm_client.py`) → `opinion_panel` | deep |
+| 2.59 | **News & sentiment (v4.1-H)** — yfinance news (+1 optional NewsAPI query) → 1 LLM call → stock & market dials −1..+1 (`news_sentiment.py`) → `news_sentiment` | deep |
 | 2.6 | **Macro §8 snapshot** — indices/valuation-vs-history/country + RSP/SPY breadth & 11-sector tendencies (yfinance `macro_breadth.py`) + Buffett/M2/forward-profit; cache `_macro/{date}.md` | once per run |
 | 3 | Render charts (price, 7-axis radar, peers, DCF fan, EBITDA+FCF, rel-perf 30mo, segments) | deep |
 | 3.5 | **Technical score + GO/NO-GO** (for fundamentally-strong names) | deep |
@@ -104,7 +109,7 @@ reads precomputed JSON / report frontmatter — the dashboard computes nothing.
 ## Scripts
 
 `analyze_ticker.py` (engine + scoring + validation) · `finalize_score.py` · `pick_candidates.py` ·
-`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `second_opinion.py` + `llm_client.py` (v4-G) · `render_report.py` + `report_template.html` + `metrics_glossary.py` (v4-F) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
+`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `second_opinion.py` + `llm_client.py` (v4-G) · `news_sentiment.py` (v4.1-H) · `render_report.py` + `report_template.html` + `metrics_glossary.py` (v4-F) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
 `technical_score.py` · `portfolio_sync.py` + `portfolio_dashboard.py` · `thesis_dashboard.py` ·
 `broker_compare.py` (+ `brokers.yaml`) · `markets.py` · `render_charts.py` · `update_log.py` ·
 `update_shortlist.py` · `build_dashboard.py` · `send_email.py` · `find_reports.py` · `get_narrative.py` ·
