@@ -30,6 +30,8 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 
 **v4.1 wave-2 · Phase I (2026-07-23)** transforma o dashboard principal num **screener** sobre o **pool pré-filtrado completo** (spec §11c Phase I, idea #11). `build_dashboard.py` ganha `load_universe()` (leitor YAML stdlib de `_prefiltered.yaml`), `enrich_from_tmp()` (P/E + FCF yield dos overlays `_tmp`) e `build_screener()` (universe LEFT JOIN evaluations, β/α/MoS durables do frontmatter dos reports, `_tmp` suplementa) → nova key `screener` no bundle. O `template.html` (na vault) ganha uma secção **Screener** (hub, no topo): filtros de categoria (region/sector/size/verdict/evaluated) + **range filters** (score/upside/P/E/β/α/MoS%/tech), **presets guardados em localStorage**, **export CSV**, e linhas que **deep-linkam para o report HTML** (Phase F). Top-nav ganha "Screener". Client-side vanilla-JS (mesmo padrão `__DATA__` + Grid.js). 449 testes (+10 no data layer); lógica de filtros/CSV/presets verificada num harness Node sobre o bundle real (179 linhas: round-trip de filtro, preset sobrevive reload, CSV). α/β ficam esparsos até o job diário re-correr o pool sob Phase E — mostrados com honestidade, nunca fabricados. Composite v2.2 intocado.
 
+**v4.1 wave-2 · `--version` flag (2026-07-23)** adiciona um arg de orquestração `--version {v3, v4}` (a par de `--ticker`/`--mode`). **A última versão é SEMPRE o default** (regra dinâmica: `LATEST = VERSIONS[-1]` em `version_gate.py`, não um valor fixo). `v4` = pipeline completo; `v3` = pipeline **menos os nós overlay v4** (2.3 valuation_bands/intrinsic_value, 2.4 red_flags, 2.55 exit_plan, 2.56 alpha_beta, 2.57 watchlist, 2.58 opinion_panel, 2.59 news_sentiment, 5.7 render HTML) → cai na shape v3.1 (md-primário). Barato só para v3↔v4 porque v4 é overlay-only sobre schema 2.2 → **o composite é byte-idêntico** (o flag muda o que renderiza, nunca o score 0-10). v1/v2 antecedem o schema 2.2 (pesos/gates diferentes) e **não são alcançáveis pelo flag** — só via git tags + worktrees; o enum começa em `v3`. `version_gate.py` é a fonte única do mapa versão→nós-a-saltar; 10 testes. Composite v2.2 intocado.
+
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
 **Disclaimer obrigatório** em cada relatório e email: 🤖 Auto-generated. Not investment advice. Verify all figures before acting.
@@ -124,6 +126,20 @@ Source-framework lineage (the two reference docs at `OneDrive/Ambiente de Trabal
 `ai_industry_analysis_framework.md` Step 4 ("Synthesize with NotebookLM") is intentionally not wired in — that step is an external-tool synthesis, not something the skill can automate.
 
 For the full theoretical context (PT-PT/EN bilingual), see `C:\BD_Obsidian\Personal\Finance\StocksDaily\docs\STRATEGY_GUIDE.md` — comprehensive synthesis of TIKR + Modelo Integrado + 5_step_system frameworks with `IN-USE` / `PLANNED` / `SKIPPED` tags per technique and a roadmap.
+
+## Version flag — `--version {v3, v4}` (default: latest)
+
+Argumento opcional de orquestração. **Omitir = correr a última versão** (hoje `v4`). Resolver SEMPRE via o gate (nunca hard-codar o default):
+
+```bash
+python "%SCRIPTS%\version_gate.py" --version {arg ou omitir}
+```
+
+Devolve `{version, skip_nodes, skip_scripts, skip_json_keys, note}`. Regras para o orquestrador:
+- **`v4` (ou omitido / desconhecido / v9…)** → `skip_nodes: []` → correr o pipeline **completo** (todos os nós abaixo).
+- **`v3`** → **SALTAR** os nós overlay v4 listados em `skip_nodes` (2.3 · 2.4 · 2.55 · 2.56 · 2.57 · 2.58 · 2.59 · 5.7): não correr esses scripts, não escrever as suas keys aditivas, e escrever o report na **shape v3.1** (md-primário, sem os cartões overlay). O resto do pipeline (nós 2, 2.2, 2.5, 2.6, 3, 3.5, 4, 5, 5.5, 6, 7) corre igual.
+- **`v1`/`v2`** → NÃO alcançáveis por este flag (antecedem o schema 2.2). O gate resolve-os para `latest`; para reproduzir v1/v2 usar git tags + worktrees.
+- **Garantia**: o composite 0-10 é **byte-idêntico** entre v3 e v4 (é calculado nos nós 2 + finalize; os overlays nunca lhe tocam). O flag muda só o que renderiza.
 
 ## Workflow (executar por esta ordem exacta)
 

@@ -28,6 +28,8 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 
 **v4.1 wave-2 · Phase I (2026-07-23)**: screener dashboard, overlay-only (spec §11c) — `build_dashboard.py` gains a `screener` bundle over the **full pre-filtered pool** (`load_universe()` reads `_prefiltered.yaml` stdlib; `build_screener()` LEFT-JOINs evaluations, durable β/α/MoS from report frontmatter, `_tmp` supplements P/E & FCF). The vault `template.html` gains a **Screener** hub section: category + **range filters** (score/upside/P/E/β/α/MoS%/tech), **localStorage presets**, **CSV export**, and rows that **deep-link to the Phase-F HTML report**; the top-nav gains "Screener". Client-side vanilla JS. 449 tests (data layer); filter/CSV/preset logic verified in a Node harness over the real 179-row bundle. α/β stay sparse until the daily job re-runs the pool under Phase E — surfaced honestly. Composite untouched.
 
+**v4.1 wave-2 · `--version` flag (2026-07-23)**: an orchestration arg `--version {v3, v4}` (alongside `--ticker`/`--mode`). **Latest is always the default** (dynamic rule — `LATEST = VERSIONS[-1]` in `version_gate.py`, never hard-coded). `v4` = full pipeline; `v3` = full minus the v4 overlay nodes (2.3/2.4/2.55/2.56/2.57/2.58/2.59/5.7) → the v3.1 markdown-primary shape. Cheap for v3↔v4 only (v4 is overlay-only on schema 2.2) so the **composite is byte-identical** — the flag changes what renders, never the score. v1/v2 predate schema 2.2 and aren't reachable via the flag (git tags + worktrees only). `version_gate.py` is the single source of the version→skip map; 10 tests. 459 tests total. Composite untouched.
+
 ---
 
 ## What it does — the 22-node pipeline
@@ -111,7 +113,7 @@ reads precomputed JSON / report frontmatter — the dashboard computes nothing.
 ## Scripts
 
 `analyze_ticker.py` (engine + scoring + validation) · `finalize_score.py` · `pick_candidates.py` ·
-`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `second_opinion.py` + `llm_client.py` (v4-G) · `news_sentiment.py` (v4.1-H) · `render_report.py` + `report_template.html` + `metrics_glossary.py` (v4-F) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
+`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `second_opinion.py` + `llm_client.py` (v4-G) · `news_sentiment.py` (v4.1-H) · `version_gate.py` (v4.1 `--version`) · `render_report.py` + `report_template.html` + `metrics_glossary.py` (v4-F) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
 `technical_score.py` · `portfolio_sync.py` + `portfolio_dashboard.py` · `thesis_dashboard.py` ·
 `broker_compare.py` (+ `brokers.yaml`) · `markets.py` · `render_charts.py` · `update_log.py` ·
 `update_shortlist.py` · `build_dashboard.py` · `send_email.py` · `find_reports.py` · `get_narrative.py` ·
