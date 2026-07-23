@@ -28,6 +28,14 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+try:
+    import metrics_glossary as glossary
+except ImportError:  # pragma: no cover - only if scripts/ not on path
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("metrics_glossary", Path(__file__).resolve().parent / "metrics_glossary.py")
+    glossary = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(glossary)
+
 for _name in ("stdout", "stderr"):
     _s = getattr(sys, _name, None)
     if _s is not None and hasattr(_s, "reconfigure"):
@@ -457,6 +465,82 @@ def build_valuation(data):
     return _card("Valuation — fair value & margin of safety", gauge + rng + caption, "val", new=True)
 
 
+def metric_values(data: dict) -> dict:
+    """Pull the 9 metric-family values from the analysis JSON (all confirmed
+    present in the schema). Missing / non-computable → None. Yields are %."""
+    fund = data.get("fundamentals") or {}
+    val = (data.get("score_details") or {}).get("valuation") or {}
+    price = _num(data.get("price_current"))
+    pe = _num(fund.get("pe_ratio"))
+    bv = _num(fund.get("book_value"))
+    ev = _num(fund.get("enterprise_value"))
+    fcf = _num(fund.get("fcf_ttm"))
+    return {
+        "pe": pe,
+        "peg": _num(fund.get("peg")),
+        "ps": _num(fund.get("ps_ratio")),
+        "pb": (price / bv) if (price is not None and bv and bv > 0) else None,
+        "earnings_yield": (100.0 / pe) if (pe and pe > 0) else None,
+        "ev_sales": _num(fund.get("ev_revenue")),
+        "ev_ebitda": _num(fund.get("ev_ebitda")),
+        "ev_ebit": _num(val.get("ev_ebit")),
+        "fcf_ev": (100.0 * fcf / ev) if (fcf is not None and ev and ev > 0) else None,
+    }
+
+
+def _fmt_metric(value, unit) -> str:
+    n = _num(value)
+    if n is None:
+        return "n/a"
+    if unit == "%":
+        return f"{n:.1f}%"
+    if unit == "x":
+        return f"{n:.1f}×"
+    return f"{n:.2f}"
+
+
+def build_metric_families(data):
+    """Equity vs Enterprise valuation multiples with a greyed cheat-sheet
+    (tooltip on screen · <details> on mobile · grey column in print). Values come
+    from the JSON; the cheat text is static (metrics_glossary). Spec §11."""
+    vals = metric_values(data)
+    fams = glossary.families()
+    fam_blocks = []
+    any_value = False
+    for fam_label, ids in fams.items():
+        rows, cheat_rows = [], []
+        for mid in ids:
+            g = glossary.entry(mid) or {}
+            v = vals.get(mid)
+            if v is not None:
+                any_value = True
+            disp = _fmt_metric(v, g.get("unit"))
+            band = glossary.band_for(mid, v)
+            tint = f" tint-{band}" if band else ""
+            band_txt = f" · {band}" if band else ""
+            tip = f'{g.get("advantages","")} — Limits: {g.get("limitations","")}'
+            rows.append(
+                f'<tr><td class="mname" title="{esc(tip)}">{esc(g.get("label", mid))}'
+                f'<span class="info">ⓘ</span></td>'
+                f'<td class="val{tint}">{esc(disp)}</td>'
+                f'<td class="cheat">{esc(g.get("when_to_use",""))} <em>({esc(g.get("reference",""))})</em></td></tr>')
+            cheat_rows.append(
+                f'<div class="row"><b>{esc(g.get("label", mid))}</b> — {esc(disp)}{esc(band_txt)}<br>'
+                f'{esc(g.get("when_to_use",""))} <em>({esc(g.get("reference",""))})</em></div>')
+        table = ('<table class="mf"><tr><th>Metric</th><th class="val">Value</th>'
+                 '<th class="cheat">When to use · reference</th></tr>' + "".join(rows) + "</table>")
+        details = (f'<details class="cheat-m"><summary>ℹ️ {esc(fam_label)} cheat-sheet</summary>'
+                   f'{"".join(cheat_rows)}</details>')
+        fam_blocks.append(f'<div class="mf-fam"><h3>{esc(fam_label)}</h3>{table}{details}</div>')
+    if not any_value:
+        return ""
+    note = ('<p class="sub">Equity multiples use market cap / share price (leverage-sensitive); '
+            'enterprise multiples are capital-structure neutral. Hover a metric (or expand on mobile) '
+            'for its edge, limits and reference band.</p>')
+    return _card("Valuation metric families — equity vs enterprise",
+                 "".join(fam_blocks) + note, "metrics", new=True)
+
+
 def build_redflags(data):
     rf = data.get("red_flags") or {}
     if not rf or rf.get("error"):
@@ -601,7 +685,8 @@ def build_footer(data, fm):
             f'Analysis written by {esc(model)} · as-of {esc(asof)} · bsdias©2026</footer>')
 
 
-NAV_ITEMS = [("tldr", "TL;DR"), ("exit", "Exit Plan"), ("val", "Valuation"), ("flags", "Red Flags"),
+NAV_ITEMS = [("tldr", "TL;DR"), ("exit", "Exit Plan"), ("val", "Valuation"),
+             ("metrics", "Metric families"), ("flags", "Red Flags"),
              ("ret", "Return profile"), ("op", "Opinion panel"), ("peer", "Peers"), ("charts", "Charts")]
 
 
@@ -623,7 +708,8 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
 
     cards = []
     cards.append(build_tldr(fm, body, data))
-    for fn in (build_exit, build_valuation, build_redflags, build_return_profile, build_opinion, build_peers):
+    for fn in (build_exit, build_valuation, build_metric_families, build_redflags,
+               build_return_profile, build_opinion, build_peers):
         html_ = fn(data)
         if html_:
             cards.append(html_)
@@ -651,6 +737,70 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     return template.replace("{{TITLE}}", esc(title)).replace("{{BODY}}", body_html)
 
 
+_REPORT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.+)_(great|invest|review|fair|reject)\.html$")
+
+
+def index_reports(out_dir: Path, date: str) -> list[dict]:
+    """Discover the day's rendered report HTMLs for the index hub. Reads each
+    sibling .md's frontmatter (frozen contract) for verdict/score → action verb.
+    Sorted by score desc (None last), then ticker."""
+    rows = []
+    for p in sorted(out_dir.glob(f"{date}_*.html")):
+        m = _REPORT_RE.match(p.name)
+        if not m:
+            continue
+        ticker, verdict = m.group(2), m.group(3)
+        fm = {}
+        md = p.with_suffix(".md")
+        if md.exists():
+            try:
+                fm, _ = split_frontmatter(md.read_text(encoding="utf-8"))
+            except Exception:
+                fm = {}
+        try:
+            score = float(fm.get("score"))
+        except (TypeError, ValueError):
+            score = None
+        verb = action_verb(fm.get("verdict") or verdict, None, fm.get("go_no_go"))
+        rows.append({"ticker": fm.get("ticker") or ticker, "verdict": (fm.get("verdict") or verdict).lower(),
+                     "score": score, "action": verb, "href": p.name})
+    rows.sort(key=lambda r: (-(r["score"] if r["score"] is not None else -1), r["ticker"]))
+    return rows
+
+
+def build_index_html(out_dir: Path, date: str, icon_b64: str) -> str:
+    rows = index_reports(out_dir, date)
+    header = (
+        '<header>'
+        f'<div class="brand">{("<img class=\"brand-icon\" alt=\"BD Finance\" src=\"data:image/png;base64,%s\">" % icon_b64) if icon_b64 else ""}'
+        '<div class="brand-txt"><span class="wm">BD <b>Finance</b></span><small>EQUITY RESEARCH</small></div></div>'
+        f'<div class="hdr-mid"><div class="tk">Daily reports</div>'
+        f'<div class="sub">Quality Compounder · {esc(date)}</div></div>'
+        '<div class="hdr-right"></div></header>')
+    if rows:
+        cards = []
+        for r in rows:
+            vclass = r["verdict"] if r["verdict"] in VERDICT_LABELS else "review"
+            score_txt = f'{r["score"]:.1f}/10' if r["score"] is not None else "n/a"
+            cards.append(
+                f'<a class="idx-card" href="{esc(r["href"])}">'
+                f'<div class="idx-tk">{esc(r["ticker"])}</div>'
+                f'<div class="verdict {vclass}">{esc(VERDICT_LABELS.get(r["verdict"],"REVIEW"))}</div>'
+                f'<div class="idx-meta">Quality <b>{esc(score_txt)}</b> · <b>{esc(r["action"])}</b></div></a>')
+        inner = f'<div class="idx-grid">{"".join(cards)}</div>'
+    else:
+        inner = '<div class="nabox">No reports rendered for this date yet.</div>'
+    footer = f'<footer>{len(rows)} report(s) · as-of {esc(date)} · bsdias©2026</footer>'
+    style = ('<style>.idx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}'
+             '.idx-card{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);'
+             'border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}.idx-card:hover{border-color:var(--bd-green)}'
+             '.idx-tk{font-size:18px;font-weight:800;margin-bottom:8px}.idx-card .verdict{font-size:12px}'
+             '.idx-meta{font-size:12.5px;color:var(--muted);margin-top:8px}</style>')
+    body_html = f'<div class="wrap" style="grid-template-columns:1fr">{header}<main>{style}{_card("Today’s reports", inner, "reports")}</main>{footer}</div>'
+    template = TEMPLATE.read_text(encoding="utf-8")
+    return template.replace("{{TITLE}}", esc(f"BD Finance — reports {date}")).replace("{{BODY}}", body_html)
+
+
 def load_icon_b64() -> str:
     try:
         return base64.b64encode(ICON.read_bytes()).decode("ascii")
@@ -670,11 +820,28 @@ def run(md_path: Path, analysis_json: Path, out_path: Path | None, out_dir: Path
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Render a deep report (md + analysis JSON) → self-contained HTML")
-    ap.add_argument("--md", required=True, help="path to the report .md")
+    ap.add_argument("--md", default=None, help="path to the report .md")
     ap.add_argument("--analysis-json", default=None, help="path to the analyze_ticker JSON (for the structured cards)")
     ap.add_argument("--out", default=None, help="output .html path (default: alongside the .md)")
     ap.add_argument("--out-dir", default=str(OUT_DIR_DEFAULT), help="StocksDaily root (for IMG/ charts)")
+    ap.add_argument("--index", default=None, metavar="DATE",
+                    help="build the daily index.html hub for DATE (YYYY-MM-DD) from OUT_DIR reports; ignores --md")
     args = ap.parse_args()
+
+    if args.index:
+        try:
+            out_dir = Path(args.out_dir)
+            target = Path(args.out) if args.out else (out_dir / "index.html")
+            target.write_text(build_index_html(out_dir, args.index, load_icon_b64()), encoding="utf-8")
+        except Exception as e:
+            log(f"FATAL(index): {type(e).__name__}: {e}")
+            print(json.dumps({"error": str(e), "error_type": type(e).__name__}))
+            return 0
+        print(json.dumps({"index": str(target), "n_reports": len(index_reports(Path(args.out_dir), args.index))}, ensure_ascii=False))
+        return 0
+
+    if not args.md:
+        ap.error("--md is required unless --index is given")
 
     try:
         md_path = Path(args.md)

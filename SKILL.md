@@ -1081,12 +1081,15 @@ Corre DEPOIS de o `.md` estar escrito (Phase 5) e de os charts existirem (Phase 
 
 ```bash
 python "%SCRIPTS%\render_report.py" --md "%OUT_DIR%\{date}_{ticker}_{verdict}.md" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --out-dir "%OUT_DIR%"
+# after ALL of the day's reports render, refresh the daily hub (session 2):
+python "%SCRIPTS%\render_report.py" --index {date} --out-dir "%OUT_DIR%"
 ```
 
 - **HTML = artefacto primário** (spec §11): `render_report.py` lê o `.md` (frontmatter + narrativa) + o analysis JSON e escreve `{report}.html` ao lado do `.md`. O `.md` mantém-se a **fonte** (contrato congelado — o renderer só LÊ; `build_dashboard.slim_report` continua a popular, com teste de regressão).
 - **Estático, JS-free, self-contained**: templating Python-side contra `report_template.html` (NÃO o `__DATA__` client-JS do dashboard). Header answer-first com **action verb determinístico** (`verdict × mos_class × go_no_go → ACCUMULATE/BUY-DIP/HOLD/WATCH/AVOID`), snowflake 5-eixos (Quality/Value/Growth/Health/Mgmt, derivado dos 7 `scores`) em SVG inline, gauge fair-value + range bar bear/base/bull, cartões A/B/C/E/G, tabela de peers com grades A–D, e um `<details>` "Full written analysis" (md→HTML minimal). PNGs do `IMG/` embebidos base64 com budget ≤1.5 MB (dropa os de menor prioridade + loga). Moeda vem do JSON (nunca `€` hardcoded); cada visual tem null-render.
 - **Email intocado** (BLOCKER B1): o HTML estilizado NUNCA é inlined no corpo do email; o digest continua md→inline-table; os links `obsidian://` continuam a apontar para o `.md`. O HTML é o primário on-disk (+ anexo opcional, wave 2).
-- Falha → `{"error": ...}` + exit 0; o `.md` já está em disco. **Deep e screen** (screen = variante curta). *(Metric families Equity-vs-Enterprise + cheat-sheet greyed + `index.html` hub = Phase F sessão 2.)*
+- Falha → `{"error": ...}` + exit 0; o `.md` já está em disco. **Deep e screen** (screen = variante curta).
+- **Phase F sessão 2 ✅** — cartão **"Valuation metric families — equity vs enterprise"**: Equity (P/E, PEG, P/S, P/B, earnings yield) + Enterprise (EV/Sales, EV/EBITDA, EV/EBIT, FCF/EV), valores tirados do JSON (`fundamentals` + `score_details.valuation.ev_ebit`; P/B e FCF/EV calculados; yields em %), com **tint cheap/fair/rich** por banda (`metrics_glossary.band_for`). Cheat-sheet estático (`metrics_glossary.py`, sem API) em **3 modos**: tooltip `title=` no ecrã · `<details>` por família no mobile · **coluna cinzenta** em impressão (`@media print`). Hub diário opcional `index.html` (`--index {date}`) varre os reports do dia (via frontmatter do `.md` irmão) → grelha de cartões ticker/verdict/score/action.
 
 ### Phase 6 — Update state
 

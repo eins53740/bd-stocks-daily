@@ -68,7 +68,11 @@ FIXTURE_JSON = {
                                    {"name": "contrarian", "available": False, "reason": "provider error"}],
                       "consensus_conviction": 61.5, "consensus_verdict": "accumulate", "n_available": 2,
                       "divergence": {"flag": False, "reason": "aligned"}, "model_chain": "groq→gemini"},
-    "score_details": {"peer_info": {"peer_metrics": {"CSCO": {"forward_pe": 18, "roic": 26, "revenue_cagr": 6},
+    "fundamentals": {"pe_ratio": 22.0, "forward_pe": 18.0, "peg": 1.8, "ps_ratio": 4.2,
+                     "book_value": 12.0, "ev_revenue": 3.9, "ev_ebitda": 13.5,
+                     "enterprise_value": 260_000_000_000.0, "fcf_ttm": 15_000_000_000.0},
+    "score_details": {"valuation": {"ev_ebit": 16.0},
+                      "peer_info": {"peer_metrics": {"CSCO": {"forward_pe": 18, "roic": 26, "revenue_cagr": 6},
                                                      "ANET": {"forward_pe": 35, "roic": 30, "revenue_cagr": 20}},
                                     "rankings": {"CSCO": {"percentile": 60}}}},
 }
@@ -190,3 +194,98 @@ def test_frozen_md_contract_slim_report_still_populates(tmp_path):
     assert slim["verdict"] == "invest" and slim["score"] == 7.8
     assert slim["thesis"] and slim["thesis"].startswith("Durable networking")
     assert slim["risks"] and slim["action"]
+
+
+# ------------------------- metrics glossary (session 2) -------------------------
+import metrics_glossary as mg  # noqa: E402
+
+
+def test_glossary_covers_all_nine_metrics_fully():
+    ids = [m for ids in mg.families().values() for m in ids]
+    assert ids == ["pe", "peg", "ps", "pb", "earnings_yield",
+                   "ev_sales", "ev_ebitda", "ev_ebit", "fcf_ev"]
+    for mid in ids:
+        e = mg.entry(mid)
+        assert e and e["label"] and e["family"]
+        for field in ("advantages", "limitations", "when_to_use", "reference"):
+            assert e[field].strip(), f"{mid}.{field} empty"
+
+
+def test_glossary_families_ordering_and_membership():
+    fams = mg.families()
+    assert list(fams) == ["Equity multiples", "Enterprise multiples"]
+    assert fams["Equity multiples"] == ["pe", "peg", "ps", "pb", "earnings_yield"]
+    assert fams["Enterprise multiples"] == ["ev_sales", "ev_ebitda", "ev_ebit", "fcf_ev"]
+
+
+def test_band_for_direction_and_guards():
+    # lower-is-cheaper ratio
+    assert mg.band_for("pe", 12) == "cheap"
+    assert mg.band_for("pe", 20) == "fair"
+    assert mg.band_for("pe", 40) == "rich"
+    # higher-is-cheaper yield
+    assert mg.band_for("earnings_yield", 9) == "cheap"
+    assert mg.band_for("earnings_yield", 6) == "fair"
+    assert mg.band_for("earnings_yield", 2) == "rich"
+    # guards: unknown / missing / non-positive → None (never call a loss "cheap")
+    assert mg.band_for("pe", 0) is None
+    assert mg.band_for("pe", -5) is None
+    assert mg.band_for("pe", None) is None
+    assert mg.band_for("nope", 10) is None
+
+
+# ------------------------- metric families (session 2) -------------------------
+def test_metric_values_computed():
+    v = rr.metric_values(FIXTURE_JSON)
+    assert v["pe"] == 22.0 and v["peg"] == 1.8 and v["ps"] == 4.2
+    assert v["pb"] == 5.0                                   # 60 / 12
+    assert round(v["earnings_yield"], 2) == 4.55            # 100 / 22
+    assert v["ev_sales"] == 3.9 and v["ev_ebitda"] == 13.5 and v["ev_ebit"] == 16.0
+    assert round(v["fcf_ev"], 2) == 5.77                    # 100 * 15e9 / 260e9
+
+
+def test_metric_values_null_when_fundamentals_absent():
+    v = rr.metric_values({"ticker": "X"})
+    assert all(val is None for val in v.values())
+
+
+def test_build_metric_families_full_and_cheatsheet():
+    html = rr.build_metric_families(FIXTURE_JSON)
+    assert 'id="metrics"' in html and "NEW" in html
+    assert "Equity multiples" in html and "Enterprise multiples" in html
+    assert "22.0×" in html and "4.5%" in html and "5.0×" in html      # P/E, earnings yield, P/B
+    assert 'title="' in html                                          # tooltip on screen
+    assert 'class="cheat"' in html                                    # print grey column
+    assert 'details class="cheat-m"' in html                          # mobile expandable
+    assert "tint-" in html                                            # value band tint
+
+
+def test_build_metric_families_omits_when_empty():
+    assert rr.build_metric_families({"ticker": "X"}) == ""
+
+
+# ------------------------- index hub (session 2) -------------------------
+def _write_report(dir_, date, ticker, verdict, score, go="GO"):
+    md = (f"---\nticker: {ticker}\ndate: {date}\nverdict: {verdict}\nscore: {score}\n"
+          f"go_no_go: {go}\ncurrency: USD\n---\n# {ticker}\n\n**Thesis**: t\n\n**Action**: A\n")
+    (dir_ / f"{date}_{ticker}_{verdict}.md").write_text(md, encoding="utf-8")
+    (dir_ / f"{date}_{ticker}_{verdict}.html").write_text("<html></html>", encoding="utf-8")
+
+
+def test_index_reports_discovers_and_sorts(tmp_path):
+    _write_report(tmp_path, "2026-07-23", "CSCO", "invest", 7.8)
+    _write_report(tmp_path, "2026-07-23", "AAPL", "great", 9.1)
+    _write_report(tmp_path, "2026-07-22", "OLD", "fair", 5.0)   # other date → excluded
+    (tmp_path / "index.html").write_text("x", encoding="utf-8")  # must not self-include
+    rows = rr.index_reports(tmp_path, "2026-07-23")
+    assert [r["ticker"] for r in rows] == ["AAPL", "CSCO"]       # sorted by score desc
+    assert rows[0]["score"] == 9.1 and rows[0]["action"] == "HOLD"  # great, mos absent in fm → HOLD by contract
+
+
+def test_build_index_html_renders_and_degrades(tmp_path):
+    _write_report(tmp_path, "2026-07-23", "CSCO", "invest", 7.8)
+    html = rr.build_index_html(tmp_path, "2026-07-23", "")
+    assert "<script" not in html and "http://" not in html
+    assert 'href="2026-07-23_CSCO_invest.html"' in html and "CSCO" in html
+    empty = rr.build_index_html(tmp_path, "2020-01-01", "")
+    assert "No reports rendered" in empty

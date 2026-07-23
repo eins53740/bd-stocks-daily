@@ -105,6 +105,22 @@
   .bar .mid{position:absolute;top:-2px;bottom:-2px;left:50%;width:1px;background:var(--muted)}
   .disc{grid-column:1/-1;background:#fdf6e6;border:1px solid #f0e2b8;border-radius:10px;padding:9px 13px;color:#8a6d13;font-size:12px;margin-top:14px}
   .nabox{color:var(--muted);font-style:italic;font-size:13px;padding:6px 0}
+  /* ---- metric families (Equity vs Enterprise) + cheat-sheet ---- */
+  .mf-fam{margin:4px 0 14px}
+  .mf-fam:last-child{margin-bottom:0}
+  .mf-fam h3{margin:0 0 6px;font-size:12.5px;color:var(--bd-teal);text-transform:uppercase;letter-spacing:.5px}
+  table.mf td.mname{font-weight:600;cursor:help}
+  table.mf td.mname .info{color:var(--muted);font-weight:400;font-size:11px;margin-left:3px}
+  table.mf td.val{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+  .tint-cheap{color:#1c7a50}.tint-rich{color:#b23b4c}.tint-fair{color:var(--ink)}
+  /* the cheat-sheet column: greyed, hidden on normal screen (tooltip serves), shown in print */
+  th.cheat,td.cheat{display:none;color:var(--muted);font-size:11px;font-weight:400;white-space:normal}
+  /* mobile <details> cheat-sheet: hidden on desktop, shown at ≤560px */
+  details.cheat-m{display:none;margin:6px 0 0}
+  details.cheat-m summary{font-size:12px;color:var(--muted);font-weight:600}
+  details.cheat-m .row{padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+  details.cheat-m .row:last-child{border-bottom:0}
+  details.cheat-m .row b{color:var(--ink)}
   img.chart{max-width:100%;height:auto;border:1px solid var(--line);border-radius:10px;margin:8px 0}
   details{margin:0 0 16px}
   summary{cursor:pointer;font-weight:600;color:var(--bd-teal);padding:6px 0}
@@ -121,6 +137,8 @@
     .card,.metric,.side,.hero{box-shadow:none}
     .metric,.side,.exit-grid .box,.op .oc{break-inside:avoid;page-break-inside:avoid}
     .flags li,tbody tr{break-inside:avoid}
+    th.cheat,td.cheat{display:table-cell}          /* grey cheat column visible in print */
+    details.cheat-m{display:none!important}          /* mobile block never prints */
     details>*:not(summary){display:block!important}
     summary{list-style:none;font-weight:700;font-size:13pt;color:var(--ink)}
     summary::-webkit-details-marker{display:none}
@@ -136,6 +154,8 @@
     .strip{grid-template-columns:repeat(2,1fr)}
     .exit-grid{grid-template-columns:1fr}
     .card table{display:block;overflow-x:auto;white-space:nowrap}
+    table.mf td.mname .info{display:none}          /* drop inline hint; details covers it */
+    details.cheat-m{display:block}                   /* mobile cheat-sheet on */
   }
   @media(max-width:360px){
     .strip{grid-template-columns:1fr}

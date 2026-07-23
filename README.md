@@ -46,7 +46,7 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 | 4 | Find official reports — narrative only (no numbers) | deep |
 | 5 | Write report (deep ≈2000 words / 1-min screen) | all |
 | 5.5 | Auto-cascade screen→deep when verdict ≥ 7.5 (invest) | conditional |
-| 5.7 | **Render HTML report (v4-F)** — self-contained static HTML primary artifact: answer-first header + action verb, 5-axis snowflake, fair-value gauge + range bar, A/B/C/E/G cards, base64 charts (`render_report.py` + `report_template.html`) | all |
+| 5.7 | **Render HTML report (v4-F)** — self-contained static HTML primary artifact: answer-first header + action verb, 5-axis snowflake, fair-value gauge + range bar, A/B/C/E/G cards, base64 charts, **equity-vs-enterprise metric families + greyed cheat-sheet** (tooltip/`<details>`/print-column) and optional daily `index.html` hub (`--index`) (`render_report.py` + `report_template.html` + `metrics_glossary.py`) | all |
 | 6 | Update `_log.csv` (v1→v2 auto-migrate) + shortlist + catalyst calendar | always |
 | 7 | Regenerate dashboard + email digest | always |
 | 8 | Stdout summary | always |
@@ -104,7 +104,7 @@ reads precomputed JSON / report frontmatter — the dashboard computes nothing.
 ## Scripts
 
 `analyze_ticker.py` (engine + scoring + validation) · `finalize_score.py` · `pick_candidates.py` ·
-`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `second_opinion.py` + `llm_client.py` (v4-G) · `render_report.py` + `report_template.html` (v4-F) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
+`financial_history.py` · `valuation_bands.py` + `intrinsic_value.py` (v4-B) · `red_flags.py` (v4-C) · `exit_plan.py` (v4-A) · `alpha_beta.py` + `watchlist.py` (v4-E) · `second_opinion.py` + `llm_client.py` (v4-G) · `render_report.py` + `report_template.html` + `metrics_glossary.py` (v4-F) · `macro_snapshot.py` + `macro_breadth.py` (v4-D) ·
 `technical_score.py` · `portfolio_sync.py` + `portfolio_dashboard.py` · `thesis_dashboard.py` ·
 `broker_compare.py` (+ `brokers.yaml`) · `markets.py` · `render_charts.py` · `update_log.py` ·
 `update_shortlist.py` · `build_dashboard.py` · `send_email.py` · `find_reports.py` · `get_narrative.py` ·
