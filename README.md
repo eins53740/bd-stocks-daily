@@ -26,6 +26,8 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 
 **v4.1 wave-2 · Phase H (2026-07-23)**: news & market sentiment, overlay-only (spec §11c) — `news_sentiment.py` (node 2.59, ambient Python) collects headlines (**yfinance news primary**; one optional NewsAPI query on the disposable trial key `api_key_newsapi`) and runs **one LLM call** (via `llm_client`) classifying them into a **stock** dial and a **market** dial, each −1..+1 with named themes + citations. **Not in the composite** — sentiment is context, complementing `news_freshness`. Additive JSON key `news_sentiment`; a report card (`build_news_sentiment` — two dials + headlines) + a 📰 chip in the email digest (via frontmatter `news_sentiment_stock`/`_label`) + a TL;DR line. Degrades to an n/a card when there are no headlines or no LLM key. Composite untouched.
 
+**v4.1 wave-2 · Phase I (2026-07-23)**: screener dashboard, overlay-only (spec §11c) — `build_dashboard.py` gains a `screener` bundle over the **full pre-filtered pool** (`load_universe()` reads `_prefiltered.yaml` stdlib; `build_screener()` LEFT-JOINs evaluations, durable β/α/MoS from report frontmatter, `_tmp` supplements P/E & FCF). The vault `template.html` gains a **Screener** hub section: category + **range filters** (score/upside/P/E/β/α/MoS%/tech), **localStorage presets**, **CSV export**, and rows that **deep-link to the Phase-F HTML report**; the top-nav gains "Screener". Client-side vanilla JS. 449 tests (data layer); filter/CSV/preset logic verified in a Node harness over the real 179-row bundle. α/β stay sparse until the daily job re-runs the pool under Phase E — surfaced honestly. Composite untouched.
+
 ---
 
 ## What it does — the 22-node pipeline
@@ -53,7 +55,7 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 17:00) �
 | 5.5 | Auto-cascade screen→deep when verdict ≥ 7.5 (invest) | conditional |
 | 5.7 | **Render HTML report (v4-F)** — self-contained static HTML primary artifact: answer-first header + action verb, 5-axis snowflake, fair-value gauge + range bar, A/B/C/E/G cards, base64 charts, **equity-vs-enterprise metric families + greyed cheat-sheet** (tooltip/`<details>`/print-column) and optional daily `index.html` hub (`--index`) (`render_report.py` + `report_template.html` + `metrics_glossary.py`) | all |
 | 6 | Update `_log.csv` (v1→v2 auto-migrate) + shortlist + catalyst calendar | always |
-| 7 | Regenerate dashboard + email digest | always |
+| 7 | Regenerate dashboard (incl. **v4.1-I screener** over the full pool) + email digest | always |
 | 8 | Stdout summary | always |
 
 Numbers enter only at node 2; the LLM (2.5) and WebFetch (4) never write structured fields.
