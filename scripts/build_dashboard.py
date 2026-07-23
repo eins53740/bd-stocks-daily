@@ -41,6 +41,8 @@ THESIS_JSON = ROOT / "_thesis.json"
 BROKERS_JSON = ROOT / "_brokers.json"
 LIVE_PRICES_JSON = ROOT / "_live_prices.json"
 TECH_DIR = ROOT / "_technical"
+PREFILTERED_YAML = ROOT / "_prefiltered.yaml"
+TMP_DIR = ROOT / "_tmp"
 
 REPORT_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_.+\.md$")
 
@@ -263,6 +265,10 @@ def slim_report(path: Path, today: dt.date) -> dict | None:
         # ---- Phase-H news sentiment (frontmatter scalars, overlay) ----
         "news_sentiment": safe_float(fm.get("news_sentiment_stock")),
         "news_label": fm.get("news_sentiment_label"),
+        # ---- Phase-I screener numerics (durable frontmatter; _tmp supplements P/E, FCF) ----
+        "beta": safe_float(fm.get("beta_3y")),
+        "alpha": safe_float(fm.get("alpha_ann_pct")),
+        "mos_class": fm.get("mos_class"),
     }
 
 
@@ -395,6 +401,150 @@ def load_live_prices(reports: list[dict], tech_store: list[dict], skip: bool) ->
         return {"prices": {}}
 
 
+def _yaml_scalar(v: str):
+    """Unquote a simple YAML scalar. Numbers stay strings (consumers coerce)."""
+    v = v.strip()
+    if len(v) >= 2 and v[0] in "'\"" and v[-1] == v[0]:
+        return v[1:-1]
+    return v
+
+
+def load_universe() -> list[dict]:
+    """Minimal line-based reader for the `tickers:` list in _prefiltered.yaml — the
+    full pre-filtered pool (region/size/sector/composite/gates/piotroski/altman). No
+    pyyaml (this module is stdlib-only); each record starts at a '- ' line and its
+    indented 'key: value' lines belong to it. Returns [] on any problem."""
+    if not PREFILTERED_YAML.exists():
+        return []
+    try:
+        lines = PREFILTERED_YAML.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception as e:
+        log(f"WARN: could not read {PREFILTERED_YAML}: {e}")
+        return []
+    rows: list[dict] = []
+    cur: dict | None = None
+    in_tickers = False
+    for raw in lines:
+        if not in_tickers:
+            if raw.rstrip() == "tickers:":
+                in_tickers = True
+            continue
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        starts_record = stripped.startswith("- ")
+        if starts_record:
+            if cur:
+                rows.append(cur)
+            cur = {}
+            stripped = stripped[2:].strip()
+        if cur is None or ":" not in stripped:
+            continue
+        key, _, val = stripped.partition(":")
+        cur[key.strip()] = _yaml_scalar(val)
+    if cur:
+        rows.append(cur)
+    return rows
+
+
+def enrich_from_tmp(ticker: str, date: str) -> dict:
+    """Pull screener numerics an evaluated report doesn't carry in frontmatter, from
+    the in-flight analysis JSON _tmp/{date}_{ticker}.json (Phase-B/E overlays):
+    P/E, FCF yield, α, β, margin-of-safety class/%. Returns {} if absent/unreadable."""
+    if not ticker or not date:
+        return {}
+    p = TMP_DIR / f"{date}_{ticker.replace('/', '_')}.json"
+    if not p.exists():
+        return {}
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    ts = d.get("top_strip") or {}
+    ab = d.get("alpha_beta") or {}
+    iv = d.get("intrinsic_value") or {}
+    return {
+        "pe": safe_float(ts.get("pe_ttm")),
+        "fcf_yield": safe_float(ts.get("fcf_yield_pct")),
+        "beta": safe_float(ab.get("beta")),
+        "alpha": safe_float(ab.get("alpha_ann_pct")),
+        "mos_class": iv.get("mos_class"),
+        "mos_pct": safe_float(iv.get("mos_pct")),
+    }
+
+
+def _report_href(filename: str | None) -> str | None:
+    """The Phase-F HTML report is a sibling of the .md (same base). None if no report."""
+    if filename and filename.endswith(".md"):
+        return filename[:-3] + ".html"
+    return None
+
+
+def build_screener(reports: list[dict], universe: list[dict]) -> list[dict]:
+    """Full-pool screener rows: the pre-filtered universe LEFT-JOINed with evaluated
+    reports (by ticker, latest report wins), enriched with _tmp numerics. Evaluated
+    names carry verdict/score + a report link; pool-only names carry universe stats.
+    Evaluated names outside the pool (e.g. portfolio adds) are appended too."""
+    by_ticker: dict[str, dict] = {}
+    for r in reports:  # reports arrive filename-sorted (date asc) → last write wins
+        if r.get("ticker"):
+            by_ticker[r["ticker"]] = r
+
+    def row_for(tk: str, u: dict | None) -> dict:
+        r = by_ticker.get(tk)
+        u = u or {}
+        upside = None
+        fp, px = (r or {}).get("fair_price"), (r or {}).get("price")
+        if fp and px:
+            upside = round((fp / px - 1) * 100, 1)
+        row = {
+            "ticker": tk,
+            "region": (r or {}).get("region") or u.get("region"),
+            "sector": (r or {}).get("sector") or u.get("sector"),
+            "size": (r or {}).get("size") or u.get("size"),
+            "evaluated": bool(r),
+            # composite: the evaluated score if present, else the prefilter composite
+            "composite": (r or {}).get("score")
+            if r else safe_float(u.get("composite_score")),
+            "verdict": (r or {}).get("verdict"),
+            "gates_passed": (r or {}).get("gates_passed")
+            if r else safe_int(u.get("gates_passed")),
+            "piotroski": (r or {}).get("piotroski") if r else safe_int(u.get("piotroski")),
+            "altman": (r or {}).get("altman") if r else safe_float(u.get("altman_z")),
+            "tech_score": (r or {}).get("tech_score"),
+            "go_no_go": (r or {}).get("go_no_go"),
+            "fair_price": fp,
+            "upside": upside,
+            "currency": (r or {}).get("currency"),
+            "date": (r or {}).get("date"),
+            "report_href": _report_href((r or {}).get("filename")),
+        }
+        if r:
+            # Durable frontmatter (β/α/MoS) wins; _tmp supplements P/E & FCF yield
+            # and fills any gap the older-frontmatter reports leave.
+            e = enrich_from_tmp(tk, r.get("date"))
+            row["beta"] = r.get("beta") if r.get("beta") is not None else e.get("beta")
+            row["alpha"] = r.get("alpha") if r.get("alpha") is not None else e.get("alpha")
+            row["mos_class"] = r.get("mos_class") or e.get("mos_class")
+            row["mos_pct"] = e.get("mos_pct")
+            row["pe"] = e.get("pe")
+            row["fcf_yield"] = e.get("fcf_yield")
+        return row
+
+    seen, rows = set(), []
+    for u in universe:
+        tk = u.get("ticker")
+        if not tk or tk in seen:
+            continue
+        seen.add(tk)
+        rows.append(row_for(tk, u))
+    for tk in by_ticker:
+        if tk not in seen:
+            seen.add(tk)
+            rows.append(row_for(tk, None))
+    return rows
+
+
 def dump_for_script(bundle: dict) -> str:
     """JSON for embedding inside a <script> block: escape "</" so a literal
     "</script>" in report text can't close the data block and blank the page."""
@@ -426,6 +576,7 @@ def main() -> int:
         "thesis": load_thesis(),
         "technical_store": (tech_store := load_technical_store()),
         "live_prices": load_live_prices(reports, tech_store, skip="--no-live" in sys.argv),
+        "screener": build_screener(reports, load_universe()),
     }
 
     template = TEMPLATE.read_text(encoding="utf-8")
