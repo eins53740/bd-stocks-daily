@@ -196,6 +196,16 @@ def test_frozen_md_contract_slim_report_still_populates(tmp_path):
     assert slim["risks"] and slim["action"]
 
 
+def test_num_coerces_frontmatter_numeric_strings():
+    """Frontmatter values arrive as strings; _num must coerce them or the TL;DR fair
+    price / score fall back to n/a on every report (QA MAJOR, 2026-07-23)."""
+    assert rr._num("138.15") == 138.15      # fair_price from frontmatter
+    assert rr._num("7.8") == 7.8            # score from frontmatter
+    assert rr._num(42) == 42 and rr._num(3.5) == 3.5   # real numbers still pass
+    assert rr._num("N/A") is None and rr._num("") is None
+    assert rr._num(None) is None and rr._num(True) is None   # bools are not numbers
+
+
 # ------------------------- metrics glossary (session 2) -------------------------
 import metrics_glossary as mg  # noqa: E402
 

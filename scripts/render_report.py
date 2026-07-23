@@ -69,7 +69,19 @@ def esc(s) -> str:
 # Pure helpers (unit-tested)
 # ===================================================================
 def _num(v):
-    return v if isinstance(v, (int, float)) and not (isinstance(v, float) and math.isnan(v)) else None
+    # Accept real numbers AND numeric strings — frontmatter values arrive as strings
+    # (fair_price, score…), and rejecting them silently printed "n/a" everywhere.
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return None if (isinstance(v, float) and math.isnan(v)) else v
+    if isinstance(v, str):
+        try:
+            f = float(v.strip())
+        except ValueError:
+            return None
+        return None if math.isnan(f) else f
+    return None
 
 
 CURRENCY_SYMBOL = {"EUR": "€", "USD": "$", "GBP": "£", "GBp": "p", "GBX": "p",
@@ -796,7 +808,7 @@ def index_reports(out_dir: Path, date: str) -> list[dict]:
             score = float(fm.get("score"))
         except (TypeError, ValueError):
             score = None
-        verb = action_verb(fm.get("verdict") or verdict, None, fm.get("go_no_go"))
+        verb = action_verb(fm.get("verdict") or verdict, fm.get("mos_class"), fm.get("go_no_go"))
         rows.append({"ticker": fm.get("ticker") or ticker, "verdict": (fm.get("verdict") or verdict).lower(),
                      "score": score, "action": verb, "href": p.name})
     rows.sort(key=lambda r: (-(r["score"] if r["score"] is not None else -1), r["ticker"]))

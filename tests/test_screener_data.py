@@ -84,10 +84,13 @@ def test_enrich_from_tmp_absent(tmp_path, monkeypatch):
     assert bd.enrich_from_tmp("ZZZ", "") == {}
 
 
-# ------------------------- _report_href -------------------------
-def test_report_href_swaps_extension():
+# ------------------------- _report_href (existence-gated) -------------------------
+def test_report_href_only_when_html_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(bd, "ROOT", tmp_path)
+    (tmp_path / "2026-07-22_ADBE_invest.html").write_text("x", encoding="utf-8")
     assert bd._report_href("2026-07-22_ADBE_invest.md") == "2026-07-22_ADBE_invest.html"
-    assert bd._report_href("2026-07-22_ADBE_screen.md") == "2026-07-22_ADBE_screen.html"
+    # no sibling .html on disk → no dead link
+    assert bd._report_href("2026-07-22_ZZZ_screen.md") is None
     assert bd._report_href(None) is None
 
 
@@ -104,6 +107,8 @@ def _reports():
 
 def test_build_screener_joins_and_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(bd, "TMP_DIR", tmp_path / "_tmp")  # no _tmp → enrich empty
+    monkeypatch.setattr(bd, "ROOT", tmp_path)
+    (tmp_path / "2026-07-22_ADBE_invest.html").write_text("x", encoding="utf-8")  # so href resolves
     universe = [{"ticker": "ADBE", "region": "US", "sector": "Technology", "size": "big",
                  "composite_score": "8.89", "gates_passed": "6"},
                 {"ticker": "EXPN.L", "region": "UK", "sector": "Industrials",
@@ -117,6 +122,21 @@ def test_build_screener_joins_and_flags(tmp_path, monkeypatch):
     # EXPN.L pool-only: falls back to prefilter composite, no report link
     assert by["EXPN.L"]["evaluated"] is False and by["EXPN.L"]["composite"] == 7.10
     assert by["EXPN.L"]["report_href"] is None
+
+
+def test_build_screener_deep_beats_screen_same_day(tmp_path, monkeypatch):
+    monkeypatch.setattr(bd, "TMP_DIR", tmp_path / "_tmp")
+    monkeypatch.setattr(bd, "ROOT", tmp_path)  # no .html → hrefs None, fine
+    deep = {"ticker": "TTD", "score": 7.73, "verdict": "invest", "mode": "deep",
+            "fair_price": 22.51, "price": 20.0, "date": "2026-07-22",
+            "filename": "2026-07-22_TTD_invest.md"}
+    screen = {"ticker": "TTD", "score": 7.75, "verdict": "invest", "mode": "screen",
+              "fair_price": None, "price": None, "date": "2026-07-22",
+              "filename": "2026-07-22_TTD_screen.md"}
+    # screen sorts after deep alphabetically → would win a naive last-write; deep must win
+    rows = bd.build_screener([deep, screen], universe=[])
+    assert len(rows) == 1
+    assert rows[0]["composite"] == 7.73 and rows[0]["fair_price"] == 22.51  # deep, not screen
 
 
 def test_build_screener_includes_evaluated_outside_pool(tmp_path, monkeypatch):

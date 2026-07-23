@@ -3,8 +3,12 @@ version_gate.py — v4.1 roadmap item 10: the `--version {v3, v4}` report-versio
 
 The skill can be run at an earlier *report version* alongside `--ticker` / `--mode`.
 Because v4 is **overlay-only on schema 2.2** (the same schema v3.1 used), "v3" is
-exactly "v4 minus the v4 overlay nodes" — the composite is byte-identical in both;
-only which overlay blocks/cards render changes.
+exactly "v4 minus the v4 overlay nodes". The **deterministic** composite inputs
+(gates, Piotroski, Altman, valuation, peer, growth, market) are identical in both,
+so the score is materially unchanged. Caveat: the 8%-weight **management** component
+is LLM-sourced from the analysis JSON, which carries the overlay blocks under v4 but
+not v3 — so the composite is *materially*, not *bitwise*, identical (the LLM mgmt
+read is non-deterministic run-to-run anyway). Only which overlay cards render changes.
 
 The **latest shipped version is always the default** — a rule, not a hard-coded
 value: `LATEST = VERSIONS[-1]`. When a new report version ships, append it to
@@ -42,8 +46,10 @@ V4_OVERLAY_NODES = [
     {"node": "5.7", "script": "render_report.py", "json_key": None},  # HTML render + metric families
 ]
 
-# Composite-bearing keys that must NEVER be gated — the byte-identical guarantee.
-PROTECTED_KEYS = {"scores", "verdict", "gates_detail", "top_strip"}
+# Composite-bearing keys that must NEVER be gated. (top_strip is a *display* strip,
+# not a composite input — alpha_beta legitimately augments it with overlay-only β/α;
+# so it is deliberately NOT protected here.)
+PROTECTED_KEYS = {"scores", "verdict", "gates_detail"}
 
 
 def resolve_version(arg: str | None) -> str:

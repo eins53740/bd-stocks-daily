@@ -474,9 +474,13 @@ def enrich_from_tmp(ticker: str, date: str) -> dict:
 
 
 def _report_href(filename: str | None) -> str | None:
-    """The Phase-F HTML report is a sibling of the .md (same base). None if no report."""
+    """The Phase-F HTML report is a sibling of the .md (same base). Returns the href
+    ONLY if that .html actually exists on disk — screens / v3 runs / un-rendered deeps
+    have no sibling, so we must not emit a dead link (the row then shows a plain ticker)."""
     if filename and filename.endswith(".md"):
-        return filename[:-3] + ".html"
+        href = filename[:-3] + ".html"
+        if (ROOT / href).exists():
+            return href
     return None
 
 
@@ -485,10 +489,19 @@ def build_screener(reports: list[dict], universe: list[dict]) -> list[dict]:
     reports (by ticker, latest report wins), enriched with _tmp numerics. Evaluated
     names carry verdict/score + a report link; pool-only names carry universe stats.
     Evaluated names outside the pool (e.g. portfolio adds) are appended too."""
+    # Pick the best report per ticker: latest date, and within a date the DEEP report
+    # beats the screen (the Phase-5.5 cascade writes both same-day; filename sort would
+    # otherwise let "_screen" win alphabetically and drop fair_price/β/α/mos + link deep→screen).
+    def _rank(r: dict) -> tuple:
+        return (r.get("date") or "", 1 if r.get("mode") == "deep" else 0)
     by_ticker: dict[str, dict] = {}
-    for r in reports:  # reports arrive filename-sorted (date asc) → last write wins
-        if r.get("ticker"):
-            by_ticker[r["ticker"]] = r
+    for r in reports:
+        tk = r.get("ticker")
+        if not tk:
+            continue
+        prev = by_ticker.get(tk)
+        if prev is None or _rank(r) >= _rank(prev):
+            by_ticker[tk] = r
 
     def row_for(tk: str, u: dict | None) -> dict:
         r = by_ticker.get(tk)
@@ -503,8 +516,9 @@ def build_screener(reports: list[dict], universe: list[dict]) -> list[dict]:
             "sector": (r or {}).get("sector") or u.get("sector"),
             "size": (r or {}).get("size") or u.get("size"),
             "evaluated": bool(r),
-            # composite: the evaluated score if present, else the prefilter composite
-            "composite": (r or {}).get("score")
+            # composite: evaluated score (growth reports carry growth_composite instead),
+            # else the prefilter composite for pool-only names
+            "composite": ((r or {}).get("score") or (r or {}).get("growth_composite"))
             if r else safe_float(u.get("composite_score")),
             "verdict": (r or {}).get("verdict"),
             "gates_passed": (r or {}).get("gates_passed")

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,14 +199,24 @@ def fetch_yfinance_news(ticker: str, max_news: int) -> tuple:
         return [], f"yfinance.news: {type(e).__name__}: {e}"
 
 
+def _scrub_key(msg: str) -> str:
+    """Never let an API key survive into a stored warning string. requests embeds the
+    full URL (with any query params) in connection-error messages, and some transports
+    use `?key=`/`apiKey=` — strip them defensively even though we send the key as a header."""
+    return re.sub(r"(?i)(api[_-]?key|key|token)=[^&\s\"']+", r"\1=***", str(msg))
+
+
 def fetch_newsapi(query: str, key: str, max_news: int) -> tuple:
-    """ONE NewsAPI query. (headlines, warning|None). Any error → drop, never raise."""
+    """ONE NewsAPI query. (headlines, warning|None). Any error → drop, never raise.
+    The key goes in the `X-Api-Key` HEADER (never a query param) so it can't leak into
+    a request-exception URL string that we persist."""
     try:
         import requests  # lazy + guarded
         resp = requests.get(
             "https://newsapi.org/v2/everything",
             params={"q": query, "language": "en", "sortBy": "publishedAt",
-                    "pageSize": max_news, "apiKey": key},
+                    "pageSize": max_news},
+            headers={"X-Api-Key": key},
             timeout=10,
         )
         if resp.status_code != 200:
@@ -215,7 +226,7 @@ def fetch_newsapi(query: str, key: str, max_news: int) -> tuple:
             return [], f"newsapi dropped: {payload.get('code') or payload.get('status')}"
         return parse_newsapi_articles(payload.get("articles"), max_news), None
     except Exception as e:
-        return [], f"newsapi dropped: {type(e).__name__}: {e}"
+        return [], _scrub_key(f"newsapi dropped: {type(e).__name__}: {e}")
 
 
 def collect_headlines(ticker: str, company: str, max_news: int, keys: dict) -> dict:

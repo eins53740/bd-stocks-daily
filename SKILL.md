@@ -139,7 +139,7 @@ Devolve `{version, skip_nodes, skip_scripts, skip_json_keys, note}`. Regras para
 - **`v4` (ou omitido / desconhecido / v9…)** → `skip_nodes: []` → correr o pipeline **completo** (todos os nós abaixo).
 - **`v3`** → **SALTAR** os nós overlay v4 listados em `skip_nodes` (2.3 · 2.4 · 2.55 · 2.56 · 2.57 · 2.58 · 2.59 · 5.7): não correr esses scripts, não escrever as suas keys aditivas, e escrever o report na **shape v3.1** (md-primário, sem os cartões overlay). O resto do pipeline (nós 2, 2.2, 2.5, 2.6, 3, 3.5, 4, 5, 5.5, 6, 7) corre igual.
 - **`v1`/`v2`** → NÃO alcançáveis por este flag (antecedem o schema 2.2). O gate resolve-os para `latest`; para reproduzir v1/v2 usar git tags + worktrees.
-- **Garantia**: o composite 0-10 é **byte-idêntico** entre v3 e v4 (é calculado nos nós 2 + finalize; os overlays nunca lhe tocam). O flag muda só o que renderiza.
+- **Garantia**: as componentes **determinísticas** do composite (gates, Piotroski, Altman, valuation, peer, growth, market) são idênticas entre v3 e v4 — o score é materialmente o mesmo. *Ressalva*: a componente **management** (8%) é escrita por LLM a partir do analysis JSON, que sob v4 contém os blocos overlay e sob v3 não — logo o composite é *materialmente*, não *bit-a-bit*, idêntico (o mgmt read já é não-determinístico de run para run). O flag muda o que renderiza; nunca os pesos nem as componentes determinísticas.
 
 ## Workflow (executar por esta ordem exacta)
 
