@@ -278,3 +278,132 @@ def test_validate_segments_accepts_a_good_payload(rc):
         "segments": [{"name": "A", "values": [1, 2, None]}],
     }
     assert rc.validate_segments(good) == []
+
+
+# --- legibility layer (2026-07-28) ------------------------------------------
+# The theme gained four helpers whose whole purpose is to stop things printing on
+# top of each other. A collision is invisible to a smoke test that only asserts
+# "the PNG is non-empty", so assert the geometry instead.
+
+def test_trailing_avg_is_right_aligned_and_waits_for_a_full_window():
+    import chart_theme as th
+    got = th.trailing_avg([1, 2, 3, 4, 8], window=4)
+    assert got[:3] == [None, None, None]
+    assert got[3] == 2.5            # (1+2+3+4)/4
+    assert got[4] == 4.25           # (2+3+4+8)/4
+
+
+def test_trailing_avg_suppresses_windows_containing_none_or_nan():
+    import math
+    import chart_theme as th
+    assert th.trailing_avg([1, None, 3, 4, 5], window=4)[3] is None
+    assert th.trailing_avg([1, math.nan, 3, 4, 5], window=4)[3] is None
+
+
+def test_trailing_avg_on_a_series_shorter_than_the_window():
+    import chart_theme as th
+    assert th.trailing_avg([1, 2], window=4) == [None, None]
+    assert th.trailing_avg([], window=4) == []
+
+
+def test_legend_above_places_the_legend_outside_the_axes():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import chart_theme as th
+    fig, ax = plt.subplots()
+    ax.plot([0, 1], [0, 1], label="s")
+    leg = th.legend_above(ax)
+    # y >= 1 in axes coordinates means "above the plot area", which is the point.
+    assert leg.get_bbox_to_anchor().y0 >= 1.0
+    assert leg.get_frame_on() is False
+    plt.close(fig)
+
+
+def test_legend_above_accepts_explicit_handles_for_a_twin_axis():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import chart_theme as th
+    fig, ax = plt.subplots()
+    a, = ax.plot([0, 1], [0, 1], label="left")
+    ax2 = ax.twinx()
+    b, = ax2.plot([0, 1], [1, 0], label="right")
+    leg = th.legend_above(ax, ncol=2, handles=[a, b], labels=["left", "right"])
+    assert [t.get_text() for t in leg.get_texts()] == ["left", "right"]
+    plt.close(fig)
+
+
+def test_legend_row_lifts_the_title_clear_of_the_legend_strip():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import chart_theme as th
+
+    def rendered_title_gap(**kw):
+        """Vertical gap in pixels between the top of the axes and the title
+        baseline. `title.get_position()` is always (0, 1.0) — the pad is applied at
+        draw time — so the geometry has to be measured after a draw."""
+        fig, ax = plt.subplots(figsize=(6, 4), dpi=100)
+        th.style_axes(ax, title="T", subtitle="S", **kw)
+        fig.canvas.draw()
+        gap = (ax.title.get_window_extent().y0
+               - ax.get_window_extent().y1)
+        plt.close(fig)
+        return gap
+
+    assert rendered_title_gap(legend_row=True) > rendered_title_gap() + 10, \
+        "the reserved legend row must push the title clear by roughly its height"
+
+
+def test_legend_row_also_lifts_the_subtitle():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import chart_theme as th
+
+    def subtitle_y(**kw):
+        fig, ax = plt.subplots()
+        th.style_axes(ax, title="T", subtitle="S", **kw)
+        y = [t.get_position()[1] for t in ax.texts if t.get_text() == "S"][0]
+        plt.close(fig)
+        return y
+
+    assert subtitle_y(legend_row=True) > subtitle_y()
+
+
+def test_value_chip_is_drawn_with_a_surface_filled_box():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import chart_theme as th
+    fig, ax = plt.subplots()
+    ann = th.value_chip(ax, 1, 2, "3.5B", th.PRIMARY)
+    assert ann.get_text() == "3.5B"
+    # Surface fill is what keeps the text legible over a gridline or another series.
+    assert ann.get_bbox_patch().get_facecolor()[:3] == \
+        matplotlib.colors.to_rgb(th.SURFACE)
+    plt.close(fig)
+
+
+def test_figure_title_reserves_the_top_margin():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import chart_theme as th
+    fig, _ = plt.subplots(2, 1)
+    th.figure_title(fig, "Title", "Subtitle", top=0.84)
+    assert fig.subplotpars.top == 0.84
+    assert [t.get_text() for t in fig.texts] == ["Title", "Subtitle"]
+    plt.close(fig)
+
+
+def test_figure_title_without_a_subtitle_draws_only_the_title():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import chart_theme as th
+    fig, _ = plt.subplots()
+    th.figure_title(fig, "Only")
+    assert [t.get_text() for t in fig.texts] == ["Only"]
+    plt.close(fig)

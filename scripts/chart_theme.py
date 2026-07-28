@@ -144,11 +144,16 @@ def apply_theme() -> None:
 
 
 def style_axes(ax, title: str | None = None, subtitle: str | None = None,
-               ylabel: str | None = None, grid_axis: str = "y") -> None:
+               ylabel: str | None = None, grid_axis: str = "y",
+               legend_row: bool = False) -> None:
     """Apply the per-axes chrome the rcParams cannot express.
 
     `subtitle` sits under the title in secondary ink — the place for provenance
     and caveats that used to be crammed into the title or a corner annotation.
+
+    Set `legend_row=True` on any axes that also gets a `legend_above`: the title
+    block and the legend both want the strip above the plot, so the title/subtitle
+    are lifted to leave that row free. Without it the legend prints over the title.
     """
     ax.set_axisbelow(True)
     ax.grid(True, axis=grid_axis, color=GRID, linewidth=0.8, linestyle="-")
@@ -164,13 +169,16 @@ def style_axes(ax, title: str | None = None, subtitle: str | None = None,
         ax.spines[side].set_linewidth(0.8)
     if ylabel:
         ax.set_ylabel(ylabel, color=INK_SECONDARY)
+    # Vertical budget above the plot, bottom-up: [legend row] [subtitle] [title].
+    legend_pad = LEGEND_ROW_PAD if legend_row else 0
+    sub_y = 1.015 + (LEGEND_ROW_AXES_FRACTION if legend_row else 0.0)
     if title:
         ax.set_title(title, loc="left", fontsize=13, fontweight="semibold",
-                     color=INK, pad=16 if subtitle else 12)
+                     color=INK, pad=(16 if subtitle else 12) + legend_pad)
     if subtitle:
         # Placed in axes coordinates just above the plot, so it tracks the title
         # without needing a figure-level suptitle.
-        ax.text(0.0, 1.015, subtitle, transform=ax.transAxes, ha="left",
+        ax.text(0.0, sub_y, subtitle, transform=ax.transAxes, ha="left",
                 va="bottom", fontsize=9, color=INK_MUTED)
 
 
@@ -190,6 +198,75 @@ def marker_kwargs(color: str) -> dict:
         "markeredgecolor": SURFACE,
         "markeredgewidth": 1.4,
     }
+
+
+# Height of the legend strip. Two numbers for the same gap in the two coordinate
+# systems that need it: points for the title pad, axes-fraction for the subtitle.
+LEGEND_ROW_PAD = 24
+LEGEND_ROW_AXES_FRACTION = 0.085
+
+
+def legend_above(ax, ncol: int = 3, handles=None, labels=None):
+    """Legend lifted OUT of the plot area, onto the strip just above it.
+
+    `loc="upper left"` puts the legend box on top of the data — with a rising
+    series (the common case for a compounder) it lands squarely on the first bars
+    and on the top y-tick label. Matplotlib's own `borderaxespad`/`framealpha`
+    dodges only hide the collision behind a translucent panel. Moving the legend
+    out of the axes removes it: nothing overlaps, and the plot keeps its full
+    height. Frameless, since the strip needs no box to be read as a legend.
+    """
+    kw = dict(loc="lower left", bbox_to_anchor=(0, 1.01), ncol=ncol, frameon=False,
+              fontsize=9, handlelength=1.6, columnspacing=1.4, borderpad=0,
+              handletextpad=0.6)
+    if handles is not None and labels is not None:
+        return ax.legend(handles, labels, **kw)
+    return ax.legend(**kw)
+
+
+def figure_title(fig, title: str, subtitle: str | None = None,
+                 top: float = 0.855) -> None:
+    """Title/subtitle on the FIGURE, and reserve the top margin for them.
+
+    Use this instead of `style_axes(title=...)` whenever the top axes also carries a
+    `legend_above`: both want the strip directly above the axes, and an axes title
+    loses — the legend lands on top of it. Hoisting the title to the figure gives
+    each its own band. Call AFTER the legends exist so the reserved margin holds.
+    """
+    fig.subplots_adjust(top=top)
+    fig.text(0.008, 0.985, title, fontsize=15, fontweight="bold", color=INK,
+             va="top", ha="left")
+    if subtitle:
+        fig.text(0.008, 0.941, subtitle, fontsize=10, color=INK_SECONDARY,
+                 va="top", ha="left")
+
+
+def value_chip(ax, x, y, text: str, color: str, dy: int = 9):
+    """Boxed last-value label. The reader's first question of any time series is
+    "where is it now?" — answering it on the mark costs one annotation and saves a
+    trip to the axis. The surface-filled box keeps the text legible even when the
+    chip lands on a gridline or another series."""
+    return ax.annotate(
+        text, xy=(x, y), xytext=(6, dy), textcoords="offset points",
+        fontsize=10.5, fontweight="bold", color=color, zorder=9,
+        bbox=dict(boxstyle="round,pad=0.28", facecolor=SURFACE, edgecolor=color,
+                  linewidth=1.0))
+
+
+def trailing_avg(values, window: int = 4):
+    """Trailing `window`-point mean, aligned right; None until the window fills.
+
+    Quarterly fundamentals are strongly seasonal — a fiscal Q1 dip repeats every
+    year — so the raw series reads as a sawtooth and the eye takes the noise for
+    the signal. The trailing-twelve-month average is the standard fix and is why
+    this lives in the theme rather than in one chart: any quarterly series wants it.
+    """
+    out = []
+    for i in range(len(values)):
+        w = values[max(0, i - window + 1):i + 1]
+        ok = len(w) == window and all(v is not None and v == v for v in w)  # v==v filters NaN
+        out.append(sum(w) / window if ok else None)
+    return out
 
 
 def label_line_end(ax, x, y, text: str, color: str) -> None:

@@ -99,6 +99,16 @@ def _num_or_nan(v) -> float:
         return float("nan")
 
 
+def _last_valid(vals) -> int | None:
+    """Index of the last finite value, or None. Series tails can be NaN when a
+    source is missing the most recent quarter."""
+    for i in range(len(vals) - 1, -1, -1):
+        v = vals[i]
+        if v is not None and not (isinstance(v, float) and math.isnan(v)):
+            return i
+    return None
+
+
 def _money_fmt(x, pos=None) -> str:
     """Axis formatter — auto-scale to K / M / B."""
     if x is None or (isinstance(x, float) and math.isnan(x)):
@@ -138,9 +148,9 @@ def chart_price(ticker: str, outfile: Path) -> bool:
         last_close = float(close.iloc[-1])
         th.style_axes(ax1, title=f"{ticker} — price, 1 year",
                       subtitle=f"close {last_close:,.2f} · SMA50 / SMA200 overlay",
-                      ylabel="Price")
+                      ylabel="Price", legend_row=True)
         th.label_line_end(ax1, close.index[-1], last_close, f"{last_close:,.2f}", th.PRIMARY)
-        ax1.legend(loc="upper left", ncol=3)
+        th.legend_above(ax1, ncol=3)
         ax2.bar(volume.index, volume.values, color=th.INK_MUTED, alpha=0.55, width=1.0)
         th.style_axes(ax2, ylabel="Volume")
         ax2.yaxis.set_major_formatter(FuncFormatter(_money_fmt))
@@ -365,9 +375,9 @@ def chart_dcf(
         th.style_axes(
             ax, title=f"{ticker} — DCF scenarios vs price",
             subtitle=f"base case implies {upside:+.0f}% vs {price:,.2f} {currency}",
-            ylabel=f"Intrinsic value ({currency})",
+            ylabel=f"Intrinsic value ({currency})", legend_row=True,
         )
-        ax.legend(loc="upper left")
+        th.legend_above(ax, ncol=3)
         fig.tight_layout()
         th.save(fig, outfile)
         return True
@@ -437,19 +447,41 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
             ax_e.bar(seg_fc, f_ebitda, color=th.PRIMARY_LIGHT, width=th.BAR_WIDTH,
                      hatch="//", edgecolor=th.PRIMARY, linewidth=0.6,
                      label="EBITDA (forecast)")
-        th.style_axes(
-            ax_e, title=f"{fin_history.get('ticker', '')} — EBITDA & free cash flow".lstrip(" —"),
-            subtitle=f"{n_q} quarters of history · source {source}",
-            ylabel=f"EBITDA ({currency})",
-        )
+        # Trailing-twelve-month trend over the quarterly bars. Fiscal seasonality
+        # makes the raw quarters a sawtooth; without this the eye reads noise and
+        # misses the decade-long compounding that is the whole point of the chart.
+        if seg_hist and len(seg_hist) >= 4:
+            ttm_e = th.trailing_avg(ebitda)
+            pts = [(seg_hist[i], v) for i, v in enumerate(ttm_e) if v is not None]
+            if pts:
+                ax_e.plot([x for x, _ in pts], [y for _, y in pts], color=th.INK,
+                          linewidth=2.0, zorder=6, solid_capstyle="round",
+                          label="TTM ÷ 4 (trend)")
+
+        # Title lives on the figure, not the axes: `legend_above` claims the strip
+        # directly above ax_e, and an axes title would sit underneath it.
+        _title = f"{fin_history.get('ticker', '')} — EBITDA & free cash flow".lstrip(" —")
+        _subtitle = (f"{n_q} quarters of history · source {source}"
+                     + (" · dark line = trailing-twelve-month average"
+                        if seg_hist and len(seg_hist) >= 4 else ""))
+        th.style_axes(ax_e, ylabel=f"EBITDA ({currency})")
         ax_e.yaxis.set_major_formatter(fmt)
-        ax_e.legend(loc="upper left", ncol=3)
+        th.legend_above(ax_e, ncol=4)
+        if seg_hist:
+            last = _last_valid(ebitda)
+            if last is not None:
+                th.value_chip(ax_e, seg_hist[last], ebitda[last],
+                              _money_fmt(ebitda[last]), th.PRIMARY)
 
         # --- bottom: FCF line + markers ---
         if seg_annual:
             ax_f.plot(seg_annual, a_fcf[:n_a], color="#b8b6ad", linewidth=1.4,
                       linestyle=":", label="FCF (annual FY)")
         if seg_hist:
+            # Area fill gives the FCF panel the same visual weight as the bar panel
+            # above it; a bare line reads as secondary next to a block of bars.
+            ax_f.fill_between(seg_hist, 0, fcf, color=th.AQUA, alpha=0.15,
+                              linewidth=0, zorder=2)
             ax_f.plot(seg_hist, fcf, color=th.AQUA, label="FCF (quarterly)",
                       zorder=4, **th.marker_kwargs(th.AQUA))
         if seg_fc:
@@ -457,10 +489,22 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
             join_y = ([fcf[-1]] + f_fcf) if seg_hist else f_fcf
             ax_f.plot(join_x, join_y, color=th.AQUA, linestyle="--", zorder=3,
                       label="FCF (forecast)", **th.marker_kwargs(th.AQUA))
+        if seg_hist and len(seg_hist) >= 4:
+            ttm_f = th.trailing_avg(fcf)
+            pts = [(seg_hist[i], v) for i, v in enumerate(ttm_f) if v is not None]
+            if pts:
+                ax_f.plot([x for x, _ in pts], [y for _, y in pts], color=th.INK,
+                          linewidth=2.0, zorder=6, solid_capstyle="round",
+                          label="TTM ÷ 4 (trend)")
         ax_f.axhline(0, color=th.AXIS, linewidth=0.8, zorder=1)
         th.style_axes(ax_f, ylabel=f"FCF ({currency})")
         ax_f.yaxis.set_major_formatter(fmt)
-        ax_f.legend(loc="upper left", ncol=3)
+        th.legend_above(ax_f, ncol=4)
+        if seg_hist:
+            last = _last_valid(fcf)
+            if last is not None:
+                th.value_chip(ax_f, seg_hist[last], fcf[last],
+                              _money_fmt(fcf[last]), th.AQUA)
 
         # forecast shaded region + basis caption
         if seg_fc:
@@ -468,16 +512,33 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
             for ax in (ax_e, ax_f):
                 ax.axvspan(left, right, color=th.PRIMARY, alpha=0.05,
                            linewidth=0, zorder=0)
+                # A tint alone is easy to miss at report scale; the rule makes the
+                # actual/estimate boundary unmissable.
+                ax.axvline(left, color=th.INK_MUTED, linewidth=1.0,
+                           linestyle=(0, (3, 3)), zorder=7)
             cap = _FORECAST_BASIS_LABELS.get(basis, basis or "forecast")
             th.caption(ax_f, f"shaded tail = forecast · basis: {cap}")
 
-        ax_f.set_xticks(xs)
-        step = max(1, len(all_labels) // 16)
-        ax_f.set_xticklabels(
-            [lbl if i % step == 0 else "" for i, lbl in enumerate(all_labels)],
-            rotation=45, ha="right", fontsize=8,
-        )
+        # Year ticks, horizontal. 40 quarters at 45° is 20 rotated labels doing the
+        # work four horizontal ones do — the year is the only granularity a reader
+        # navigates by. Falls back to the old thinned-label scheme when the labels
+        # are not fiscal quarters (annual-only sources).
+        ticks = [i for i, lbl in enumerate(all_labels) if str(lbl).endswith("Q1")]
+        if len(ticks) >= 3:
+            ax_f.set_xticks(ticks)
+            ax_f.set_xticklabels([str(all_labels[i])[:4] for i in ticks],
+                                 rotation=0, fontsize=9)
+        else:
+            ax_f.set_xticks(xs)
+            step = max(1, len(all_labels) // 16)
+            ax_f.set_xticklabels(
+                [lbl if i % step == 0 else "" for i, lbl in enumerate(all_labels)],
+                rotation=45, ha="right", fontsize=8,
+            )
+        # tight_layout first (it resolves label/axes overlap), then claim the top
+        # band for the figure title — tight_layout would otherwise reclaim it.
         fig.tight_layout()
+        th.figure_title(fig, _title, _subtitle)
         th.save(fig, out_path)
         return True
     except Exception as e:
@@ -532,7 +593,7 @@ def chart_net_income_vs_pe(fin_history: dict, valuation_bands: dict,
         th.style_axes(
             ax_ni, title=f"{ticker} — net income vs own-history P/E",
             subtitle="two scales: bars read on the left axis, the P/E line on the right",
-            ylabel=f"Net income ({currency})",
+            ylabel=f"Net income ({currency})", legend_row=True,
         )
         ax_ni.yaxis.set_major_formatter(FuncFormatter(_money_fmt))
 
@@ -556,8 +617,8 @@ def chart_net_income_vs_pe(fin_history: dict, valuation_bands: dict,
                               fontsize=8)
         lines_ni, labels_ni = ax_ni.get_legend_handles_labels()
         lines_pe, labels_pe = ax_pe.get_legend_handles_labels()
-        ax_ni.legend(lines_ni + lines_pe, labels_ni + labels_pe,
-                     loc="upper left", ncol=2)
+        th.legend_above(ax_ni, ncol=2, handles=lines_ni + lines_pe,
+                        labels=labels_ni + labels_pe)
         fig.tight_layout()
         th.save(fig, out_path)
         return True
@@ -637,13 +698,14 @@ def chart_relperf(ticker: str, region_suffix_bench: str, sector: str | None, out
             subtitle = (f"{ticker} at {subject_end[1]:,.0f} vs base 100 · "
                         f"all series indexed to the common start date")
         th.style_axes(ax, title=f"{ticker} — relative performance, 2.5 years",
-                      subtitle=subtitle, ylabel="Indexed to 100 at start")
+                      subtitle=subtitle, ylabel="Indexed to 100 at start",
+                      legend_row=True)
         # Direct end labels — with only 2-3 series they carry identity better than
         # a legend, which is kept as the dependable second channel.
         for x, y, sym, color in ends:
             th.label_line_end(ax, x, y, sym, color)
         ax.margins(x=0.06)
-        ax.legend(loc="upper left", ncol=3)
+        th.legend_above(ax, ncol=3)
 
         notes = []
         if bench_is_fallback:
@@ -753,10 +815,10 @@ def chart_revenue_segments(segments: dict, out_path: Path) -> bool:
             ax, title="Revenue by segment",
             subtitle=f"three fiscal years · top {min(5, len(segs))} segments"
                      + (" + Other" if len(segs) > 5 else ""),
-            ylabel=f"Revenue ({currency})",
+            ylabel=f"Revenue ({currency})", legend_row=True,
         )
         ax.yaxis.set_major_formatter(FuncFormatter(_money_fmt))
-        ax.legend(loc="upper left", ncol=3)
+        th.legend_above(ax, ncol=3)
         # Latest-year values labelled directly: the relief the lighter slots owe
         # for sitting below 3:1 contrast against the surface.
         for bar, val in last_bars:
