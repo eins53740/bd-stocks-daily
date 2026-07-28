@@ -55,7 +55,7 @@ def _shell(body: str, w: int, h: int) -> str:
     """The page chrome shared by every browser chart."""
     return f"""<!doctype html><meta charset="utf-8"><style>
 * {{ box-sizing:border-box; margin:0; padding:0 }}
-body {{ width:{w}px; height:{h}px; background:{th.SURFACE}; color:{th.INK};
+body {{ width:{w}px; height:{h}px; background:transparent; color:{th.INK};
   font-family:"Segoe UI Variable Text","Segoe UI",Inter,system-ui,sans-serif;
   -webkit-font-smoothing:antialiased }}
 .wrap {{ padding:20px 24px 0 }}
@@ -75,7 +75,7 @@ svg {{ position:absolute; left:0; top:0 }}
 .lg i {{ display:inline-block; width:22px; height:3px; border-radius:2px; margin-right:6px;
   vertical-align:3px }}
 .lg .bx {{ height:11px; border-radius:2px }}
-.pill rect {{ fill:{th.SURFACE}; stroke-width:1.3 }}
+.pill rect {{ fill:none; stroke-width:1.4 }}
 .pill text {{ font-size:12px; font-weight:700; text-anchor:middle }}
 </style>{body}"""
 
@@ -92,7 +92,9 @@ def _screenshot(html: str, out_path: Path, w: int, h: int) -> bool:
                                 device_scale_factor=DEVICE_SCALE)
                 pg.goto(tmp.as_uri())
                 pg.wait_for_timeout(220)   # let fonts settle before the capture
-                pg.screenshot(path=str(out_path))
+                # omit_background keeps the PNG alpha channel, matching the
+                # matplotlib path: one image that reads on a light or dark page.
+                pg.screenshot(path=str(out_path), omit_background=True)
             finally:
                 b.close()
         return Path(out_path).is_file() and Path(out_path).stat().st_size > 0
@@ -203,7 +205,7 @@ def render_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
             bx = x_of(n_h) - step / 2
             for top, hh in ((P1_T, P1_H), (P2_T, P2_H)):
                 parts.append(f'<rect x="{bx:.1f}" y="{top}" width="{W - PAD_R - bx:.1f}" '
-                             f'height="{hh}" rx="6" fill="#eef2f9"/>')
+                             f'height="{hh}" rx="6" fill="{th.PRIMARY}" fill-opacity=".07"/>')
                 parts.append(f'<line x1="{bx:.1f}" y1="{top}" x2="{bx:.1f}" '
                              f'y2="{top + hh}" stroke="{th.INK_MUTED}" stroke-width="1" '
                              f'stroke-dasharray="3 3"/>')
@@ -270,10 +272,13 @@ def render_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
             idx = next((i for i in range(len(vals) - 1, -1, -1) if vals[i] is not None), None)
             if idx is None:
                 continue
-            x, y = x_of(idx), yf(vals[idx])
-            parts.append(f'<g class="pill"><rect x="{x - 27:.1f}" y="{y - 30:.1f}" '
+            # The pill is border-only (transparent PNG), so the dashed forecast
+            # rule would show straight through it — shift it left of the boundary.
+            cx = x_of(idx) - (38 if n_f else 0)
+            y = yf(vals[idx])
+            parts.append(f'<g class="pill"><rect x="{cx - 27:.1f}" y="{y - 30:.1f}" '
                          f'width="54" height="21" rx="10.5" stroke="{colour}"/>'
-                         f'<text x="{x:.1f}" y="{y - 15:.1f}" fill="{colour}">'
+                         f'<text x="{cx:.1f}" y="{y - 15:.1f}" fill="{colour}">'
                          f'{_money(vals[idx])}</text></g>')
 
         for i, lab in enumerate(all_labels):

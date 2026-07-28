@@ -9,21 +9,22 @@ Everything here is styling only — no chart ever changes what it plots.
 
 Palette provenance
 ------------------
-Hues, ink and surface come from the validated reference palette of the `dataviz`
-skill (light mode; these PNGs are embedded in HTML email, which renders on a
-light surface, so the dark steps are deliberately not used). The categorical
-slots are assigned IN FIXED ORDER and never cycled — a 7th series folds into
-"Other" rather than inventing a hue.
+Hues come from the validated reference palette of the `dataviz` skill. The
+categorical slots are assigned IN FIXED ORDER and never cycled — a 7th series
+folds into "Other" rather than inventing a hue.
 
-Validated with the skill's own checker, light mode, surface #fcfcfb:
+The PNGs are TRANSPARENT (2026-07-28), so one image has to read on a light page,
+a dark Obsidian theme, a white email client and paper. The palette is therefore
+stepped into the DARK lightness band, which is a strict subset of the light band —
+see the surfaces block below. Validated with the skill's own checker in BOTH modes:
 
-  3 slots (line charts)      worst adjacent CVD ΔE 9.2 · normal-vision ΔE 27.6 → PASS
-  6 slots (segment bars)     worst adjacent CVD ΔE 9.1 · normal-vision ΔE 19.6 → PASS
+  6 slots, light  ALL PASS  (contrast WARN on aqua 2.87 → relief obligation)
+  6 slots, dark   ALL PASS
+  worst adjacent CVD ΔE 9.3 (deutan) · normal-vision ΔE 16.8
 
-Both runs raise the documented contrast WARN for the lighter hues (aqua 2.74,
-yellow 2.11, magenta 2.62 vs the surface), which obliges *relief*: every chart
-using those slots ships a legend plus direct value labels. That is why
-`chart_revenue_segments` labels its latest-year bars.
+The light-mode contrast WARN obliges *relief*: every chart using the lighter hues
+ships a legend plus direct value labels. That is why `chart_revenue_segments`
+labels its latest-year bars.
 """
 from __future__ import annotations
 
@@ -31,23 +32,48 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 # --- surfaces & ink ---------------------------------------------------------
-SURFACE = "#fcfcfb"      # chart surface — also the colour of the two spacers
-INK = "#0b0b0b"          # primary ink: titles
-INK_SECONDARY = "#52514e"  # secondary ink: axis labels, legends, value labels
-INK_MUTED = "#898781"     # muted ink: tick labels, captions
-GRID = "#e1e0d9"         # hairline gridline, one step off the surface
-AXIS = "#c3c2b7"         # baseline / axis rule
+# THE PNGs ARE TRANSPARENT. A static image cannot respond to the reader's theme —
+# Obsidian will not swap it — so instead of choosing a background we draw on none,
+# and the image adopts whatever page it lands on: light Obsidian, dark Obsidian, a
+# white email client, or paper.
+#
+# The cost is real and worth stating: ink can no longer be near-black, because
+# near-black vanishes on a dark page. Every ink step is now a MID-TONE chosen to
+# clear 3:1 against BOTH a light (#fcfcfb) and a dark (#1e1e1e … #262626) surface.
+# The theoretical ceiling for a colour equidistant from both is ~3.9:1, so these
+# steps pass WCAG AA for large/bold text and non-text contrast, and do NOT reach
+# the 4.5:1 body-text threshold on both surfaces simultaneously — no palette can.
+# Titles are therefore set bold, and small print leans on INK_MUTED sparingly.
+SURFACE = "#fcfcfb"      # the light reference surface: what the browser CSS and the
+                         # contrast maths assume, NOT a fill painted into the PNG
+INK = "#787772"          # primary ink: titles (bold)   light 4.37 · dark 3.37
+INK_SECONDARY = "#84837d"  # axis labels, legends        light 3.70 · dark 3.98
+INK_MUTED = "#928f88"    # tick labels, captions         light 3.14 · dark 4.69
+GRID = "#a3a29b"         # hairline gridline — drawn at low alpha, so it is meant to
+                         # sit below the 3:1 line: it is decoration, not information
+AXIS = "#94938c"         # baseline / axis rule          light 3.00 · dark 4.91
+RING = "#8b8a84"         # the ring around overlapping marks, replacing the old
+                         # surface-coloured knockout (which became a light blob on a
+                         # dark page)  light 3.37 · dark 4.37
 
 # --- categorical slots (fixed order, never cycled) -------------------------
+# Re-stepped 2026-07-28 into the DARK lightness band L [0.48, 0.67], which is a
+# strict SUBSET of the light band [0.43, 0.77] — so one palette now validates on
+# both surfaces, which is what a transparent PNG requires. Hue and chroma were
+# held; only L moved. Verified with dataviz/scripts/validate_palette.js:
+#   6 slots, light: ALL PASS (contrast WARN on #12ab77 2.87 -> relief via the
+#            always-present legend + direct labels)
+#   6 slots, dark:  ALL PASS
+#   worst adjacent CVD dE 9.3 (deutan) · normal-vision 16.8 — both above floor
 SERIES = [
-    "#2a78d6",  # 1 blue
-    "#eb6834",  # 2 orange
-    "#1baf7a",  # 3 aqua
-    "#eda100",  # 4 yellow
-    "#e87ba4",  # 5 magenta
-    "#008300",  # 6 green
-    "#4a3aa7",  # 7 violet
-    "#e34948",  # 8 red
+    "#2a78d6",  # 1 blue      L 0.575 (unchanged)
+    "#e6642f",  # 2 orange    L 0.671 -> 0.657
+    "#12ab77",  # 3 aqua      L 0.669 -> 0.657
+    "#c98000",  # 4 yellow    L 0.764 -> 0.661  (the biggest move)
+    "#d46992",  # 5 magenta   L 0.716 -> 0.658
+    "#008300",  # 6 green     L 0.529 (unchanged)
+    "#594cba",  # 7 violet    L 0.433 -> 0.491  (was below the dark floor)
+    "#e34948",  # 8 red       L 0.623 (unchanged)
 ]
 PRIMARY = SERIES[0]
 ACCENT = SERIES[1]
@@ -92,9 +118,11 @@ def apply_theme() -> None:
         "ytick.labelsize": 9,
         "legend.fontsize": 9,
         # Surfaces
-        "figure.facecolor": SURFACE,
-        "axes.facecolor": SURFACE,
-        "savefig.facecolor": SURFACE,
+        # "none" == transparent. See the surfaces note at the top of this module:
+        # the PNG paints no background so it can sit on a light or dark page.
+        "figure.facecolor": "none",
+        "axes.facecolor": "none",
+        "savefig.facecolor": "none",
         "savefig.dpi": DPI,
         "figure.dpi": DPI,
         # Ink
@@ -156,7 +184,9 @@ def style_axes(ax, title: str | None = None, subtitle: str | None = None,
     are lifted to leave that row free. Without it the legend prints over the title.
     """
     ax.set_axisbelow(True)
-    ax.grid(True, axis=grid_axis, color=GRID, linewidth=0.8, linestyle="-")
+    # Alpha, not a lighter hue: a fixed near-surface grey only recedes against the
+    # surface it was picked for. Alpha recedes against whatever is actually behind.
+    ax.grid(True, axis=grid_axis, color=GRID, linewidth=0.8, linestyle="-", alpha=0.45)
     if grid_axis == "y":
         ax.grid(False, axis="x")
     elif grid_axis == "x":
@@ -195,7 +225,7 @@ def marker_kwargs(color: str) -> dict:
         "marker": "o",
         "markersize": 5.0,
         "markerfacecolor": color,
-        "markeredgecolor": SURFACE,
+        "markeredgecolor": RING,
         "markeredgewidth": 1.4,
     }
 
@@ -241,16 +271,23 @@ def figure_title(fig, title: str, subtitle: str | None = None,
                  va="top", ha="left")
 
 
-def value_chip(ax, x, y, text: str, color: str, dy: int = 9):
-    """Boxed last-value label. The reader's first question of any time series is
+def value_chip(ax, x, y, text: str, color: str, dy: int = 9, dx: int = 6):
+    """Boxed last-value label; `dx`/`dy` are point offsets from the mark.
+
+    The box is border-only (an opaque fill would be a pale blob on a dark page), so
+    whatever is behind it shows through — callers near a reference line should pass a
+    negative `dx` to move the chip clear of it.
+
+    The reader's first question of any time series is
     "where is it now?" — answering it on the mark costs one annotation and saves a
     trip to the axis. The surface-filled box keeps the text legible even when the
     chip lands on a gridline or another series."""
     return ax.annotate(
-        text, xy=(x, y), xytext=(6, dy), textcoords="offset points",
+        text, xy=(x, y), xytext=(dx, dy), textcoords="offset points",
         fontsize=10.5, fontweight="bold", color=color, zorder=9,
-        bbox=dict(boxstyle="round,pad=0.28", facecolor=SURFACE, edgecolor=color,
-                  linewidth=1.0))
+        # Border only: an opaque fill would print as a pale blob on a dark page.
+        bbox=dict(boxstyle="round,pad=0.28", facecolor="none", edgecolor=color,
+                  linewidth=1.2))
 
 
 def trailing_avg(values, window: int = 4):
@@ -316,7 +353,9 @@ def percent_axis(ax, axis: str = "x", decimals: int = 0) -> None:
 
 
 def save(fig, path, pad: float = 0.35) -> None:
-    """Single save path so every PNG lands at the same dpi and padding."""
+    """Single save path so every PNG lands at the same dpi, padding and (lack of)
+    background. `transparent=True` is the whole point: see the surfaces note at the
+    top of this module."""
     fig.savefig(path, dpi=DPI, bbox_inches="tight", pad_inches=pad,
-                facecolor=SURFACE)
+                transparent=True)
     plt.close(fig)

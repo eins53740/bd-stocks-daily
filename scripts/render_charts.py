@@ -197,7 +197,7 @@ def chart_radar(scores: dict, ticker: str, outfile: Path) -> bool:
         angles_plot = angles + [angles[0]]
 
         fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw=dict(polar=True))
-        ax.set_facecolor(th.SURFACE)
+        ax.set_facecolor("none")   # transparent PNG; see chart_theme surfaces note
         ax.fill(angles_plot, vals_plot, color=th.PRIMARY, alpha=0.12, linewidth=0)
         ax.plot(angles_plot, vals_plot, color=th.PRIMARY, linewidth=2, zorder=4)
         # One dot per axis, ringed in the surface colour so it stays legible
@@ -375,7 +375,7 @@ def chart_dcf(
                         textcoords="offset points", ha="center", va="bottom",
                         fontsize=10, color=th.INK_SECONDARY, fontweight="semibold",
                         zorder=7,
-                        bbox=dict(boxstyle="round,pad=0.18", facecolor=th.SURFACE,
+                        bbox=dict(boxstyle="round,pad=0.18", facecolor="none",
                                   edgecolor="none"))
         # Dashed here is correct and deliberate: this is a threshold, not a grid.
         ax.axhline(price, color=th.INK_SECONDARY, linestyle="--", linewidth=1.2,
@@ -486,8 +486,11 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
         if seg_hist:
             last = _last_valid(ebitda)
             if last is not None:
+                # Left of the mark when a forecast rule follows it: the chip is
+                # border-only, so the dashed rule would otherwise strike through it.
                 th.value_chip(ax_e, seg_hist[last], ebitda[last],
-                              _money_fmt(ebitda[last]), th.PRIMARY)
+                              _money_fmt(ebitda[last]), th.PRIMARY,
+                              dx=-46 if seg_fc else 6)
 
         # --- bottom: FCF line + markers ---
         if seg_annual:
@@ -520,7 +523,8 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
             last = _last_valid(fcf)
             if last is not None:
                 th.value_chip(ax_f, seg_hist[last], fcf[last],
-                              _money_fmt(fcf[last]), th.AQUA)
+                              _money_fmt(fcf[last]), th.AQUA,
+                              dx=-46 if seg_fc else 6)
 
         # forecast shaded region + basis caption
         if seg_fc:

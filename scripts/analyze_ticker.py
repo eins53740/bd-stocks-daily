@@ -88,7 +88,11 @@ def pct_change(series, periods: int = 1):
 
 def cagr(start, end, years: int):
     try:
-        if start is None or end is None or start <= 0 or years <= 0:
+        # Both endpoints must be positive: a fractional power of a negative
+        # ratio returns a *complex* number (no exception), which then poisons
+        # every downstream comparison. Holding companies (EXO.AS) can report a
+        # negative "Total Revenue" when the line is a net investment result.
+        if start is None or end is None or start <= 0 or end <= 0 or years <= 0:
             return None
         return (end / start) ** (1.0 / years) - 1.0
     except Exception:

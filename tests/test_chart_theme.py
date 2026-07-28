@@ -27,11 +27,58 @@ import chart_theme as th  # noqa: E402
 
 def test_palette_is_the_validated_set_in_fixed_order():
     # Order is the CVD-safety mechanism, not cosmetic — a reshuffle invalidates
-    # the adjacent-pair separation the palette was validated on.
+    # the adjacent-pair separation the palette was validated on. These are the
+    # 2026-07-28 steps, re-stepped into the DARK lightness band so one palette
+    # validates on both surfaces (required once the PNGs went transparent).
     assert th.SERIES == [
-        "#2a78d6", "#eb6834", "#1baf7a", "#eda100",
-        "#e87ba4", "#008300", "#4a3aa7", "#e34948",
+        "#2a78d6", "#e6642f", "#12ab77", "#c98000",
+        "#d46992", "#008300", "#594cba", "#e34948",
     ]
+
+
+def test_every_slot_sits_inside_the_dark_lightness_band():
+    """The dark band [0.48, 0.67] is a strict subset of light's [0.43, 0.77], so
+    staying inside it is what lets a single transparent PNG read on either page.
+    Recomputed here rather than trusted: an eyeballed hex tweak would silently
+    break the property the whole transparency decision rests on."""
+    import math
+
+    def oklch_L(hexc):
+        h = hexc.lstrip("#")
+        def lin(c):
+            c /= 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b = (lin(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+        l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+        m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+        s_ = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+        c = [v ** (1 / 3) if v > 0 else -((-v) ** (1 / 3)) for v in (l, m, s_)]
+        return 0.2104542553 * c[0] + 0.7936177850 * c[1] - 0.0040720468 * c[2]
+
+    for hexc in th.SERIES:
+        L = oklch_L(hexc)
+        assert 0.48 <= L <= 0.67, f"{hexc} L={L:.3f} outside the dark band"
+
+
+def test_ink_steps_clear_three_to_one_on_both_surfaces():
+    """The point of the mid-tone ink: legible on a light page AND a dark one."""
+    def lum(hexc):
+        h = hexc.lstrip("#")
+        def lin(c):
+            c /= 255
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        r, g, b = (lin(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    def ratio(a, b):
+        la, lb = lum(a), lum(b)
+        hi, lo = max(la, lb), min(la, lb)
+        return (hi + 0.05) / (lo + 0.05)
+
+    for name in ("INK", "INK_SECONDARY", "INK_MUTED", "AXIS", "RING"):
+        col = getattr(th, name)
+        light, dark = ratio(col, "#fcfcfb"), ratio(col, "#1e1e1e")
+        assert min(light, dark) >= 3.0,             f"{name} {col}: light {light:.2f}, dark {dark:.2f} — below 3:1 on one surface"
 
 
 def test_named_slots_point_at_the_first_three_series():
@@ -114,9 +161,13 @@ def test_percent_axis_formats_fractions_as_percentages():
     plt.close(fig)
 
 
-def test_marker_kwargs_carry_a_surface_ring():
+def test_marker_kwargs_carry_a_neutral_ring_not_a_surface_knockout():
+    # A surface-coloured ring was a knockout: it only worked because the PNG had a
+    # light background painted in. On a transparent PNG over a dark page it became a
+    # pale blob, so the ring is now a dual-surface neutral.
     kw = th.marker_kwargs(th.PRIMARY)
-    assert kw["markeredgecolor"] == th.SURFACE
+    assert kw["markeredgecolor"] == th.RING
+    assert kw["markeredgecolor"] != th.SURFACE
     assert kw["markeredgewidth"] > 0
     assert kw["markerfacecolor"] == th.PRIMARY
 
@@ -372,18 +423,46 @@ def test_legend_row_also_lifts_the_subtitle():
     assert subtitle_y(legend_row=True) > subtitle_y()
 
 
-def test_value_chip_is_drawn_with_a_surface_filled_box():
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import chart_theme as th
+def test_value_chip_is_border_only_so_it_reads_on_any_background():
+    # Was a surface-filled box, which only worked because the PNG painted a light
+    # background. Transparent PNGs made that fill a pale blob on a dark page.
     fig, ax = plt.subplots()
     ann = th.value_chip(ax, 1, 2, "3.5B", th.PRIMARY)
     assert ann.get_text() == "3.5B"
-    # Surface fill is what keeps the text legible over a gridline or another series.
-    assert ann.get_bbox_patch().get_facecolor()[:3] == \
-        matplotlib.colors.to_rgb(th.SURFACE)
+    assert ann.get_bbox_patch().get_facecolor()[3] == 0, "no fill"
+    assert ann.get_bbox_patch().get_edgecolor()[:3] == \
+        matplotlib.colors.to_rgb(th.PRIMARY)
     plt.close(fig)
+
+
+def test_value_chip_can_be_offset_left_of_a_reference_line():
+    # Border-only means whatever is behind shows through, so callers next to the
+    # forecast rule must be able to move the chip clear of it.
+    fig, ax = plt.subplots()
+    left = th.value_chip(ax, 1, 2, "x", th.PRIMARY, dx=-46)
+    right = th.value_chip(ax, 1, 2, "x", th.PRIMARY)
+    assert left.xyann[0] < 0 < right.xyann[0]
+    plt.close(fig)
+
+
+def test_theme_paints_no_background():
+    th.apply_theme()
+    for key in ("figure.facecolor", "axes.facecolor", "savefig.facecolor"):
+        assert matplotlib.rcParams[key] in ("none", (0, 0, 0, 0)), \
+            f"{key} must be transparent, or dark-page reading breaks"
+
+
+def test_saved_png_carries_an_alpha_channel(tmp_path):
+    """The end-to-end guarantee: whatever the theme says, the file on disk must
+    actually be transparent, or none of the dual-surface work reaches the reader."""
+    from PIL import Image
+    fig, ax = plt.subplots()
+    ax.plot([0, 1], [0, 1])
+    out = tmp_path / "alpha.png"
+    th.save(fig, out)
+    im = Image.open(out)
+    assert im.mode == "RGBA"
+    assert im.convert("RGBA").getpixel((0, 0))[3] == 0, "corner pixel must be clear"
 
 
 def test_figure_title_reserves_the_top_margin():
