@@ -57,6 +57,24 @@ BUILD_DASHBOARD = Path(r"C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\
 
 RECIPIENTS = ["eins.ist@gmail.com"]
 
+# Attribution line closing every digest. The host is stamped so it is obvious at a
+# glance which machine ran the 17:00 job — the laptop or a VM host.
+ATTRIBUTION_MODEL = "Claude Opus 5 (1M context)"
+ATTRIBUTION_OWNER = "bsdias©2026"
+
+
+def run_host() -> str:
+    """Hostname of the machine composing this digest ('unknown' if undiscoverable)."""
+    import platform
+    try:
+        return platform.node() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def attribution_text() -> str:
+    return f"Analysis written by {ATTRIBUTION_MODEL} · {ATTRIBUTION_OWNER} · host: {run_host()}"
+
 # v4 Phase E — price-triggered watch-list, wired into this digest.
 WATCHLIST = OUT_DIR / "_watchlist.csv"
 LIVE_PRICES = OUT_DIR / "_live_prices.json"
@@ -93,6 +111,9 @@ def log(msg: str) -> None:
 
 
 def obsidian_link(filename: str) -> str:
+    """obsidian:// URI for a note under OUT_REL. `filename` carries no extension and
+    may include subdirectories (`_industry/semiconductors`), which is how wikilink
+    targets inside the reports address the cached macro/industry notes."""
     import urllib.parse
     path = f"{OUT_REL}/{filename}.md"
     return f"obsidian://open?vault=BD_Obsidian&file={urllib.parse.quote(path)}"
@@ -546,19 +567,168 @@ def _strip_frontmatter(md: str) -> str:
     return md
 
 
+# --- Obsidian-flavoured markdown -> email HTML -------------------------------
+# python-markdown knows nothing about Obsidian's two vault-specific constructs,
+# so both used to reach the inbox as literal source text:
+#   [[_macro/2026-07-27|Full macro snapshot]]   ->  shown verbatim, not a link
+#   > [!danger] data-quality: suspect            ->  blockquote reading "[!danger] ..."
+# Both are rewritten here, ahead of the markdown pass.
+
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]|]+?)(?:\|([^\[\]]*?))?\]\]")
+_CALLOUT_START_RE = re.compile(r"^>\s*\[!([A-Za-z]+)\][+-]?\s*(.*)$")
+
+# Obsidian callout type -> (accent, tinted background, emoji). Types are grouped
+# the way Obsidian groups them, so aliases share one visual identity.
+_CALLOUT_STYLES = {
+    "note": ("#2563eb", "#eff5ff", "📝"),
+    "abstract": ("#0891b2", "#ecfeff", "📋"),
+    "summary": ("#0891b2", "#ecfeff", "📋"),
+    "tldr": ("#0891b2", "#ecfeff", "⚡"),
+    "info": ("#2563eb", "#eff5ff", "ℹ️"),
+    "todo": ("#2563eb", "#eff5ff", "☑️"),
+    "tip": ("#0d9488", "#f0fdfa", "💡"),
+    "hint": ("#0d9488", "#f0fdfa", "💡"),
+    "important": ("#0d9488", "#f0fdfa", "❗"),
+    "success": ("#059669", "#ecfdf5", "✅"),
+    "check": ("#059669", "#ecfdf5", "✅"),
+    "done": ("#059669", "#ecfdf5", "✅"),
+    "question": ("#d97706", "#fffbeb", "❓"),
+    "help": ("#d97706", "#fffbeb", "❓"),
+    "faq": ("#d97706", "#fffbeb", "❓"),
+    "warning": ("#d97706", "#fffbeb", "⚠️"),
+    "caution": ("#d97706", "#fffbeb", "⚠️"),
+    "attention": ("#d97706", "#fffbeb", "⚠️"),
+    "failure": ("#dc2626", "#fef2f2", "❌"),
+    "fail": ("#dc2626", "#fef2f2", "❌"),
+    "missing": ("#dc2626", "#fef2f2", "❌"),
+    "danger": ("#dc2626", "#fef2f2", "🚨"),
+    "error": ("#dc2626", "#fef2f2", "🚨"),
+    "bug": ("#dc2626", "#fef2f2", "🐛"),
+    "example": ("#7c3aed", "#f5f3ff", "🔬"),
+    "quote": ("#64748b", "#f8fafc", "❝"),
+    "cite": ("#64748b", "#f8fafc", "❝"),
+}
+_CALLOUT_DEFAULT = ("#64748b", "#f8fafc", "")
+
+
+def wikilinks_to_html(text: str) -> str:
+    """Rewrite `[[target]]` / `[[target|label]]` into obsidian:// anchors.
+
+    `target` may address a sibling report (`2026-07-09_TSM_invest`) or a cached
+    note in a subdirectory (`_industry/semiconductors`), optionally with a
+    `#heading` suffix. Label defaults to the target's last path segment.
+    """
+    import urllib.parse
+
+    def _sub(m: re.Match) -> str:
+        target = (m.group(1) or "").strip()
+        if not target:
+            return m.group(0)
+        label = (m.group(2) or "").strip() or target.split("/")[-1]
+        file_part, _, anchor = target.partition("#")
+        href = obsidian_link(file_part.strip())
+        if anchor.strip():
+            href += "%23" + urllib.parse.quote(anchor.strip())
+        return (
+            f'<a href="{href}" style="color:#2563eb;text-decoration:none;'
+            f'border-bottom:1px dotted #93c5fd;">{html.escape(label)}</a>'
+        )
+
+    return _WIKILINK_RE.sub(_sub, text)
+
+
+def _render_callout(ctype: str, title_md: str, body_lines: list[str]) -> str:
+    accent, bg, emoji = _CALLOUT_STYLES.get(ctype.lower(), _CALLOUT_DEFAULT)
+    lead = f"{emoji} " if emoji else ""
+    title_html = _inline_markdown(title_md) if title_md else ctype.capitalize()
+    body_html = ""
+    body_md = "\n".join(body_lines).strip()
+    if body_md:
+        body_html = (
+            f"<div style='margin-top:6px;font-size:13.5px;line-height:1.55;'>"
+            f"{_block_markdown(body_md)}</div>"
+        )
+    return (
+        f"<div style=\"border-left:4px solid {accent};background:{bg};"
+        f"border-radius:6px;padding:10px 14px;margin:12px 0;\">"
+        f"<div style='font-weight:600;color:{accent};font-size:13.5px;line-height:1.5;'>"
+        f"{lead}{title_html}</div>{body_html}</div>"
+    )
+
+
+def callouts_to_html(text: str) -> tuple[str, dict[str, str]]:
+    """Replace `> [!type]` callout blocks with placeholder tokens.
+
+    Returns (text_with_placeholders, {token: html}). Tokens are substituted back
+    after the markdown pass so python-markdown never sees — and never re-escapes
+    or re-wraps — the generated HTML.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    blocks: dict[str, str] = {}
+    i = 0
+    while i < len(lines):
+        m = _CALLOUT_START_RE.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        ctype, title = m.group(1), m.group(2)
+        body: list[str] = []
+        i += 1
+        while i < len(lines) and lines[i].lstrip().startswith(">"):
+            body.append(re.sub(r"^\s*>\s?", "", lines[i]))
+            i += 1
+        token = f"CALLOUTBLOCK{len(blocks)}CALLOUTBLOCK"
+        blocks[token] = _render_callout(ctype, title, body)
+        out.append("")
+        out.append(token)
+        out.append("")
+    return "\n".join(out), blocks
+
+
+def _inline_markdown(md: str) -> str:
+    """Render a one-line fragment, stripped of the <p> wrapper markdown adds."""
+    if _markdown is None:
+        return html.escape(md)
+    try:
+        rendered = _markdown.markdown(md, extensions=["extra"]).strip()
+    except Exception:
+        return html.escape(md)
+    if rendered.startswith("<p>") and rendered.endswith("</p>"):
+        rendered = rendered[3:-4]
+    return rendered
+
+
+def _block_markdown(md: str) -> str:
+    if _markdown is None:
+        return html.escape(md).replace("\n", "<br>")
+    try:
+        return _markdown.markdown(md, extensions=["extra", "sane_lists", "tables", "fenced_code"])
+    except Exception:
+        return html.escape(md).replace("\n", "<br>")
+
+
 def render_markdown_html(md: str) -> str:
     """Render markdown content to HTML for inline email embedding."""
-    md_body = _strip_frontmatter(md)
+    md_body = wikilinks_to_html(_strip_frontmatter(md))
+    md_body, callout_blocks = callouts_to_html(md_body)
     if _markdown is not None:
         try:
-            return _markdown.markdown(
+            rendered = _markdown.markdown(
                 md_body,
                 extensions=["extra", "sane_lists", "tables", "fenced_code"],
             )
+            for token, block_html in callout_blocks.items():
+                # markdown wraps a bare token line in <p>...</p>; drop that wrapper
+                # so the callout <div> is not nested inside a paragraph.
+                rendered = rendered.replace(f"<p>{token}</p>", block_html).replace(token, block_html)
+            return rendered
         except Exception:
             pass
     # Fallback: escape + preserve line breaks in a <pre> block
-    return f"<pre style='white-space:pre-wrap;font-family:monospace;font-size:12px;'>{html.escape(md_body)}</pre>"
+    plain = _strip_frontmatter(md)
+    return f"<pre style='white-space:pre-wrap;font-family:monospace;font-size:12px;'>{html.escape(plain)}</pre>"
 
 
 def load_report_markdown(row: dict) -> tuple[str, str]:
@@ -632,7 +802,8 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
                 f"<h2>StocksDaily {target_date}</h2>"
                 f"<p>No daily (quality-lens) evaluations for this date - growth lens only.</p>"
                 f"{growth_section_html}"
-                f"<hr><p style='font-size: 12px; color: #888;'>🤖 Auto-generated. Not investment advice.</p>"
+                f"<hr><p style='font-size: 12px; color: #888;'>🤖 Auto-generated. Not investment advice."
+                f"<br>{html.escape(attribution_text())}</p>"
                 f"</body></html>"
             )
             text_lines = [f"StocksDaily {target_date} - growth lens only", ""]
@@ -641,6 +812,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
                     f"- {r.get('ticker','')}: {float(r.get('growth_composite') or 0):.2f}/10 "
                     f"{(r.get('verdict','') or '').upper()} (Ro40 {r.get('rule_of_40','')})"
                 )
+            text_lines += ["", "--", attribution_text()]
             return subject, html_body, "\n".join(text_lines) + "\n"
         subject = f"StocksDaily {target_date} - no evaluations"
         html_body = (
@@ -714,6 +886,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         <p style="font-size: 12px; color: #888;">
           Horizonte: 1-5 anos · Filtro: Quality Compounder + Piotroski + Altman ·
           <a href="obsidian://open?vault=BD_Obsidian&file=Personal/Finance/StocksDaily/_shortlist.md">Open shortlist</a>
+          <br>{html.escape(attribution_text())}
         </p>
       </body>
     </html>
@@ -741,6 +914,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         f"--\n"
         f"Horizon: 1-5 years. Filter: Quality Compounder + Piotroski + Altman.\n"
         f"Shortlist: BD_Obsidian/{OUT_REL}/_shortlist.md\n"
+        f"{attribution_text()}\n"
     )
 
     return subject, html_body, text_body

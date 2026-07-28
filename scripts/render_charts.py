@@ -48,6 +48,9 @@ import yfinance as yf  # noqa: E402
 # scripts dir). Importing it is network-free — it only defines constants/fns.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from technical_score import BENCH_BY_SUFFIX, DEFAULT_BENCH  # noqa: E402
+import chart_theme as th  # noqa: E402
+
+th.apply_theme()
 
 
 DEFAULT_IMG_DIR = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily\IMG")
@@ -122,21 +125,27 @@ def chart_price(ticker: str, outfile: Path) -> bool:
         volume = h["Volume"]
 
         fig, (ax1, ax2) = plt.subplots(
-            2, 1, figsize=(10, 6), gridspec_kw={"height_ratios": [3, 1]}, sharex=True
+            2, 1, figsize=(10, 6), gridspec_kw={"height_ratios": [3.2, 1]}, sharex=True
         )
-        ax1.plot(close.index, close.values, label="Close", linewidth=1.5, color="#1f77b4")
-        ax1.plot(sma50.index, sma50.values, label="SMA50", linewidth=1, color="#ff7f0e", alpha=0.8)
-        ax1.plot(sma200.index, sma200.values, label="SMA200", linewidth=1, color="#d62728", alpha=0.8)
-        ax1.set_title(f"{ticker} — Price 1Y", fontsize=14, fontweight="bold")
-        ax1.set_ylabel("Price")
-        ax1.legend(loc="upper left")
-        ax1.grid(True, alpha=0.3)
-        ax2.bar(volume.index, volume.values, color="#7f7f7f", alpha=0.6, width=1.0)
-        ax2.set_ylabel("Volume")
-        ax2.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(outfile, dpi=100, bbox_inches="tight")
-        plt.close()
+        ax1.plot(close.index, close.values, label="Close", color=th.PRIMARY, zorder=4)
+        ax1.plot(sma50.index, sma50.values, label="SMA50", linewidth=1.4,
+                 color=th.ACCENT, zorder=3)
+        ax1.plot(sma200.index, sma200.values, label="SMA200", linewidth=1.4,
+                 color=th.AQUA, zorder=2)
+        # Deliberately no area fill: an area under a price line has to be anchored
+        # somewhere, and any anchor other than zero invents a baseline the reader
+        # will read as meaningful. Three lines carry the comparison on their own.
+        last_close = float(close.iloc[-1])
+        th.style_axes(ax1, title=f"{ticker} — price, 1 year",
+                      subtitle=f"close {last_close:,.2f} · SMA50 / SMA200 overlay",
+                      ylabel="Price")
+        th.label_line_end(ax1, close.index[-1], last_close, f"{last_close:,.2f}", th.PRIMARY)
+        ax1.legend(loc="upper left", ncol=3)
+        ax2.bar(volume.index, volume.values, color=th.INK_MUTED, alpha=0.55, width=1.0)
+        th.style_axes(ax2, ylabel="Volume")
+        ax2.yaxis.set_major_formatter(FuncFormatter(_money_fmt))
+        fig.tight_layout()
+        th.save(fig, outfile)
         return True
     except Exception as e:
         log(f"price chart fail: {e}")
@@ -168,20 +177,38 @@ def chart_radar(scores: dict, ticker: str, outfile: Path) -> bool:
         vals_plot = vals + [vals[0]]
         angles_plot = angles + [angles[0]]
 
-        fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
-        ax.fill(angles_plot, vals_plot, color="#1f77b4", alpha=0.25)
-        ax.plot(angles_plot, vals_plot, color="#1f77b4", linewidth=2)
+        fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw=dict(polar=True))
+        ax.set_facecolor(th.SURFACE)
+        ax.fill(angles_plot, vals_plot, color=th.PRIMARY, alpha=0.12, linewidth=0)
+        ax.plot(angles_plot, vals_plot, color=th.PRIMARY, linewidth=2, zorder=4)
+        # One dot per axis, ringed in the surface colour so it stays legible
+        # where the outline crosses a spoke.
+        ax.plot(angles, vals, linestyle="none", zorder=5, **th.marker_kwargs(th.PRIMARY))
         ax.set_ylim(0, 10)
         ax.set_xticks(angles)
-        ax.set_xticklabels(labels, fontsize=11)
+        ax.set_xticklabels(labels, fontsize=10, color=th.INK_SECONDARY)
         ax.set_yticks([2, 4, 6, 8, 10])
-        ax.set_yticklabels(["2", "4", "6", "8", "10"], fontsize=9)
-        ax.grid(True, alpha=0.4)
+        ax.set_yticklabels(["2", "4", "6", "8", "10"], fontsize=8, color=th.INK_MUTED)
+        ax.set_rlabel_position(90)
+        ax.grid(True, color=th.GRID, linewidth=0.8, linestyle="-")
+        ax.spines["polar"].set_color(th.GRID)
+        ax.spines["polar"].set_linewidth(0.8)
+        # Per-axis scores sit beside their spoke — the radar's shape shows the
+        # profile, the labels carry the values the radial ticks only approximate.
+        for ang, val in zip(angles, vals):
+            ax.annotate(f"{val:.1f}", xy=(ang, val), xytext=(0, 9),
+                        textcoords="offset points", ha="center", va="center",
+                        fontsize=8.5, color=th.INK_SECONDARY, fontweight="semibold")
         composite = scores.get("composite", 0)
-        ax.set_title(f"{ticker} — Composite: {composite}/10", fontsize=14, fontweight="bold", pad=20)
-        plt.tight_layout()
-        plt.savefig(outfile, dpi=100, bbox_inches="tight")
-        plt.close()
+        # Title and subtitle are set at FIGURE level, not on the axes: a polar
+        # axes' title pad is measured from the square bounding box, so an
+        # axes-relative subtitle lands on top of the title instead of below it.
+        fig.tight_layout(rect=(0, 0, 1, 0.93))
+        fig.text(0.02, 0.975, f"{ticker} — score profile", ha="left", va="top",
+                 fontsize=13, fontweight="semibold", color=th.INK)
+        fig.text(0.02, 0.945, f"composite {composite}/10 · each axis scored 0–10",
+                 ha="left", va="top", fontsize=9, color=th.INK_MUTED)
+        th.save(fig, outfile)
         return True
     except Exception as e:
         log(f"radar chart fail: {e}")
@@ -226,18 +253,19 @@ def chart_peers(ticker: str, peer_info: dict, outfile: Path) -> bool:
                     f"Industry: {industry}\n"
                     f"(no peers configured — edit scripts/peers.json)"
                 )
-            fig, ax = plt.subplots(figsize=(9, 5))
-            ax.text(0.5, 0.5, msg, ha="center", va="center", fontsize=12,
-                    bbox=dict(boxstyle="round", facecolor="#f7f7f7"))
+            fig, ax = plt.subplots(figsize=(9, 4.5))
+            ax.text(0.5, 0.5, msg, ha="center", va="center", fontsize=11,
+                    color=th.INK_SECONDARY, linespacing=1.6)
             ax.axis("off")
-            ax.set_title(f"{ticker} — Peer Comparison ({industry})", fontsize=13, fontweight="bold")
-            plt.tight_layout()
-            plt.savefig(outfile, dpi=100, bbox_inches="tight")
-            plt.close()
+            ax.set_title(f"{ticker} — peer comparison", loc="left", fontsize=13,
+                         fontweight="semibold", color=th.INK)
+            ax.text(0.0, 1.02, industry, transform=ax.transAxes, ha="left",
+                    va="bottom", fontsize=9, color=th.INK_MUTED)
+            th.save(fig, outfile)
             return True
 
         tickers_sorted = [ticker] + [t for t in metrics_by.keys() if t != ticker]
-        fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+        fig, axes = plt.subplots(2, 3, figsize=(14, 7.5))
         axes = axes.flatten()
 
         for ax, (mkey, label, lower_better) in zip(axes, _PEER_CHART_METRICS):
@@ -253,33 +281,51 @@ def chart_peers(ticker: str, peer_info: dict, outfile: Path) -> bool:
                     # Format for display: percentages shown as %, multiples plain
                     vals.append(float(v))
                     labels_y.append(t)
-                colors.append("#1f77b4" if t == ticker else "#a0a0a0")
+                # Emphasis, not identity: the subject is the only coloured bar,
+                # every peer recedes to muted grey.
+                colors.append(th.PRIMARY if t == ticker else "#cfcdc5")
             y = list(range(len(tickers_sorted)))
-            bars = ax.barh(y, vals, color=colors, alpha=0.85)
+            bars = ax.barh(y, vals, color=colors, height=th.BAR_WIDTH)
             ax.set_yticks(y)
-            ax.set_yticklabels(labels_y, fontsize=9)
+            ax.set_yticklabels(labels_y, fontsize=9, color=th.INK_MUTED)
+            # The subject's own tick label is promoted to secondary ink so the
+            # eye finds it without relying on the bar colour alone.
+            if ax.get_yticklabels():
+                ax.get_yticklabels()[0].set_color(th.INK_SECONDARY)
+                ax.get_yticklabels()[0].set_fontweight("semibold")
             ax.invert_yaxis()  # ticker at top
             # Rank annotation
             rank = rankings.get(mkey, {}).get(ticker)
             n = len(rankings.get(mkey, {}))
-            rank_note = f" — rank {rank}/{n}" if rank else ""
-            dir_note = " ↓ lower=better" if lower_better else " ↑ higher=better"
-            ax.set_title(f"{label}{dir_note}{rank_note}", fontsize=11, fontweight="bold")
-            ax.grid(True, alpha=0.3, axis="x")
-            # Value labels on bars
+            rank_note = f"rank {rank}/{n} · " if rank else ""
+            dir_note = "lower is better" if lower_better else "higher is better"
+            ax.set_title(label, loc="left", fontsize=11, fontweight="semibold",
+                         color=th.INK, pad=14)
+            ax.text(0.0, 1.015, f"{rank_note}{dir_note}", transform=ax.transAxes,
+                    ha="left", va="bottom", fontsize=8, color=th.INK_MUTED)
+            th.style_axes(ax, grid_axis="x")
+            is_pct = mkey in ("roe", "net_margin", "fcf_yield")
+            if is_pct:
+                # These arrive as fractions; without this the axis would read
+                # 0.26 beside a label reading 26.3%.
+                th.percent_axis(ax, "x")
+            # Value labels on bars — the relief this palette's contrast WARN owes.
             for bar, v in zip(bars, vals):
                 if v == 0:
                     continue
-                if mkey in ("roe", "net_margin", "fcf_yield"):
-                    label_txt = f"{v*100:.1f}%"
+                if is_pct:
+                    label_txt = f"{v * 100:.1f}%"
                 else:
                     label_txt = f"{v:.1f}"
-                ax.text(v, bar.get_y() + bar.get_height() / 2, f" {label_txt}", va="center", fontsize=8)
+                ax.annotate(label_txt, xy=(v, bar.get_y() + bar.get_height() / 2),
+                            xytext=(4, 0), textcoords="offset points",
+                            va="center", ha="left" if v >= 0 else "right",
+                            fontsize=8, color=th.INK_SECONDARY)
 
-        fig.suptitle(f"{ticker} — Peer Comparison ({industry})", fontsize=14, fontweight="bold")
-        plt.tight_layout()
-        plt.savefig(outfile, dpi=100, bbox_inches="tight")
-        plt.close()
+        fig.suptitle(f"{ticker} — peer comparison · {industry}", x=0.008, y=1.0,
+                     ha="left", fontsize=14, fontweight="semibold", color=th.INK)
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
+        th.save(fig, outfile)
         return True
     except Exception as e:
         log(f"peers chart fail: {e}")
@@ -297,19 +343,33 @@ def chart_dcf(
             "Base": dcf_base,
             "Bull (+25%)": dcf_base * 1.25,
         }
-        fig, ax = plt.subplots(figsize=(8, 5))
-        colors = ["#d62728", "#1f77b4", "#2ca02c"]
+        fig, ax = plt.subplots(figsize=(8, 4.8))
+        # Status palette, legitimately: bear/base/bull mean bad/neutral/good, and
+        # each is named on the x-axis, so colour never carries the meaning alone.
+        colors = [th.CRITICAL, th.PRIMARY, th.GOOD]
+        bar_w = th.cap_bar_width(ax, th.BAR_WIDTH, len(scenarios))
         for (label, val), color in zip(scenarios.items(), colors):
-            ax.bar(label, val, color=color, alpha=0.7)
-            ax.text(label, val, f"{val:.1f}", ha="center", va="bottom", fontsize=10)
-        ax.axhline(price, color="black", linestyle="--", linewidth=1.5, label=f"Current: {price:.2f}")
-        ax.set_ylabel(f"Intrinsic value ({currency})")
-        ax.set_title(f"{ticker} — DCF scenarios vs current price", fontsize=13, fontweight="bold")
-        ax.legend()
-        ax.grid(True, alpha=0.3, axis="y")
-        plt.tight_layout()
-        plt.savefig(outfile, dpi=100, bbox_inches="tight")
-        plt.close()
+            bars = ax.bar(label, val, color=color, width=bar_w)
+            # Surface halo: a scenario can land within a hair of the price
+            # threshold, and without it the dashed line cuts through the digits.
+            ax.annotate(f"{val:,.1f}", xy=(label, val), xytext=(0, 6),
+                        textcoords="offset points", ha="center", va="bottom",
+                        fontsize=10, color=th.INK_SECONDARY, fontweight="semibold",
+                        zorder=7,
+                        bbox=dict(boxstyle="round,pad=0.18", facecolor=th.SURFACE,
+                                  edgecolor="none"))
+        # Dashed here is correct and deliberate: this is a threshold, not a grid.
+        ax.axhline(price, color=th.INK_SECONDARY, linestyle="--", linewidth=1.2,
+                   zorder=5, label=f"current price {price:,.2f}")
+        upside = (dcf_base / price - 1) * 100
+        th.style_axes(
+            ax, title=f"{ticker} — DCF scenarios vs price",
+            subtitle=f"base case implies {upside:+.0f}% vs {price:,.2f} {currency}",
+            ylabel=f"Intrinsic value ({currency})",
+        )
+        ax.legend(loc="upper left")
+        fig.tight_layout()
+        th.save(fig, outfile)
         return True
     except Exception as e:
         log(f"dcf chart fail: {e}")
@@ -363,58 +423,62 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
         fig, (ax_e, ax_f) = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
         fmt = FuncFormatter(_money_fmt)
 
+        # Forecast is the SAME entity extended, so it keeps the series hue (a
+        # lighter step) and lets the hatch carry "estimated" — a separate colour
+        # would read as a fourth series.
         # --- top: EBITDA bars ---
         if seg_annual:
-            ax_e.bar(seg_annual, a_ebitda[:n_a], color="#8c9bab", alpha=0.35,
-                     width=0.8, label="EBITDA (annual FY)")
+            ax_e.bar(seg_annual, a_ebitda[:n_a], color="#cfcdc5",
+                     width=th.BAR_WIDTH, label="EBITDA (annual FY)")
         if seg_hist:
-            ax_e.bar(seg_hist, ebitda, color="#1f77b4", alpha=0.85, width=0.8,
+            ax_e.bar(seg_hist, ebitda, color=th.PRIMARY, width=th.BAR_WIDTH,
                      label="EBITDA (quarterly)")
         if seg_fc:
-            ax_e.bar(seg_fc, f_ebitda, color="#9467bd", alpha=0.55, width=0.8,
-                     hatch="//", edgecolor="#5e3c78", linewidth=1.0, label="EBITDA (forecast)")
-        ax_e.set_ylabel(f"EBITDA ({currency})")
+            ax_e.bar(seg_fc, f_ebitda, color=th.PRIMARY_LIGHT, width=th.BAR_WIDTH,
+                     hatch="//", edgecolor=th.PRIMARY, linewidth=0.6,
+                     label="EBITDA (forecast)")
+        th.style_axes(
+            ax_e, title=f"{fin_history.get('ticker', '')} — EBITDA & free cash flow".lstrip(" —"),
+            subtitle=f"{n_q} quarters of history · source {source}",
+            ylabel=f"EBITDA ({currency})",
+        )
         ax_e.yaxis.set_major_formatter(fmt)
-        ax_e.grid(True, alpha=0.3, axis="y")
-        ax_e.legend(loc="upper left", fontsize=8)
-        ax_e.set_title(f"EBITDA & FCF — {n_q}Q quarterly ({source})", fontsize=13, fontweight="bold")
+        ax_e.legend(loc="upper left", ncol=3)
 
         # --- bottom: FCF line + markers ---
         if seg_annual:
-            ax_f.plot(seg_annual, a_fcf[:n_a], color="#8c9bab", alpha=0.5,
-                      marker="s", linestyle=":", label="FCF (annual FY)")
+            ax_f.plot(seg_annual, a_fcf[:n_a], color="#b8b6ad", linewidth=1.4,
+                      linestyle=":", label="FCF (annual FY)")
         if seg_hist:
-            ax_f.plot(seg_hist, fcf, color="#2ca02c", marker="o", linewidth=1.8,
-                      label="FCF (quarterly)")
+            ax_f.plot(seg_hist, fcf, color=th.AQUA, label="FCF (quarterly)",
+                      zorder=4, **th.marker_kwargs(th.AQUA))
         if seg_fc:
             join_x = ([seg_hist[-1]] + seg_fc) if seg_hist else seg_fc
             join_y = ([fcf[-1]] + f_fcf) if seg_hist else f_fcf
-            ax_f.plot(join_x, join_y, color="#2ca02c", marker="o", linewidth=1.8,
-                      linestyle="--", alpha=0.8, label="FCF (forecast)")
-        ax_f.axhline(0, color="#888", linewidth=0.8)
-        ax_f.set_ylabel(f"FCF ({currency})")
+            ax_f.plot(join_x, join_y, color=th.AQUA, linestyle="--", zorder=3,
+                      label="FCF (forecast)", **th.marker_kwargs(th.AQUA))
+        ax_f.axhline(0, color=th.AXIS, linewidth=0.8, zorder=1)
+        th.style_axes(ax_f, ylabel=f"FCF ({currency})")
         ax_f.yaxis.set_major_formatter(fmt)
-        ax_f.grid(True, alpha=0.3, axis="y")
-        ax_f.legend(loc="upper left", fontsize=8)
+        ax_f.legend(loc="upper left", ncol=3)
 
         # forecast shaded region + basis caption
         if seg_fc:
             left, right = seg_fc[0] - 0.5, seg_fc[-1] + 0.5
             for ax in (ax_e, ax_f):
-                ax.axvspan(left, right, color="#f0e6f5", alpha=0.5, zorder=0)
+                ax.axvspan(left, right, color=th.PRIMARY, alpha=0.05,
+                           linewidth=0, zorder=0)
             cap = _FORECAST_BASIS_LABELS.get(basis, basis or "forecast")
-            ax_e.text(0.99, 0.04, f"forecast: {cap}", transform=ax_e.transAxes,
-                      ha="right", va="bottom", fontsize=7.5, style="italic", color="#5e3c78")
+            th.caption(ax_f, f"shaded tail = forecast · basis: {cap}")
 
         ax_f.set_xticks(xs)
         step = max(1, len(all_labels) // 16)
         ax_f.set_xticklabels(
             [lbl if i % step == 0 else "" for i, lbl in enumerate(all_labels)],
-            rotation=45, ha="right", fontsize=7,
+            rotation=45, ha="right", fontsize=8,
         )
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=100, bbox_inches="tight")
-        plt.close()
+        fig.tight_layout()
+        th.save(fig, out_path)
         return True
     except Exception as e:
         log(f"ebitda_fcf chart fail: {e}")
@@ -462,30 +526,40 @@ def chart_net_income_vs_pe(fin_history: dict, valuation_bands: dict,
         pe = [pe_by_year.get(y, float("nan")) for y in years]
 
         fig, ax_ni = plt.subplots(figsize=(12, 5))
-        ax_ni.bar(xs, ni, color="#1f77b4", alpha=0.8, width=0.6,
-                  label=f"Net income (annual, {currency})")
-        ax_ni.set_ylabel(f"Net income ({currency})")
+        bars = ax_ni.bar(xs, ni, color=th.PRIMARY, width=th.BAR_WIDTH,
+                         label=f"Net income (annual, {currency})")
+        ax_ni.axhline(0, color=th.AXIS, linewidth=0.8, zorder=1)
+        th.style_axes(
+            ax_ni, title=f"{ticker} — net income vs own-history P/E",
+            subtitle="two scales: bars read on the left axis, the P/E line on the right",
+            ylabel=f"Net income ({currency})",
+        )
         ax_ni.yaxis.set_major_formatter(FuncFormatter(_money_fmt))
-        ax_ni.axhline(0, color="#888", linewidth=0.8)
-        ax_ni.grid(True, alpha=0.3, axis="y")
 
         ax_pe = ax_ni.twinx()
-        ax_pe.plot(xs, pe, color="#d62728", marker="o", linewidth=1.8,
-                   label="P/E (FY mean price / EPS)")
-        ax_pe.set_ylabel("P/E (×)", color="#d62728")
-        ax_pe.tick_params(axis="y", labelcolor="#d62728")
+        ax_pe.plot(xs, pe, color=th.ACCENT, label="P/E (FY mean price / EPS)",
+                   zorder=4, **th.marker_kwargs(th.ACCENT))
+        ax_pe.set_ylabel("P/E (×)", color=th.INK_SECONDARY)
+        ax_pe.grid(False)
+        for side in ("top", "left"):
+            ax_pe.spines[side].set_visible(False)
+        # The right spine and its ticks are MARKS, so they may carry the series
+        # colour to bind axis to line; the label text stays in ink.
+        ax_pe.spines["right"].set_visible(True)
+        ax_pe.spines["right"].set_color(th.ACCENT)
+        ax_pe.spines["right"].set_linewidth(1.2)
+        ax_pe.tick_params(axis="y", colors=th.ACCENT, labelcolor=th.INK_MUTED,
+                          length=3)
 
         ax_ni.set_xticks(xs)
-        ax_ni.set_xticklabels([f"FY{y}" for y in years], rotation=45, ha="right", fontsize=8)
-        ax_ni.set_title(f"{ticker} — Net income vs own-history P/E",
-                        fontsize=13, fontweight="bold")
+        ax_ni.set_xticklabels([f"FY{y}" for y in years], rotation=45, ha="right",
+                              fontsize=8)
         lines_ni, labels_ni = ax_ni.get_legend_handles_labels()
         lines_pe, labels_pe = ax_pe.get_legend_handles_labels()
         ax_ni.legend(lines_ni + lines_pe, labels_ni + labels_pe,
-                     loc="upper left", fontsize=8)
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=100, bbox_inches="tight")
-        plt.close()
+                     loc="upper left", ncol=2)
+        fig.tight_layout()
+        th.save(fig, out_path)
         return True
     except Exception as e:
         log(f"ni_pe chart fail: {e}")
@@ -530,13 +604,16 @@ def chart_relperf(ticker: str, region_suffix_bench: str, sector: str | None, out
 
         # Common start = latest first-date across the fetched series.
         start = max(s.index.min() for _, (_, s) in series.items())
-        fig, ax = plt.subplots(figsize=(11, 6))
+        fig, ax = plt.subplots(figsize=(11, 5.5))
+        # The subject leads; the benchmark recedes to grey; the sector proxy takes
+        # the next categorical slot. Colour follows the entity, not the ranking.
         style = {
-            "ticker": dict(color="#1f77b4", linewidth=2.4, zorder=3),
-            "bench": dict(color="#7f7f7f", linewidth=1.4, zorder=2),
-            "etf": dict(color="#ff7f0e", linewidth=1.2, zorder=1),
+            "ticker": dict(color=th.PRIMARY, linewidth=2.4, zorder=4),
+            "bench": dict(color="#b8b6ad", linewidth=1.6, zorder=2),
+            "etf": dict(color=th.ACCENT, linewidth=1.6, zorder=3),
         }
         drawn = False
+        ends = []  # (x, y, label, colour) for direct end labels
         for key in ("ticker", "bench", "etf"):
             if key not in series:
                 continue
@@ -546,31 +623,39 @@ def chart_relperf(ticker: str, region_suffix_bench: str, sector: str | None, out
                 continue
             norm = s / float(s.iloc[0]) * 100.0
             ax.plot(norm.index, norm.values, label=sym, **style[key])
+            ends.append((norm.index[-1], float(norm.iloc[-1]), sym, style[key]["color"]))
             drawn = True
         if not drawn:
-            plt.close()
+            plt.close(fig)
             return False
 
-        ax.axhline(100, color="#bbb", linewidth=0.8, linestyle="--")
-        ax.set_ylabel("Indexed to 100 at start")
-        ax.set_title(f"{ticker} — Relative performance (2.5y, normalized)",
-                     fontsize=13, fontweight="bold")
-        ax.legend(loc="upper left", fontsize=9)
-        ax.grid(True, alpha=0.3)
+        # Dashed is deliberate: 100 is the common-base threshold, not a gridline.
+        ax.axhline(100, color=th.AXIS, linewidth=1.0, linestyle="--", zorder=1)
+        subject_end = next((e for e in ends if e[2] == ticker), None)
+        subtitle = "all series indexed to 100 at the common start date"
+        if subject_end:
+            subtitle = (f"{ticker} at {subject_end[1]:,.0f} vs base 100 · "
+                        f"all series indexed to the common start date")
+        th.style_axes(ax, title=f"{ticker} — relative performance, 2.5 years",
+                      subtitle=subtitle, ylabel="Indexed to 100 at start")
+        # Direct end labels — with only 2-3 series they carry identity better than
+        # a legend, which is kept as the dependable second channel.
+        for x, y, sym, color in ends:
+            th.label_line_end(ax, x, y, sym, color)
+        ax.margins(x=0.06)
+        ax.legend(loc="upper left", ncol=3)
 
         notes = []
         if bench_is_fallback:
-            notes.append(f"benchmark: {bench} (fallback — no region index mapped)")
+            notes.append(f"benchmark {bench} (fallback — no region index mapped)")
         if not sector or sector not in SECTOR_ETF:
-            notes.append("sector proxy: n/a")
+            notes.append("sector proxy n/a")
         elif etf:
-            notes.append(f"sector proxy: {etf} (US sector ETF)")
+            notes.append(f"sector proxy {etf} (US sector ETF)")
         if notes:
-            ax.text(0.01, 0.01, "  ·  ".join(notes), transform=ax.transAxes,
-                    ha="left", va="bottom", fontsize=7.5, style="italic", color="#555")
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=100, bbox_inches="tight")
-        plt.close()
+            th.caption(ax, "  ·  ".join(notes))
+        fig.tight_layout()
+        th.save(fig, out_path)
         return True
     except Exception as e:
         log(f"relperf chart fail: {e}")
@@ -643,26 +728,47 @@ def chart_revenue_segments(segments: dict, out_path: Path) -> bool:
 
         x = np.arange(3)
         n_series = len(rows)
-        width = 0.8 / max(1, n_series)
-        fig, ax = plt.subplots(figsize=(11, 6))
-        cmap = plt.get_cmap("tab10")
+        # Leave 20% of the group as air, then shave each bar so touching
+        # neighbours are separated by surface, not by a drawn edge.
+        fig, ax = plt.subplots(figsize=(11, 5.5))
+        # Cap the bar thickness, then pack the group symmetrically around its tick:
+        # a fixed gap of surface between neighbours does the separating, and the
+        # whole group re-centres on the year label whatever the series count.
+        width = th.cap_bar_width(ax, 0.8 / max(1, n_series) * 0.86, 3)
+        gap = width * 0.18
+        pitch = width + gap
+        group_w = pitch * n_series - gap
+        last_bars = []
         for i, (name, vals) in enumerate(rows):
-            offs = x - 0.4 + width * (i + 0.5)
+            offs = x - group_w / 2 + width / 2 + i * pitch
             plotvals = [0 if math.isnan(v) else v for v in vals]
-            ax.bar(offs, plotvals, width=width, label=name, color=cmap(i % 10), alpha=0.9)
+            # Fixed slot order, never cycled — `rows` is already capped at 6
+            # (top-5 segments + "Other"), well inside the 8 available slots.
+            bars = ax.bar(offs, plotvals, width=width, label=name,
+                          color=th.SERIES[i % len(th.SERIES)])
+            last_bars.append((bars[-1], plotvals[-1]))
         ax.set_xticks(x)
         ax.set_xticklabels(fy)
-        ax.set_ylabel(f"Revenue ({currency})")
+        th.style_axes(
+            ax, title="Revenue by segment",
+            subtitle=f"three fiscal years · top {min(5, len(segs))} segments"
+                     + (" + Other" if len(segs) > 5 else ""),
+            ylabel=f"Revenue ({currency})",
+        )
         ax.yaxis.set_major_formatter(FuncFormatter(_money_fmt))
-        ax.set_title("Revenue by segment", fontsize=13, fontweight="bold")
-        ax.legend(loc="upper left", fontsize=8, ncol=2)
-        ax.grid(True, alpha=0.3, axis="y")
-        ax.text(0.99, 0.97, "Source: company filings (LLM-extracted) — verify against source",
-                transform=ax.transAxes, ha="right", va="top", fontsize=7.5,
-                style="italic", color="#a33")
-        plt.tight_layout()
-        plt.savefig(out_path, dpi=100, bbox_inches="tight")
-        plt.close()
+        ax.legend(loc="upper left", ncol=3)
+        # Latest-year values labelled directly: the relief the lighter slots owe
+        # for sitting below 3:1 contrast against the surface.
+        for bar, val in last_bars:
+            if not val:
+                continue
+            ax.annotate(_money_fmt(val), xy=(bar.get_x() + bar.get_width() / 2, val),
+                        xytext=(0, 4), textcoords="offset points", ha="center",
+                        va="bottom", fontsize=8, color=th.INK_SECONDARY)
+        th.caption(ax, "Source: company filings (LLM-extracted) — verify against source",
+                   color=th.CRITICAL)
+        fig.tight_layout()
+        th.save(fig, out_path)
         return True
     except Exception as e:
         log(f"revenue_segments chart fail: {e}")

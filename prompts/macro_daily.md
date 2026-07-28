@@ -63,12 +63,17 @@ SECTION 1 — Markets today & this week
 - 3–4 sentences of commentary: what moved today, and the week's direction. Tie to the numbers.
 
 SECTION 2 — US market valuation vs history
-- S&P 500 trailing P/E, forward P/E, P/S, P/B, and Shiller CAPE. For each, show the
-  CURRENT value AND a historical anchor: the long-run median (P/E, P/S, CAPE) or the
-  mean ±1 SD (P/E), so "rich vs history" is explicit, not implied.
+- S&P 500 trailing P/E, forward P/E, P/S, P/B, EV/EBITDA, and Shiller CAPE. For each,
+  show the CURRENT value AND a historical anchor: the long-run median (P/E, P/S, CAPE)
+  or the mean ±1 SD (P/E), so "rich vs history" is explicit, not implied.
 - Each value MUST carry its source + as-of date, fetched via WebFetch from multpl.com
   (P/E, P/S, P/B, Shiller CAPE — each has its own page + median), WSJ market data, or
   gurufocus. If a metric cannot be sourced, write "not available".
+- **Emit one table row per gauge listed above, ALWAYS — including EV/EBITDA.** A gauge
+  that cannot be sourced gets a row reading "not available", never a dropped row: a
+  missing row is indistinguishable from a gauge nobody looked for. EV/EBITDA in
+  particular has no reliably free source, so "not available" is its expected steady
+  state — that is a correct answer, not a failure.
 - 2–3 sentences: is the index cheap / fair / rich vs its own history, and by how much.
 
 SECTION 3 — Market breadth (equal-weight vs cap-weight)

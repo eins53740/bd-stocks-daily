@@ -35,7 +35,7 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 **Horizonte**: 1-5 anos (quality compounders, não day-trade).
 **Output**: `C:\BD_Obsidian\Personal\Finance\StocksDaily\`
 **Disclaimer obrigatório** em cada relatório e email: 🤖 Auto-generated. Not investment advice. Verify all figures before acting.
-**Footer obrigatório** — última linha de cada relatório (deep e screen), após um `---`: `*Analysis written by {model name, e.g. Claude Fable 5} · bsdias©2026*`. O model name é o modelo da sessão que escreveu a análise (visível no environment do Claude Code) — nunca hard-coded.
+**Footer obrigatório** — última linha de cada relatório (deep e screen), após um `---`: `*Analysis written by {model name, e.g. Claude Fable 5} · bsdias©2026 · host: {hostname}*`. O model name é o modelo da sessão que escreveu a análise (visível no environment do Claude Code) — nunca hard-coded. O `{hostname}` é o nome da máquina que correu o job (`platform.node()`, ex. `SecilPT-uPkZhVs`) — serve para saber de imediato se o relatório saiu do portátil ou de um VM host.
 
 ## Ground-truth rule (CRITICAL)
 
@@ -195,6 +195,8 @@ Output JSON:
 ```
 
 Os screens são 4: 1 big + 1 small_growth (qualquer região) + **2 garantidamente non-US** (`region != US`, qualquer size — foco deliberado em mercados fora dos EUA). Se o pool elegível tiver menos de 2 nomes non-US disponíveis, o script avisa em stderr e devolve os que houver.
+
+**Nomes `size: hyper_growth` são excluídos deste run** (desde 2026-07-28) — pertencem ao `/bd_stocks_daily_growth`, que corre logo a seguir no mesmo job das 17:00 e os avalia com critérios de crescimento. O gate-5 (net margin > 10%) deste modelo rejeitá-los-ia por construção. Os slots deep/big/small já filtravam por size, mas o slot non-US e o shuffle de extras aceitavam qualquer size — daí a exclusão explícita. `pool_stats.hyper_growth_reserved` conta quantos foram reservados.
 
 If any ticker has `round > 1`, the report gets a `🔁 Reavaliação #N` badge at the top and a link back to the prior evaluation.
 
@@ -457,7 +459,7 @@ python "%SCRIPTS%\macro_snapshot.py" --check
 - `stale: false` → o `_macro/{today}.md` existe; todos os reports do dia embedam dele. Nada mais a fazer.
 - `stale: true` → duas metades:
   1. **Python**: `python "%SCRIPTS%\macro_snapshot.py" --fetch` → índices/VIX/yields/FX/commodities/BTC com Δ1d/Δ1w → `_macro/{today}.json`. **Depois** (v4 Phase D) `python "%SCRIPTS%\macro_breadth.py" --update` → funde as keys aditivas `breadth` (RSP/SPY) + `sectors` (11 SPDR ETFs + linha SPY) no mesmo `_macro/{today}.json` (**nunca toca em `metrics`** — overlay-only; cada símbolo mau vira `{"error": ...}`, uma falha nunca aborta a tabela).
-  2. **LLM**: correr `prompts\macro_daily.md` com `{PYTHON_METRICS_JSON}` = o bloco `metrics`, `{BREADTH_JSON}` = o bloco `breadth`, `{SECTORS_JSON}` = o bloco `sectors` (todos ground-truth — formatar, nunca alterar), `{COUNTRY_TABLE_FRESH}` da directive, `{PREVIOUS_MACRO_MD}` = conteúdo do `fallback_md` (ou "none"). WebFetch para as gauges sourced (§2 valuation vs história: P/E / forward P/E / P/S / P/B / Shiller CAPE com mediana; §6 Buffett Indicator + regime M2 via FRED `M2SL`; §7 forward-profit do índice — multpl.com, WSJ, gurufocus, longtermtrends, FRED, FactSet: **fonte + data em cada número; "not available" antes de estimar**). Tabela country (US/EU/China/Japão) só re-fetch quando `country_table_fresh: no` (TTL 7 dias); caso contrário copiar do anterior. Escrever `_macro/{today}.md` (8 secções) com frontmatter (`date`, `country_table_date`, `sources`, `schema_version`).
+  2. **LLM**: correr `prompts\macro_daily.md` com `{PYTHON_METRICS_JSON}` = o bloco `metrics`, `{BREADTH_JSON}` = o bloco `breadth`, `{SECTORS_JSON}` = o bloco `sectors` (todos ground-truth — formatar, nunca alterar), `{COUNTRY_TABLE_FRESH}` da directive, `{PREVIOUS_MACRO_MD}` = conteúdo do `fallback_md` (ou "none"). WebFetch para as gauges sourced (§2 valuation vs história: P/E / forward P/E / P/S / P/B / **EV/EBITDA** / Shiller CAPE com mediana — **uma linha por gauge SEMPRE, mesmo que "not available"**; nunca omitir a linha, senão não se distingue de um gauge que ninguém procurou; §6 Buffett Indicator + regime M2 via FRED `M2SL`; §7 forward-profit do índice — multpl.com, WSJ, gurufocus, longtermtrends, FRED, FactSet: **fonte + data em cada número; "not available" antes de estimar**). Tabela country (US/EU/China/Japão) só re-fetch quando `country_table_fresh: no` (TTL 7 dias); caso contrário copiar do anterior. Escrever `_macro/{today}.md` (8 secções) com frontmatter (`date`, `country_table_date`, `sources`, `schema_version`).
 - **Degradação independente por gauge**: qualquer número não sourceable / qualquer entry `{"error": ...}` no JSON → só essa gauge mostra "not available"; a secção e o ficheiro nunca ficam em branco. Se ambas as metades Python falharem → reports embedam o `fallback_md` mais recente com `⚠️ macro snapshot stale ({N} days)`. A §4 nunca desaparece silenciosamente.
 - Cada report do dia grava `macro_cache_date` no frontmatter.
 
@@ -1050,7 +1052,7 @@ Renderiza do bloco `opinion_panel` (Phase 2.58). Modelo **independente** (Groq�
 {Se o snapshot de hoje falhou: embed do mais recente disponível + `⚠️ macro snapshot stale ({N} days)` — nunca omitir a secção silenciosamente.}
 
 ---
-*Analysis written by {model name} · bsdias©2026*
+*Analysis written by {model name} · bsdias©2026 · host: {hostname}*
 ```
 
 #### Screen body (versão curta — sem charts, sem narrativa pesada, sem §2.1/2.3/2.9/2.12/2.14/2.15/2.16/2.18)
@@ -1095,7 +1097,7 @@ Renderiza do bloco `opinion_panel` (Phase 2.58). Modelo **independente** (Groq�
 - [Stock Analysis](https://stockanalysis.com/stocks/{slug}/)
 
 ---
-*Analysis written by {model name} · bsdias©2026*
+*Analysis written by {model name} · bsdias©2026 · host: {hostname}*
 ```
 
 ### Phase 5.5 — Auto-cascade screen→deep on `invest` verdict

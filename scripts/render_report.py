@@ -723,12 +723,23 @@ def build_charts(md_path: Path, out_dir: Path, ticker: str, fm: dict):
     return _card("Charts", "".join(blocks) + note, "charts"), dropped
 
 
+def run_host():
+    """Hostname of the machine that produced this report — stamped so it is
+    obvious which machine ran the job (the laptop or a VM host)."""
+    import platform
+    try:
+        return platform.node() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def build_footer(data, fm):
     model = data.get("model_name") or "Claude Opus 4.8"
     asof = (data.get("fetched_at") or fm.get("date") or "")[:10]
     src = "yfinance / Alpha Vantage / stockanalysis (ground-truth); commentary by the model."
     return (f'<footer>Horizon 1–5 years · Quality Compounder + Piotroski + Altman · data: {esc(src)}<br>'
-            f'Analysis written by {esc(model)} · as-of {esc(asof)} · bsdias©2026</footer>')
+            f'Analysis written by {esc(model)} · as-of {esc(asof)} · bsdias©2026 '
+            f'· host: {esc(run_host())}</footer>')
 
 
 NAV_ITEMS = [("tldr", "TL;DR"), ("exit", "Exit Plan"), ("val", "Valuation"),
