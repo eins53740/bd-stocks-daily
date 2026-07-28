@@ -64,6 +64,10 @@ Numbers enter only at node 2; the LLM (2.5) and WebFetch (4) never write structu
 
 ---
 
+## Charts
+
+Two renderers, one visual system. `chart_theme.py` holds the palette and the shared axes/legend/trend helpers used by all 8 matplotlib charts. `chart_browser.py` re-renders the two charts a reader actually studies — EBITDA/FCF and relative performance — as HTML/CSS/SVG screenshotted by headless Chromium (playwright is already present for pdfgen, so no new dependency). It is fallback-first: every entry point returns `False` instead of raising, and `render_charts.py` then uses the matplotlib version, so the unattended 17:00 job cannot regress. Set `BD_CHARTS_BROWSER=0` to force matplotlib. Both renderers consume identical numbers.
+
 ## Scoring (composite v2.2)
 
 `WEIGHTS_V2_DEEP` — locked, weight-neutral across v2.2:

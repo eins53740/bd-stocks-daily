@@ -44,6 +44,15 @@ from matplotlib.ticker import FuncFormatter  # noqa: E402
 warnings.filterwarnings("ignore")
 import yfinance as yf  # noqa: E402
 
+# Browser renderer (option C) for the two charts a reader actually studies. Import
+# is soft: if playwright is absent the module still loads and every entry point
+# returns False, which routes those charts back to matplotlib unchanged.
+try:
+    import chart_browser  # noqa: E402
+except Exception as _e:  # pragma: no cover - exercised only on a broken install
+    chart_browser = None
+    print(f"[charts] browser renderer unavailable ({_e}); matplotlib only", flush=True)
+
 # Reuse the region-benchmark map from the sibling technical_score module (same
 # scripts dir). Importing it is network-free — it only defines constants/fns.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -397,6 +406,13 @@ def chart_ebitda_fcf(fin_history: dict, out_path: Path) -> bool:
     try:
         if not isinstance(fin_history, dict):
             return False
+
+        # Browser path first (option C); False sends us straight down the
+        # matplotlib path below, which stays the dependable default.
+        if chart_browser and chart_browser.render_ebitda_fcf(fin_history, out_path):
+            log(f"ebitda_fcf: browser render -> {Path(out_path).name}")
+            return True
+
         series = fin_history.get("series") or {}
         labels = list(series.get("labels") or [])
         ebitda = [_num_or_nan(v) for v in (series.get("ebitda") or [])]
@@ -627,6 +643,54 @@ def chart_net_income_vs_pe(fin_history: dict, valuation_bands: dict,
         return False
 
 
+def _relperf_notes(bench: str, bench_is_fallback: bool, sector: str | None,
+                   etf: str | None) -> list[str]:
+    """The provenance caveats both renderers must print identically."""
+    notes = []
+    if bench_is_fallback:
+        notes.append(f"benchmark {bench} (fallback — no region index mapped)")
+    if etf:
+        notes.append(f"sector proxy {etf} is a US sector ETF")
+    elif sector:
+        notes.append(f"no sector ETF mapped for {sector}")
+    return notes
+
+
+def _relperf_payload(ticker, series, start, bench, bench_is_fallback, sector, etf):
+    """Normalize the fetched closes to 100 at the common start, as plain JSON-able
+    points — the shape chart_browser.render_relperf consumes. Returns None when
+    nothing survives normalisation, which sends the caller to matplotlib."""
+    try:
+        out = []
+        subject_last = None
+        for key in ("ticker", "bench", "etf"):
+            if key not in series:
+                continue
+            sym, s = series[key]
+            s = s[s.index >= start]
+            if s.empty or float(s.iloc[0]) <= 0:
+                continue
+            norm = s / float(s.iloc[0]) * 100.0
+            pts = [[int(ts.timestamp() * 1000), round(float(v), 3)]
+                   for ts, v in norm.items()]
+            if not pts:
+                continue
+            out.append({"key": key, "sym": sym, "points": pts})
+            if sym == ticker:
+                subject_last = pts[-1][1]
+        if not out:
+            return None
+        subtitle = ("all series indexed to 100 at the common start date"
+                    if subject_last is None else
+                    f"{ticker} at {subject_last:,.0f} vs base 100 · "
+                    "all series indexed to the common start date")
+        return {"ticker": ticker, "series": out, "subtitle": subtitle,
+                "notes": _relperf_notes(bench, bench_is_fallback, sector, etf)}
+    except Exception as e:
+        log(f"relperf payload build: {e}")
+        return None
+
+
 def chart_relperf(ticker: str, region_suffix_bench: str, sector: str | None, out_path: Path) -> bool:
     """2.5y relative performance: the ticker vs its region index vs the US sector
     SPDR ETF, each normalized to 100 at the common start date. Region index is
@@ -665,6 +729,15 @@ def chart_relperf(ticker: str, region_suffix_bench: str, sector: str | None, out
 
         # Common start = latest first-date across the fetched series.
         start = max(s.index.min() for _, (_, s) in series.items())
+
+        # Browser path first (option C). It consumes the SAME fetched series, so the
+        # two renderers can never disagree on the numbers — only on the finish.
+        payload = _relperf_payload(ticker, series, start, bench, bench_is_fallback,
+                                   sector, etf)
+        if payload and chart_browser and chart_browser.render_relperf(payload, out_path):
+            log(f"relperf: browser render -> {out_path.name}")
+            return True
+
         fig, ax = plt.subplots(figsize=(11, 5.5))
         # The subject leads; the benchmark recedes to grey; the sector proxy takes
         # the next categorical slot. Colour follows the entity, not the ranking.
