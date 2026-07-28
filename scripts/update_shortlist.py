@@ -107,23 +107,34 @@ def safe_filename(ticker: str, date_str: str, verdict: str) -> str:
     return f"{date_str}_{ticker}_{verdict}"
 
 
+def _rank(row: dict) -> tuple[str, int]:
+    """Sort key deciding which evaluation of a ticker is the current one.
+
+    Later date wins; on the same date a `deep` row beats a `screen` row, because a
+    same-day pair is always the Phase 5.5 cascade (screen scored >= 7.5 -> deep-dive
+    on the same ticker) and the deep-dive is the finished version of that work.
+    """
+    return (row.get("date") or "", 1 if (row.get("mode") or "").strip().lower() == "deep" else 0)
+
+
+def _supersedes(candidate: dict, incumbent: dict) -> bool:
+    return _rank(candidate) > _rank(incumbent)
+
+
 def build_shortlist(rows: list[dict], manual_flags: dict) -> str:
     today = date.today()
     pf_meta = load_prefilter_meta()
     active = [r for r in rows if is_active(r, today)]
-    # Latest per ticker (keep most recent)
+    # Latest per ticker. Ranking on date alone loses the Phase 5.5 cascade: when a
+    # screen scores >= 7.5 it triggers a same-day deep-dive, so both rows share a
+    # date, `>` is False, and the first-seen row (the screen) wins. The deep row
+    # supersedes it — it is the same evaluation carried further.
     latest = {}
     for r in active:
         t = r["ticker"]
-        if t not in latest or r["date"] > latest[t]["date"]:
+        if t not in latest or _supersedes(r, latest[t]):
             latest[t] = r
 
-    sorted_rows = sorted(
-        latest.values(),
-        key=lambda r: (-float(r["score"]), r["date"]),
-        reverse=False,
-    )
-    # Actually want score desc, date desc
     sorted_rows = sorted(
         latest.values(),
         key=lambda r: (float(r["score"]), r["date"]),

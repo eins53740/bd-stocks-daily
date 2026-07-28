@@ -795,19 +795,27 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     return template.replace("{{TITLE}}", esc(title)).replace("{{BODY}}", body_html)
 
 
-_REPORT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(.+)_(great|invest|review|fair|reject)\.html$")
+_VERDICT_SUFFIXES = ("great", "invest", "review", "fair", "reject")
+# Deep reports are named `_<verdict>.html`; screens are named `_screen.html`. Matching
+# verdicts only hid every screen from the hub — on a normal day that is 4 of 5 reports.
+# The suffix is just a filename token: the authoritative verdict is the sibling .md's
+# frontmatter, which is why `screen` is admitted here and resolved below.
+_REPORT_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2})_(.+)_(" + "|".join((*_VERDICT_SUFFIXES, "screen")) + r")\.html$")
 
 
 def index_reports(out_dir: Path, date: str) -> list[dict]:
-    """Discover the day's rendered report HTMLs for the index hub. Reads each
-    sibling .md's frontmatter (frozen contract) for verdict/score → action verb.
+    """Discover the day's rendered report HTMLs for the index hub — deep AND screen.
+    Reads each sibling .md's frontmatter (frozen contract) for verdict/score → action
+    verb, and carries `mode` so a screen is never mistaken for a deep-dive.
     Sorted by score desc (None last), then ticker."""
     rows = []
     for p in sorted(out_dir.glob(f"{date}_*.html")):
         m = _REPORT_RE.match(p.name)
         if not m:
             continue
-        ticker, verdict = m.group(2), m.group(3)
+        ticker, suffix = m.group(2), m.group(3)
+        verdict = suffix if suffix in _VERDICT_SUFFIXES else ""
         fm = {}
         md = p.with_suffix(".md")
         if md.exists():
@@ -819,9 +827,11 @@ def index_reports(out_dir: Path, date: str) -> list[dict]:
             score = float(fm.get("score"))
         except (TypeError, ValueError):
             score = None
-        verb = action_verb(fm.get("verdict") or verdict, fm.get("mos_class"), fm.get("go_no_go"))
-        rows.append({"ticker": fm.get("ticker") or ticker, "verdict": (fm.get("verdict") or verdict).lower(),
-                     "score": score, "action": verb, "href": p.name})
+        resolved = (fm.get("verdict") or verdict or "review").lower()
+        verb = action_verb(resolved, fm.get("mos_class"), fm.get("go_no_go"))
+        mode = (fm.get("mode") or ("screen" if suffix == "screen" else "deep")).lower()
+        rows.append({"ticker": fm.get("ticker") or ticker, "verdict": resolved,
+                     "score": score, "action": verb, "mode": mode, "href": p.name})
     rows.sort(key=lambda r: (-(r["score"] if r["score"] is not None else -1), r["ticker"]))
     return rows
 
@@ -840,9 +850,11 @@ def build_index_html(out_dir: Path, date: str, icon_b64: str) -> str:
         for r in rows:
             vclass = r["verdict"] if r["verdict"] in VERDICT_LABELS else "review"
             score_txt = f'{r["score"]:.1f}/10' if r["score"] is not None else "n/a"
+            tier = ('<span class="idx-tier">SCREEN</span>'
+                    if r.get("mode") == "screen" else "")
             cards.append(
                 f'<a class="idx-card" href="{esc(r["href"])}">'
-                f'<div class="idx-tk">{esc(r["ticker"])}</div>'
+                f'<div class="idx-tk">{esc(r["ticker"])}{tier}</div>'
                 f'<div class="verdict {vclass}">{esc(VERDICT_LABELS.get(r["verdict"],"REVIEW"))}</div>'
                 f'<div class="idx-meta">Quality <b>{esc(score_txt)}</b> · <b>{esc(r["action"])}</b></div></a>')
         inner = f'<div class="idx-grid">{"".join(cards)}</div>'
@@ -853,6 +865,8 @@ def build_index_html(out_dir: Path, date: str, icon_b64: str) -> str:
              '.idx-card{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);'
              'border-radius:12px;padding:14px 16px;box-shadow:var(--shadow)}.idx-card:hover{border-color:var(--bd-green)}'
              '.idx-tk{font-size:18px;font-weight:800;margin-bottom:8px}.idx-card .verdict{font-size:12px}'
+             '.idx-tier{font-size:9px;font-weight:700;letter-spacing:.7px;margin-left:7px;padding:2px 5px;'
+             'border:1px solid var(--line);border-radius:4px;color:var(--muted);vertical-align:2px}'
              '.idx-meta{font-size:12.5px;color:var(--muted);margin-top:8px}</style>')
     body_html = f'<div class="wrap" style="grid-template-columns:1fr">{header}<main>{style}{_card("Today’s reports", inner, "reports")}</main>{footer}</div>'
     template = TEMPLATE.read_text(encoding="utf-8")
