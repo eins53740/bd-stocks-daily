@@ -41,6 +41,18 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 **Disclaimer obrigatório** em cada relatório e email: 🤖 Auto-generated. Not investment advice. Verify all figures before acting.
 **Footer obrigatório** — última linha de cada relatório (deep e screen), após um `---`: `*Analysis written by {model name, e.g. Claude Fable 5} · bsdias©2026 · host: {hostname}*`. O model name é o modelo da sessão que escreveu a análise (visível no environment do Claude Code) — nunca hard-coded. O `{hostname}` é o nome da máquina que correu o job (`platform.node()`, ex. `SecilPT-uPkZhVs`) — serve para saber de imediato se o relatório saiu do portátil ou de um VM host.
 
+## Headless rule (CRITICAL)
+
+**Este skill corre quase sempre sem ninguém a ler.** O job das 17:00 invoca-o como `claude -p` (**non-interactive**) via `C:\Github\.scripts\stocks-daily.bat`. Nesse modo **não existe utilizador para responder** a nada. Logo:
+
+- **NUNCA terminar um run com uma pergunta** — "envio o email?", "queres (a), (b) ou (c)?" — nem usar ferramentas de pergunta interactiva. Não há resposta possível; a pergunta apenas atrasa (ou bloqueia) o pipeline.
+- **Decidir e registar, não perguntar.** Havendo julgamento a fazer, escolhe o **default documentado**, executa-o, e escreve no output final *o que* decidiste e *porquê* — ex. "digest enviado com 10 reports; 5 são do run da manhã, duplicados de propósito". O Bruno lê um resultado, não um menu.
+- **O email NÃO é decisão deste skill.** O `send_email.py` é invocado pelo **bat**, depois de o skill sair (ver Phase 7). Não o suprimas nem peças autorização. Se suspeitas de digest duplicado, **di-lo no output** — não travas nada.
+- Aplica-se igualmente ao `/bd_stocks_daily_growth`.
+- Em run **manual/interactivo** perguntar é legítimo; a proibição é para o caminho `-p`. Na dúvida sobre o modo, **age e reporta** — o custo de um default executado é sempre menor que o de um pipeline parado.
+
+**Porque existe esta regra (incidente 2026-07-28):** o run das 17:00 terminou todo o trabalho às 17:50 e acabou a perguntar *"The email — your call: (a) send as-is, (b) skip, (c) trimmed digest"*. Ninguém podia responder. O processo **nunca saiu**, o bat ficou bloqueado na linha imediatamente anterior ao email, e o digest só saiu às **07:32 do dia seguinte — 13.7 h tarde**. Um default executado mais uma nota no output teria custado zero. O bat passou a ter timeout de 5400 s (`run_with_timeout.ps1`) como rede de segurança, mas **a rede não substitui a regra**.
+
 ## Ground-truth rule (CRITICAL)
 
 **Números estruturados (revenue, P/E, margins, ROE, debt, prices) — SEMPRE de Python helpers (yfinance/stockanalysis).** Nunca extrair números de 10-K / 10-Q via WebFetch. LLM só compõe narrativa (tese, riscos, guidance management, management quality score qualitativo). Se precisares de um número, chama o helper. Qualquer secção qualitativa (§2.1, 2.3, 2.7, 2.11, 2.13, 2.15) deve citar números a partir da JSON da Phase 2 — **nunca inventar**.
@@ -1161,6 +1173,8 @@ JSON entry schema (v2):
 ### Phase 7 — Email digest (with dashboard attachment)
 
 **Default schedule path**: the bat wrapper (`C:\Github\.scripts\stocks-daily.bat`) invokes `send_email.py --date <today>` after Claude exits, with the empty-day guard from Commit E. This guarantees the digest is sent even if this skill skips or abbreviates its final phases.
+
+> **Não é uma decisão deste skill** (ver *Headless rule*). No caminho agendado o skill **não envia nem suprime** o email: sai, e o bat envia. Se o digest for sair com reports repetidos (dois boards no mesmo dia), a resposta correcta é **uma nota no output final**, nunca uma pergunta nem um `send_email.py` suprimido. O bat conta as linhas de HOJE em `_log.csv` **e** `_growth_log.csv`, por isso um dia só-growth continua a mandar email.
 
 **Manual deep-dive path (e.g. `--ticker SAP --mode deep`)**: at the end of Phase 6, **explicitly call** `send_email.py` so the user gets the report in their inbox right away — this is the pattern the user expects after every deep analysis:
 
