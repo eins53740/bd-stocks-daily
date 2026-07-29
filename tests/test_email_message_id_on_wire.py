@@ -1,9 +1,12 @@
 """The deterministic Message-ID must actually reach the SMTP conversation.
 
-digest_message_id() being correct is not enough -- the whole point is that the header lands on the
-outgoing message, because that is what lets the mailbox collapse two deliveries of one digest.
+digest_message_id() being correct is not enough -- the header has to land on the outgoing message,
+which is what makes a duplicate diagnosable after the fact (identical id => one digest sent twice).
+It is NOT what prevents the duplicate: on 2026-07-29 two sends carried the same id and Gmail
+delivered both. See test_email_ownership.py for the guard that actually stops the second send.
+
 This drives main() with a fake SMTP and a fake credential source and inspects what would have been
-transmitted, so it also proves the send path still works end to end after adding the guard.
+transmitted, so it also proves the send path still works end to end after adding the guards.
 """
 from __future__ import annotations
 
@@ -58,6 +61,9 @@ def sending(tmp_path, monkeypatch):
     monkeypatch.setattr(se, "load_for_date", lambda d: [])
     monkeypatch.setattr(se, "SENT_INDEX", tmp_path / "_email_sent.json")
     monkeypatch.setattr(se, "DASHBOARD", tmp_path / "absent_dashboard.html")
+    # Hermetic: these tests assert sends happen, so the scheduled-run ownership guard must be off
+    # regardless of the shell pytest inherits.
+    monkeypatch.delenv(se.SCHEDULED_ENV, raising=False)
     monkeypatch.setattr(sys, "argv", ["send_email.py", "--date", "2026-07-28"])
     return _FakeSMTP
 

@@ -1176,6 +1176,18 @@ JSON entry schema (v2):
 
 > **Não é uma decisão deste skill** (ver *Headless rule*). No caminho agendado o skill **não envia nem suprime** o email: sai, e o bat envia. Se o digest for sair com reports repetidos (dois boards no mesmo dia), a resposta correcta é **uma nota no output final**, nunca uma pergunta nem um `send_email.py` suprimido. O bat conta as linhas de HOJE em `_log.csv` **e** `_growth_log.csv`, por isso um dia só-growth continua a mandar email.
 
+#### Como saber em que caminho estás — NÃO adivinhes
+
+```bash
+python -c "import os;print(os.environ.get('STOCKSDAILY_SCHEDULED') or 'manual')"
+```
+
+`1` ⇒ **caminho agendado: não envias**. Qualquer outra coisa ⇒ manual, envias.
+
+**Isto não é uma sugestão, é uma verificação.** Não inferes o caminho a partir de "isto parece interactivo", da presença de `--ticker`, nem de qualquer outro sinal indirecto — só desta variável, que o `stocks-daily.bat` põe antes de lançar o `claude` e que é herdada por todos os processos filhos.
+
+> **Porquê (incidente 2026-07-29, o segundo email):** esta secção já dizia que no caminho agendado o email é do bat. O run das 17:00 enviou-o mesmo assim, escrevendo no próprio log *"Sent manually at 17:27 since this was **an interactive invocation**"* — a correr sob `claude -p`. Esse envio saiu **antes** de o growth lens ter escrito os reports, portanto sem secção Growth; o run do growth "corrigiu" isso com `--force` às 17:42. **Dois emails, um só Message-ID** (o Gmail entregou os dois — ver abaixo). A lição: **um skill não consegue introspeccionar como foi invocado**, logo pedir-lhe que decida era o bug. O `send_email.py` passou a ter uma guarda de posse que recusa qualquer chamada feita com `STOCKSDAILY_SCHEDULED=1` sem `--scheduled-sender` (que só o bat passa) — mesmo com `--force`. Se te esqueceres desta regra, a guarda trava-te; a regra existe para não gastares o run a tentar.
+
 **Manual deep-dive path (e.g. `--ticker SAP --mode deep`)**: at the end of Phase 6, **explicitly call** `send_email.py` so the user gets the report in their inbox right away — this is the pattern the user expects after every deep analysis:
 
 ```bash
@@ -1190,12 +1202,15 @@ python "%SCRIPTS%\send_email.py" --date 2026-04-30
 
 **Watch-list block (v4 Phase E):** near the top of the body (após o disclaimer, antes do adviser-take), `send_email.py` lê `_watchlist.csv` (via `watchlist.load_watchlist`) e, para cada nome, compara o preço **live** com o `target` (fair-low). Preço live: `_live_prices.json` primeiro, depois fallback yfinance para os tickers em falta (a watch-list raramente coincide com os tickers técnicos do dashboard, por isso o fallback é o caminho comum — **requer Python ambiente com yfinance**, como o bat já usa). Nomes com `live ≤ target` ⇒ bloco vermelho **"⭐ Watch-list triggered"** + tag `[WATCHLIST: n]` no assunto; os restantes vão para uma tabela `<details>` "status" com distância-ao-target %. Tudo guarded — uma falha degrada para status-only, nunca aborta o email. O corpo mantém-se markdown→HTML inline (o report HTML estilizado **nunca** é inlined).
 
-**Send-once ledger + Message-ID estável (2026-07-29).** O Bruno recebia **dois** digests por dia (às vezes no mesmo minuto, às vezes com 1 min de diferença). Os logs provam que este pipeline abre **UMA** transacção SMTP por run (60/60 runs com uma única linha `email sent to`), um só recipient, `RECIPIENTS` nunca é mutado e não há Bcc/Cc — logo o duplicado **nasce no caminho de entrega**, não numa chamada dupla. Fechámos as duas metades que controlamos:
+**Três defesas contra o digest duplicado (2026-07-29).** O Bruno recebia **dois** digests por dia (às vezes no mesmo minuto, às vezes com 1 min de diferença). Por ordem de força:
 
-1. **`_email_sent.json`** (ledger por data) — um segundo `send_email.py` para uma data já enviada é **recusado** (log + `{"email_sent": false, "skipped": "already_sent"}`, exit 0). Mata o caso real de 2026-07-28, em que um run manual às 12:22 mandou 8 reports e o agendado às 07:32 mandou 10. `--force` ignora o ledger. Um ledger ausente/corrupto lê como vazio — **nunca** é motivo para o digest não sair; e um send falhado **não** consome a data (a retry continua possível).
-2. **`Message-ID` explícito e determinístico** — derivado de (data, subject, nº de rows). Antes não era definido e o MTA inventava um por rota, o que impedia o mailbox de colapsar duas entregas da mesma mensagem. Determinístico ⇒ um re-send do mesmo digest é deduplicado; um digest genuinamente diferente na mesma data (mais reports ⇒ subject diferente) mantém id próprio e não é engolido.
+1. **Guarda de posse (`STOCKSDAILY_SCHEDULED`)** — a defesa real. Num run agendado só **uma** chamada pode enviar: a do bat, a única que passa `--scheduled-sender`. Qualquer outra é recusada (`{"email_sent": false, "skipped": "not_email_owner"}`, exit 0). **`--force` NÃO a levanta** — foi exactamente por aí que saiu o duplicado de 2026-07-29. Uma chamada recusada **não consome a data** no ledger, senão travaria o envio legítimo do bat a seguir.
+2. **`_email_sent.json`** (ledger por data) — um segundo `send_email.py` para uma data já enviada é **recusado** (`{"email_sent": false, "skipped": "already_sent"}`, exit 0). Mata o caso de 2026-07-28, em que um run manual às 12:22 mandou 8 reports e o agendado às 07:32 mandou 10. `--force` ignora **este** ledger (e só este). Um ledger ausente/corrupto lê como vazio — **nunca** é motivo para o digest não sair; e um send falhado **não** consome a data.
+3. **`Message-ID` determinístico** — derivado de (data, subject, nº de rows). É **diagnóstico, não defesa**: dois headers iguais ⇒ um digest enviado duas vezes; diferentes ⇒ dois digests genuinamente diferentes. E o `run_host()` no footer diz qual máquina os produziu.
 
-Se ainda chegarem dois emails, **comparar o header `Message-ID` dos dois**: igual ⇒ uma mensagem entregue duas vezes (regra de forward/fetch do lado Gmail/IST — o `bfsd@ist.utl.pt` está registado como alias); diferente ⇒ dois sends genuínos, e aí o `run_host()` no footer diz qual máquina os produziu.
+> **Duas coisas que este ficheiro afirmava e que ficaram provadas FALSAS em 2026-07-29** — não as reintroduzas:
+> - *"o duplicado nasce no caminho de entrega, não numa chamada dupla"* (a partir de 60/60 runs com uma única linha `email sent to`). **Falso**: eram dois sends de dois processos diferentes. Contar linhas no log do bat não vê o que um skill envia via tool-call — os dois emails das 17:27 e 17:42 traziam preços live do TSM diferentes (376.69 vs 377.00), e uma mensagem entregue duas vezes não pode ter dois corpos.
+> - *"um Message-ID igual faz o mailbox colapsar as duas entregas"*. **Falso nesta rota**: os dois emails traziam o **mesmo** `<stocksdaily.2026-07-29.ab542a1d0ce9@ist.utl.pt>` e o Gmail **entregou ambos** — só os agrupou na mesma thread. Um id repetido não suprime nada aqui.
 
 If SMTP fails, the script logs and exits 0 (non-fatal) — the report itself is already on disk in Obsidian.
 

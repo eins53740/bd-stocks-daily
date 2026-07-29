@@ -21,6 +21,7 @@ import hashlib
 import html
 import json
 import mimetypes
+import os
 import re
 import subprocess
 import sys
@@ -60,12 +61,28 @@ RECIPIENTS = ["eins.ist@gmail.com"]
 
 # Send-once ledger, keyed by digest date: {"2026-07-28": {"sent_at", "message_id", "reports"}}.
 # Bruno was receiving two digests per day (sometimes the same minute, sometimes a minute apart).
-# The logs prove this pipeline only ever opens ONE SMTP transaction per run -- 60/60 runs show a
-# single "email sent to" line -- so the duplicate arrives on the mail path, not from a double
-# call. This ledger closes the half we control: a SECOND run on the same date (a manual re-run
-# beside the 17:00 job, as happened 2026-07-28 when 12:22 sent 8 reports and 07:32 sent 10)
-# can no longer produce a second digest. Use --force to send anyway.
+# A SECOND run on the same date (a manual re-run beside the 17:00 job, as happened 2026-07-28 when
+# 12:22 sent 8 reports and 07:32 sent 10) can no longer produce a second digest. `--force` ignores
+# this ledger; it does NOT ignore the ownership guard below.
 SENT_INDEX = OUT_DIR / "_email_sent.json"
+
+# ---------------------------------------------------------------------------
+# Email ownership: exactly ONE process may send per scheduled run.
+#
+# stocks-daily.bat sets STOCKSDAILY_SCHEDULED=1 before launching `claude`, so every descendant --
+# the quality run, the growth run, and any send_email.py they spawn -- inherits it. Only the bat's
+# own final call passes --scheduled-sender, so only the bat can send on the scheduled path.
+#
+# Why an env var and not a documented rule: SKILL.md already said "scheduled path -> the bat sends,
+# not you". On 2026-07-29 the 17:00 run sent anyway, having concluded in its own log "Sent manually
+# at 17:27 since this was an interactive invocation" -- while running under `claude -p`. A skill
+# cannot reliably introspect how it was invoked, so asking it to decide was the bug. The parent
+# process knows for certain, and an inherited env var carries that fact down without being guessed.
+#
+# The 17:27 send then caused the second one: it went out BEFORE the growth lens had written its
+# reports, so the digest carried no Growth section, and the growth run "fixed" that with --force at
+# 17:42. Two emails, one Message-ID. Removing the premature send removes both.
+SCHEDULED_ENV = "STOCKSDAILY_SCHEDULED"
 
 # Attribution line closing every digest. The host is stamped so it is obvious at a
 # glance which machine ran the 17:00 job — the laptop or a VM host.
@@ -970,20 +987,41 @@ def inline_image_refs(html_body: str) -> tuple[str, list[tuple[Path, str, str]]]
 def digest_message_id(target_date: str, subject: str, row_count: int) -> str:
     """Deterministic Message-ID for a digest.
 
-    The script used to set no Message-ID at all, leaving the MTA to invent one. That matters for
-    the duplicate-delivery problem: Gmail suppresses a message whose Message-ID it has already
-    filed, so two copies of one digest reaching the mailbox by different routes (direct delivery
-    plus the copy Gmail pulls back through the bfsd@ist.utl.pt alias) collapse into one -- but
-    only if both carry the SAME id. A server-generated id can differ per route, defeating that.
+    The script used to set no Message-ID at all, leaving the MTA to invent one per route.
 
-    Derived from (date, subject, row count) rather than random: a re-send of the same digest is
-    byte-identical and therefore deduplicated, while a genuinely different digest for the same
-    date (more reports, so a different subject) still gets its own id and is not swallowed.
+    A stable id is worth having, but do NOT treat it as duplicate protection. It was originally
+    added on the assumption that Gmail suppresses a message whose Message-ID it has already filed.
+    **That is false on this route, and was measured false on 2026-07-29**: two sends 15 minutes
+    apart carried the identical id <stocksdaily.2026-07-29.ab542a1d0ce9@ist.utl.pt> and Gmail
+    delivered BOTH -- it threaded them together, which is all a repeated id buys here.
+
+    What the id is genuinely good for: it makes duplicates diagnosable. Same id in two headers
+    means one digest sent twice; different ids mean two genuinely different digests. Preventing the
+    second send is the job of the ownership guard and the send-once ledger, not of this function.
+
+    Derived from (date, subject, row count) rather than random so a re-send of the same digest is
+    identifiable as such, while a digest with more reports gets its own id.
     """
     key = hashlib.sha1(
         f"{target_date}|{subject}|{row_count}".encode("utf-8")
     ).hexdigest()[:12]
     return f"<stocksdaily.{target_date}.{key}@ist.utl.pt>"
+
+
+def not_email_owner(scheduled_sender: bool) -> str | None:
+    """Reason this process must not send, or None if it may.
+
+    Deliberately env-driven rather than argument-driven: the check must fire for a send_email.py
+    that a *skill* spawns without knowing any of this, which is exactly the 2026-07-29 case.
+    """
+    if not os.environ.get(SCHEDULED_ENV):
+        return None                      # manual/interactive path -- sending is the point
+    if scheduled_sender:
+        return None                      # the bat's own call, the one designated to send
+    return (
+        f"{SCHEDULED_ENV}=1 is set, so this is a scheduled run and the bat owns the email; "
+        f"this caller did not pass --scheduled-sender"
+    )
 
 
 def load_sent_index() -> dict:
@@ -1037,9 +1075,32 @@ def main() -> int:
     ap.add_argument(
         "--force",
         action="store_true",
-        help="Send even if a digest for --date already went out (bypasses the send-once ledger)",
+        help="Send even if a digest for --date already went out (bypasses the send-once ledger, "
+             "NOT the scheduled-run ownership guard)",
+    )
+    ap.add_argument(
+        "--scheduled-sender",
+        action="store_true",
+        help=f"Assert this call is the designated sender of a scheduled run. Only "
+             f"stocks-daily.bat passes it; a skill never should. Without it, any call made while "
+             f"{SCHEDULED_ENV}=1 refuses to send.",
     )
     args = ap.parse_args()
+
+    # Ownership guard -- FIRST, and ahead of the ledger. Two reasons it goes before everything:
+    # a refused caller should cost nothing, and unlike the ledger this guard is absolute
+    # (--force cannot lift it, because --force is precisely how the 17:42 duplicate got out).
+    if not args.dry_run:
+        blocked = not_email_owner(args.scheduled_sender)
+        if blocked:
+            log(f"NOT sending: {blocked}")
+            print(json.dumps({
+                "email_sent": False,
+                "skipped": "not_email_owner",
+                "date": args.date,
+                "reason": blocked,
+            }))
+            return 0
 
     # Always regenerate the dashboard before composing the email so the attachment
     # reflects the latest reports, including anything written today.

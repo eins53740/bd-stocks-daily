@@ -1,12 +1,17 @@
 """Send-once ledger + deterministic Message-ID.
 
 Bruno received two digests per StocksDaily run (sometimes the same minute, sometimes a minute
-apart). The logs show this pipeline only ever opens ONE SMTP transaction per run, so the duplicate
-arrives on the mail path. These tests lock the two halves we control:
+apart). These tests lock the two halves this file owns:
 
   * a second send for a date that already went out is refused (--force overrides);
-  * one digest carries one stable Message-ID, so duplicate deliveries collapse instead of
-    appearing twice.
+  * one digest carries one stable Message-ID.
+
+Two beliefs recorded here originally turned out to be wrong, and 2026-07-29 disproved both --
+see test_email_ownership.py. (1) The duplicate was NOT arriving on the mail path: there really
+were two sends, from two different processes. (2) A repeated Message-ID does NOT make a mailbox
+collapse the copies -- Gmail delivered both and merely threaded them. So a stable Message-ID is a
+diagnostic, not a defence, and the ledger tested here is only the second line of it; ownership is
+the first.
 
 The guard must never be the reason a digest fails to go out, so the degradation paths (missing
 ledger, corrupt ledger, unwritable ledger) are tested as explicitly as the happy path.
