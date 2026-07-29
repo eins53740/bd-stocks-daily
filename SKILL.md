@@ -1190,6 +1190,13 @@ python "%SCRIPTS%\send_email.py" --date 2026-04-30
 
 **Watch-list block (v4 Phase E):** near the top of the body (após o disclaimer, antes do adviser-take), `send_email.py` lê `_watchlist.csv` (via `watchlist.load_watchlist`) e, para cada nome, compara o preço **live** com o `target` (fair-low). Preço live: `_live_prices.json` primeiro, depois fallback yfinance para os tickers em falta (a watch-list raramente coincide com os tickers técnicos do dashboard, por isso o fallback é o caminho comum — **requer Python ambiente com yfinance**, como o bat já usa). Nomes com `live ≤ target` ⇒ bloco vermelho **"⭐ Watch-list triggered"** + tag `[WATCHLIST: n]` no assunto; os restantes vão para uma tabela `<details>` "status" com distância-ao-target %. Tudo guarded — uma falha degrada para status-only, nunca aborta o email. O corpo mantém-se markdown→HTML inline (o report HTML estilizado **nunca** é inlined).
 
+**Send-once ledger + Message-ID estável (2026-07-29).** O Bruno recebia **dois** digests por dia (às vezes no mesmo minuto, às vezes com 1 min de diferença). Os logs provam que este pipeline abre **UMA** transacção SMTP por run (60/60 runs com uma única linha `email sent to`), um só recipient, `RECIPIENTS` nunca é mutado e não há Bcc/Cc — logo o duplicado **nasce no caminho de entrega**, não numa chamada dupla. Fechámos as duas metades que controlamos:
+
+1. **`_email_sent.json`** (ledger por data) — um segundo `send_email.py` para uma data já enviada é **recusado** (log + `{"email_sent": false, "skipped": "already_sent"}`, exit 0). Mata o caso real de 2026-07-28, em que um run manual às 12:22 mandou 8 reports e o agendado às 07:32 mandou 10. `--force` ignora o ledger. Um ledger ausente/corrupto lê como vazio — **nunca** é motivo para o digest não sair; e um send falhado **não** consome a data (a retry continua possível).
+2. **`Message-ID` explícito e determinístico** — derivado de (data, subject, nº de rows). Antes não era definido e o MTA inventava um por rota, o que impedia o mailbox de colapsar duas entregas da mesma mensagem. Determinístico ⇒ um re-send do mesmo digest é deduplicado; um digest genuinamente diferente na mesma data (mais reports ⇒ subject diferente) mantém id próprio e não é engolido.
+
+Se ainda chegarem dois emails, **comparar o header `Message-ID` dos dois**: igual ⇒ uma mensagem entregue duas vezes (regra de forward/fetch do lado Gmail/IST — o `bfsd@ist.utl.pt` está registado como alias); diferente ⇒ dois sends genuínos, e aí o `run_host()` no footer diz qual máquina os produziu.
+
 If SMTP fails, the script logs and exits 0 (non-fatal) — the report itself is already on disk in Obsidian.
 
 Subject: `StocksDaily [2026-04-17]: 🟢 ASML.AS 8.7/10 · 🟡 CELH 7.1 · 🟠 JMT.LS 5.4`

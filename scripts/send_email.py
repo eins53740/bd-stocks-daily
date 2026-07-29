@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import html
 import json
 import mimetypes
@@ -56,6 +57,15 @@ DASHBOARD = OUT_DIR / "_dashboard.html"
 BUILD_DASHBOARD = Path(r"C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\build_dashboard.py")
 
 RECIPIENTS = ["eins.ist@gmail.com"]
+
+# Send-once ledger, keyed by digest date: {"2026-07-28": {"sent_at", "message_id", "reports"}}.
+# Bruno was receiving two digests per day (sometimes the same minute, sometimes a minute apart).
+# The logs prove this pipeline only ever opens ONE SMTP transaction per run -- 60/60 runs show a
+# single "email sent to" line -- so the duplicate arrives on the mail path, not from a double
+# call. This ledger closes the half we control: a SECOND run on the same date (a manual re-run
+# beside the 17:00 job, as happened 2026-07-28 when 12:22 sent 8 reports and 07:32 sent 10)
+# can no longer produce a second digest. Use --force to send anyway.
+SENT_INDEX = OUT_DIR / "_email_sent.json"
 
 # Attribution line closing every digest. The host is stamped so it is obvious at a
 # glance which machine ran the 17:00 job — the laptop or a VM host.
@@ -957,6 +967,61 @@ def inline_image_refs(html_body: str) -> tuple[str, list[tuple[Path, str, str]]]
     return _IMG_SRC_RE.sub(_replace, html_body), attachments
 
 
+def digest_message_id(target_date: str, subject: str, row_count: int) -> str:
+    """Deterministic Message-ID for a digest.
+
+    The script used to set no Message-ID at all, leaving the MTA to invent one. That matters for
+    the duplicate-delivery problem: Gmail suppresses a message whose Message-ID it has already
+    filed, so two copies of one digest reaching the mailbox by different routes (direct delivery
+    plus the copy Gmail pulls back through the bfsd@ist.utl.pt alias) collapse into one -- but
+    only if both carry the SAME id. A server-generated id can differ per route, defeating that.
+
+    Derived from (date, subject, row count) rather than random: a re-send of the same digest is
+    byte-identical and therefore deduplicated, while a genuinely different digest for the same
+    date (more reports, so a different subject) still gets its own id and is not swallowed.
+    """
+    key = hashlib.sha1(
+        f"{target_date}|{subject}|{row_count}".encode("utf-8")
+    ).hexdigest()[:12]
+    return f"<stocksdaily.{target_date}.{key}@ist.utl.pt>"
+
+
+def load_sent_index() -> dict:
+    """Read the send-once ledger. Any problem returns {} -- a corrupt or missing ledger must
+    never be the reason a digest fails to go out."""
+    try:
+        if SENT_INDEX.exists():
+            data = json.loads(SENT_INDEX.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        log(f"sent-ledger unreadable ({type(e).__name__}: {e}); treating as empty")
+    return {}
+
+
+def record_sent(target_date: str, message_id: str, row_count: int) -> None:
+    """Append this digest to the ledger. Non-fatal: the mail is already delivered, so a write
+    failure must not turn a successful send into a reported error."""
+    try:
+        index = load_sent_index()
+        index[target_date] = {
+            "sent_at": _now_iso(),
+            "message_id": message_id,
+            "reports": row_count,
+        }
+        SENT_INDEX.parent.mkdir(parents=True, exist_ok=True)
+        SENT_INDEX.write_text(
+            json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception as e:
+        log(f"sent-ledger write FAIL (non-fatal): {type(e).__name__}: {e}")
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+    return datetime.now().isoformat(timespec="seconds")
+
+
 def load_for_date(target_date: str) -> list[dict]:
     if not LOG.exists():
         return []
@@ -969,6 +1034,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", default=date.today().isoformat())
     ap.add_argument("--dry-run", action="store_true", help="Print body, don't send")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Send even if a digest for --date already went out (bypasses the send-once ledger)",
+    )
     args = ap.parse_args()
 
     # Always regenerate the dashboard before composing the email so the attachment
@@ -977,6 +1047,25 @@ def main() -> int:
 
     rows = load_for_date(args.date)
     subject, html_body, text_body = build_email(rows, args.date)
+    message_id = digest_message_id(args.date, subject, len(rows))
+
+    # Send-once guard. Checked BEFORE the SMTP block so a duplicate costs nothing, and after
+    # build_email so the ledger records what would have gone out. --dry-run is never blocked.
+    if not args.dry_run and not args.force:
+        prior = load_sent_index().get(args.date)
+        if prior:
+            log(
+                f"digest for {args.date} already sent at {prior.get('sent_at')} "
+                f"({prior.get('reports')} reports, {prior.get('message_id')}); "
+                f"skipping duplicate — use --force to override"
+            )
+            print(json.dumps({
+                "email_sent": False,
+                "skipped": "already_sent",
+                "date": args.date,
+                "previous": prior,
+            }))
+            return 0
 
     if args.dry_run:
         print("SUBJECT:", subject)
@@ -1017,6 +1106,9 @@ def main() -> int:
         msg["From"] = sender
         msg["To"] = ", ".join(RECIPIENTS)
         msg["Reply-To"] = sender
+        # Explicit + deterministic so duplicate deliveries of one digest collapse. See
+        # digest_message_id(); without this the MTA invents a fresh id per route.
+        msg["Message-ID"] = message_id
         # Transactional-mail header helps spam filters classify this as legit automation
         msg["List-Unsubscribe"] = f"<mailto:{sender}?subject=unsubscribe-stocksdaily>"
 
@@ -1064,8 +1156,9 @@ def main() -> int:
         with smtplib.SMTP_SSL("mail.ist.utl.pt", 465, timeout=20) as smtp:
             smtp.login(sender, pwd)
             smtp.sendmail(sender, RECIPIENTS, msg.as_string())
-        log(f"email sent to {', '.join(RECIPIENTS)}")
-        print('{"email_sent": true}')
+        log(f"email sent to {', '.join(RECIPIENTS)} (Message-ID {message_id})")
+        record_sent(args.date, message_id, len(rows))
+        print(json.dumps({"email_sent": True, "message_id": message_id}))
         return 0
     except Exception as e:
         log(f"email FAIL (not fatal): {type(e).__name__}: {e}")
