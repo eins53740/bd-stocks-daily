@@ -62,20 +62,28 @@ def log(msg: str) -> None:
 # ===================================================================
 # Pure functions (no I/O — unit-tested)
 # ===================================================================
-def is_watchlist_eligible(score, mos_class, fair_low) -> bool:
+def is_watchlist_eligible(score, mos_class, target) -> bool:
     """A name is watch-list material when quality is proven (composite >= 7) but
     price is the only thing holding it back (MoS 'rich') AND we have a numeric
-    fair-low to use as the alert target."""
+    target price to alert on.
+
+    `target` is the 5-model **blend** (`fair_value_range.mid`), not the range low.
+    The low is the single most pessimistic model, and using it made 21 of 24
+    targets unreachable (median target sat 45% below the live price), so the
+    watch-list never fired. The blend is the anchor the margin-of-safety class is
+    computed against, so for a name that qualifies here — `mos_class == "rich"`,
+    i.e. price above fair value — it is guaranteed to sit below the current price
+    and can never be a pre-triggered or absurd target."""
     return (
         score is not None and float(score) >= QUALITY_FLOOR
         and mos_class == "rich"
-        and fair_low is not None and float(fair_low) > 0
+        and target is not None and float(target) > 0
     )
 
 
-def should_be_on_list(score, mos_class, fair_low, held: bool) -> bool:
+def should_be_on_list(score, mos_class, target, held: bool) -> bool:
     """Keep iff eligible AND not held (a buy graduates it off the list)."""
-    return is_watchlist_eligible(score, mos_class, fair_low) and not held
+    return is_watchlist_eligible(score, mos_class, target) and not held
 
 
 def distance_to_target_pct(live, target):
@@ -131,16 +139,22 @@ def build_row(ticker: str, target, currency, fair_low, mos_class, score,
         "score": round(float(score), 2),
         "fail_reason": "price rich (MoS)",
         "thesis": f"Quality {float(score):.1f}/10, price rich{mos_txt} — "
-                  f"buy near fair-low {round(float(target), 2)}",
+                  f"buy near fair value {round(float(target), 2)}",
     }
 
 
-def apply_maintenance(rows: list, ticker: str, score, mos_class, fair_low,
-                      held: bool, currency, mos_pct, today_iso: str) -> tuple:
-    """Apply the one-line membership rule. Returns (new_rows, action)."""
-    if should_be_on_list(score, mos_class, fair_low, held):
-        row = build_row(ticker, fair_low, currency, fair_low, mos_class,
-                        score, mos_pct, today_iso)
+def apply_maintenance(rows: list, ticker: str, score, mos_class, target,
+                      held: bool, currency, mos_pct, today_iso: str,
+                      fair_low=None) -> tuple:
+    """Apply the one-line membership rule. Returns (new_rows, action).
+
+    `target` is the alert price (the blend); `fair_low` is carried through to the
+    CSV as informational context only. It defaults to `target` so callers that
+    pass a single value still get a coherent row."""
+    if should_be_on_list(score, mos_class, target, held):
+        row = build_row(ticker, target, currency,
+                        target if fair_low is None else fair_low,
+                        mos_class, score, mos_pct, today_iso)
         return upsert_row(rows, row), "kept"
     was_present = any((r.get("ticker") or "").upper() == (ticker or "").upper()
                       for r in rows)
@@ -186,7 +200,10 @@ def run(analysis_json: str, out_dir: Path, today_iso: str, do_update: bool) -> d
     iv = data.get("intrinsic_value") or {}
     mos_class = iv.get("mos_class")
     mos_pct = iv.get("mos_pct")
-    fair_low = ((iv.get("fair_value_range") or {}).get("low"))
+    fv_range = iv.get("fair_value_range") or {}
+    fair_low = fv_range.get("low")
+    # The alert price is the blend, not the range low — see is_watchlist_eligible.
+    target = fv_range.get("mid")
     currency = data.get("currency")
 
     holdings, warnings = load_holdings(out_dir)
@@ -196,20 +213,22 @@ def run(analysis_json: str, out_dir: Path, today_iso: str, do_update: bool) -> d
 
     rows = load_watchlist(out_dir)
     new_rows, action = apply_maintenance(
-        rows, ticker, score, mos_class, fair_low, held, currency, mos_pct, today_iso)
+        rows, ticker, score, mos_class, target, held, currency, mos_pct,
+        today_iso, fair_low=fair_low)
 
     if do_update:
         write_watchlist(out_dir, new_rows)
-        log(f"{ticker}: {action} (score={score}, mos={mos_class}, held={held}); "
-            f"list now {len(new_rows)} name(s)")
+        log(f"{ticker}: {action} (score={score}, mos={mos_class}, held={held}, "
+            f"target={target}); list now {len(new_rows)} name(s)")
 
     return {
         "ticker": ticker,
         "action": action,
-        "eligible": is_watchlist_eligible(score, mos_class, fair_low),
+        "eligible": is_watchlist_eligible(score, mos_class, target),
         "held": held,
         "score": score,
         "mos_class": mos_class,
+        "target": target,
         "fair_low": fair_low,
         "watchlist_size": len(new_rows),
         "warnings": warnings,

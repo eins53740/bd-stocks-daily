@@ -21,8 +21,10 @@ from financial_history import (  # noqa: E402
     _av_annual_records,
     av_budget_allows,
     build_forecast,
+    cache_has_fcf,
     cache_has_net_income,
     cache_is_fresh,
+    suppression_reason,
     median_margin,
     next_quarter_label,
     quarter_label_from_date,
@@ -365,3 +367,114 @@ def test_pre_phase_a_cache_is_treated_as_stale():
               "annual": {"labels": ["FY2024"], "revenue": [1], "ebitda": [1], "fcf": [1]}}
     assert cache_is_fresh(cached["fetched_at"], datetime.now().isoformat()) is True
     assert cache_has_net_income(cached) is False  # → run() refetches
+
+
+# ---------- partial-AV-fetch guard: FCF-less cache (2026-07-30) ----------
+# A throttled CASH_FLOW call returns complete income data and an all-None FCF
+# column. The fetch logged "AV ok", the cache was written as a success, and the
+# EBITDA-vs-FCF chart lost its FCF line for the full 80-day TTL — silently, on
+# 10 of 33 cached names (MSFT, TSM, PYPL, MA, ADSK, TTD among them).
+def test_cache_has_fcf_checks_values_not_key_presence():
+    assert cache_has_fcf({"series": {"fcf": [1.0, 2.0]}}) is True
+    assert cache_has_fcf({"series": {"fcf": [None, 2.0]}}) is True  # partial is usable
+    assert cache_has_fcf({"series": {"fcf": [None, None]}}) is False
+    assert cache_has_fcf({"series": {"fcf": []}}) is False
+    assert cache_has_fcf({"series": {"revenue": [1]}}) is False  # key absent
+    assert cache_has_fcf({}) is False
+    assert cache_has_fcf(None) is False
+
+
+def test_fcf_less_cache_is_treated_as_stale_despite_fresh_ttl():
+    """The MSFT case: 40 quarters of revenue/EBITDA, zero FCF, inside the TTL."""
+    cached = {
+        "fetched_at": datetime.now().isoformat(),
+        "series": {"labels": ["2026Q1"] * 40, "revenue": [1.0] * 40,
+                   "ebitda": [1.0] * 40, "fcf": [None] * 40},
+        "annual": {"net_income": [1.0]},
+    }
+    assert cache_is_fresh(cached["fetched_at"], datetime.now().isoformat()) is True
+    assert cache_has_net_income(cached) is True   # this gate passed...
+    assert cache_has_fcf(cached) is False         # ...this one now catches it
+
+
+def test_suppression_reason_names_the_real_cause():
+    """`insufficient_quarters` was reported for every suppression, including a
+    40-quarter series missing only FCF — a label that sends you to the wrong bug."""
+    forty_no_fcf = {"series": {"revenue": [1.0] * 40, "fcf": [None] * 40}}
+    assert suppression_reason(forty_no_fcf, None) == "no_fcf_data"
+    thin = {"series": {"revenue": [1.0, 2.0], "fcf": [1.0, 2.0]}}
+    assert suppression_reason(thin, None) == "insufficient_quarters"
+    assert suppression_reason(forty_no_fcf, {"labels": ["2026Q2"]}) is None
+
+
+def test_suppression_reason_accepts_a_bare_series_block():
+    """Called with a cached output (nested `series`) and with a hist block."""
+    assert suppression_reason({"fcf": [None, None], "revenue": [1, 2]}, None) == "no_fcf_data"
+
+
+def test_av_currency_ignores_the_literal_none_string():
+    """AV sends absent strings as "None", which is truthy — it overwrote the USD
+    default and would have printed "None" as the currency on MSFT's chart axis."""
+    from financial_history import _av_currency
+    assert _av_currency([{"reportedCurrency": "None"}]) == "USD"
+    assert _av_currency([{"reportedCurrency": "none"}]) == "USD"
+    assert _av_currency([{"reportedCurrency": "  "}]) == "USD"
+    assert _av_currency([{"reportedCurrency": None}]) == "USD"
+    assert _av_currency([]) == "USD"
+    assert _av_currency([{"reportedCurrency": "EUR"}]) == "EUR"
+    # falls through to the first report that actually names a currency
+    assert _av_currency([{"reportedCurrency": "None"},
+                         {"reportedCurrency": "USD"}]) == "USD"
+
+
+def test_av_is_throttled_detects_the_200_with_a_note():
+    from financial_history import _av_is_throttled
+    assert _av_is_throttled({"Note": "call frequency"}) is True
+    assert _av_is_throttled({"Information": "rate limit"}) is True
+    assert _av_is_throttled({"quarterlyReports": []}) is False
+    assert _av_is_throttled(None) is False
+
+
+def test_av_retry_spaces_the_second_attempt_and_counts_both_calls(monkeypatch):
+    """The root cause: AV free tier is 5 req/min and the two statement calls fire
+    back-to-back, so the second is throttled. The retry must wait, not hammer."""
+    import financial_history as fh
+    responses = [{"Note": "call frequency"}, {"quarterlyReports": [{"x": 1}]}]
+    monkeypatch.setattr(fh, "_http_get_json", lambda url: responses.pop(0))
+    slept = []
+    payload, calls = fh._av_get_with_retry("http://x", "CASH_FLOW",
+                                           sleep=slept.append)
+    assert payload == {"quarterlyReports": [{"x": 1}]}
+    assert calls == 2, "both requests must count against the daily budget"
+    assert slept == [fh.AV_THROTTLE_DELAY_S], "must wait past the per-minute window"
+
+
+def test_av_retry_gives_up_after_the_configured_attempts(monkeypatch):
+    import financial_history as fh
+    monkeypatch.setattr(fh, "_http_get_json", lambda url: {"Note": "call frequency"})
+    slept = []
+    payload, calls = fh._av_get_with_retry("http://x", "CASH_FLOW", attempts=2,
+                                           sleep=slept.append)
+    assert fh._av_is_throttled(payload) is True  # still throttled → caller warns
+    assert calls == 2 and len(slept) == 1, "no sleep after the final attempt"
+
+
+def test_av_retry_does_not_retry_a_good_first_response(monkeypatch):
+    import financial_history as fh
+    monkeypatch.setattr(fh, "_http_get_json", lambda url: {"quarterlyReports": []})
+    slept = []
+    _, calls = fh._av_get_with_retry("http://x", "INCOME_STATEMENT",
+                                     sleep=slept.append)
+    assert calls == 1 and slept == []
+
+
+def test_av_records_report_missing_cashflow_as_none_not_zero():
+    """Guards the join: no cashflow row for a date must yield fcf None, never 0.0
+    — a zero would be plotted as a real datapoint."""
+    from financial_history import _av_records
+    income = [{"fiscalDateEnding": "2026-03-31", "totalRevenue": "100",
+               "ebitda": "20"}]
+    recs = _av_records(income, {})  # empty cf_by_date = throttled CASH_FLOW
+    assert len(recs) == 1
+    assert recs[0]["fcf"] is None
+    assert recs[0]["revenue"] == 100.0

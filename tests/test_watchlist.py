@@ -8,6 +8,7 @@ loss (score<7), graduation to cheap (mos leaves 'rich') — plus the CSV contrac
 read by send_email.py.
 """
 import csv
+import json
 import sys
 from pathlib import Path
 
@@ -126,6 +127,62 @@ def test_maintenance_absent_when_not_eligible_and_not_present():
                                         mos_pct=1.0, today_iso="2026-07-22")
     assert action == "absent"
     assert [r["ticker"] for r in rows] == ["CSCO"]
+
+
+# ------------- target is the blend, not the range low (2026-07-30) -------------
+# The alert price used to be fair_value_range.low — the single most pessimistic
+# model — which put 21 of 24 targets so far below the live price that the
+# watch-list could never fire (MSFT entered at 118.35 against a 390.54 price).
+def test_maintenance_target_is_the_passed_blend_not_the_fair_low():
+    rows, action = wl.apply_maintenance([], "MSFT", 7.32, "rich", 303.28,
+                                        held=False, currency="USD",
+                                        mos_pct=-28.8, today_iso="2026-07-30",
+                                        fair_low=118.35)
+    assert action == "kept"
+    assert rows[0]["target"] == 303.28, "target must be the blend"
+    assert rows[0]["fair_low"] == 118.35, "fair_low stays as informational context"
+
+
+def test_maintenance_fair_low_defaults_to_target_when_omitted():
+    """Callers passing a single value still produce a coherent row."""
+    rows, _ = wl.apply_maintenance([], "ADSK", 8.4, "rich", 250.0, held=False,
+                                   currency="USD", mos_pct=-18.0,
+                                   today_iso="2026-07-22")
+    assert rows[0]["target"] == rows[0]["fair_low"] == 250.0
+
+
+def test_eligibility_follows_the_target_not_the_low():
+    """A missing blend makes a name ineligible even when a low exists — without a
+    target there is nothing to alert on."""
+    assert wl.is_watchlist_eligible(8.5, "rich", None) is False
+    assert wl.is_watchlist_eligible(8.5, "rich", 303.28) is True
+
+
+def test_thesis_text_no_longer_says_fair_low():
+    """The row is read by a human; it must not describe the blend as a fair-low."""
+    row = wl.build_row("MSFT", 303.28, "USD", 118.35, "rich", 7.32, -28.8,
+                       "2026-07-30")
+    assert "fair-low" not in row["thesis"]
+    assert "fair value 303.28" in row["thesis"]
+
+
+def test_run_reads_mid_as_target_and_low_as_context(tmp_path):
+    """End-to-end through run(): the JSON's fair_value_range.mid becomes target."""
+    payload = {
+        "ticker": "MSFT", "currency": "USD",
+        "scores": {"composite": 7.32},
+        "intrinsic_value": {
+            "mos_class": "rich", "mos_pct": -28.8,
+            "fair_value_range": {"low": 118.35, "mid": 303.28, "high": 481.16},
+        },
+    }
+    p = tmp_path / "msft.json"
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    out = wl.run(str(p), tmp_path, "2026-07-30", do_update=True)
+    assert out["action"] == "kept"
+    assert out["target"] == 303.28 and out["fair_low"] == 118.35
+    written = wl.load_watchlist(tmp_path)
+    assert float(written[0]["target"]) == 303.28
 
 
 # ------------------------- CSV round-trip -------------------------

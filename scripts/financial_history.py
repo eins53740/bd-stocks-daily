@@ -55,6 +55,8 @@ API_KEYS_PATH = BD_FINANCE / "config" / "api_keys.txt"
 
 TTL_DAYS = 80
 AV_DAILY_LIMIT = 20        # stay well under Alpha Vantage's free 25/day
+AV_THROTTLE_RETRIES = 2    # attempts per endpoint when AV answers with a throttle note
+AV_THROTTLE_DELAY_S = 20.0  # free tier is 5 req/min — space the retry past the window
 MAX_QUARTERS = 40
 # Annual-history depth. Lifted from 6 in v4 Phase E so the 10/15-yr revenue-CAGR
 # rungs (valuation_bands.cagr_ladder_from_annual) can populate whenever a source
@@ -132,6 +134,29 @@ def cache_has_net_income(cached: dict | None) -> bool:
         return False
     annual = cached.get("annual")
     return isinstance(annual, dict) and "net_income" in annual
+
+
+def cache_has_fcf(cached: dict | None) -> bool:
+    """Whether a cached output carries a usable quarterly FCF series.
+
+    Unlike `cache_has_net_income` this checks VALUES, not key presence, because
+    the failure being guarded against is a *partial* Alpha Vantage fetch: when
+    INCOME_STATEMENT succeeds but CASH_FLOW is throttled, the FCF column comes
+    back all-None while revenue and EBITDA are complete, and the cache was
+    written as a success and served for the full 80-day TTL. That silently cost
+    the flagship EBITDA-vs-FCF chart its FCF line — and suppressed the forecast —
+    on 10 of 33 cached names (MSFT, TSM, PYPL, MA, ADSK, TTD among them).
+
+    A name whose FCF is genuinely unavailable re-fetches once per run and lands
+    back here; that costs 2 AV calls against a 25/day budget, which is the right
+    trade for not silently serving a broken series for three months."""
+    if not isinstance(cached, dict):
+        return False
+    series = cached.get("series")
+    if not isinstance(series, dict) or "fcf" not in series:
+        return False
+    fcf = series.get("fcf") or []
+    return any(v is not None for v in fcf)
 
 
 def av_budget_allows(budget: dict, today_iso: str, limit: int = AV_DAILY_LIMIT) -> bool:
@@ -372,6 +397,47 @@ def read_alphavantage_key() -> str | None:
     return None
 
 
+def _av_is_throttled(payload) -> bool:
+    """Alpha Vantage signals a rate limit with HTTP 200 and a Note/Information
+    key instead of data — so it looks like a successful, empty response."""
+    return isinstance(payload, dict) and bool(
+        payload.get("Note") or payload.get("Information"))
+
+
+def _av_get_with_retry(url: str, label: str, attempts: int = AV_THROTTLE_RETRIES,
+                       delay_s: float = AV_THROTTLE_DELAY_S, sleep=None) -> tuple:
+    """GET an AV endpoint, retrying only when the response is a throttle note.
+    Returns (payload, calls_made) so the daily budget counts every request.
+
+    The free tier allows 5 requests/minute. fetch_alphavantage fires
+    INCOME_STATEMENT and CASH_FLOW back-to-back and valuation_bands adds an
+    EARNINGS call in the same run, so the second or third request in that burst
+    is routinely throttled — which used to silently produce an all-None FCF
+    column (see cache_has_fcf). Spacing the retry is what actually fixes it;
+    everything else only made the failure visible."""
+    sleeper = sleep if sleep is not None else _default_sleep
+    payload, calls = None, 0
+    for attempt in range(1, max(1, attempts) + 1):
+        calls += 1
+        try:
+            payload = _http_get_json(url)
+        except Exception as e:
+            log(f"AV {label} failed: {type(e).__name__}: {e}")
+            payload = None
+        if not _av_is_throttled(payload):
+            return payload, calls
+        if attempt < attempts:
+            log(f"AV {label} throttled — retrying in {delay_s:.0f}s "
+                f"(attempt {attempt}/{attempts})")
+            sleeper(delay_s)
+    return payload, calls
+
+
+def _default_sleep(seconds: float) -> None:
+    import time
+    time.sleep(seconds)
+
+
 def _http_get_json(url: str) -> dict | None:
     """GET the URL and parse JSON. requests if available, else urllib. None on error."""
     text = None
@@ -405,6 +471,15 @@ def _av_num(value) -> float | None:
         return float(s)
     except ValueError:
         return None
+
+
+def _av_currency(reports: list, default: str = "USD") -> str:
+    """reportedCurrency from the newest report, ignoring AV's literal "None"."""
+    for r in reports or []:
+        cur = r.get("reportedCurrency")
+        if isinstance(cur, str) and cur.strip() and cur.strip().lower() != "none":
+            return cur.strip()
+    return default
 
 
 def _av_records(quarterly_income: list, cf_by_date: dict) -> list:
@@ -466,18 +541,13 @@ def fetch_alphavantage(ticker: str, key: str) -> tuple[dict | None, int]:
     calls_made counts the HTTP requests issued (for the daily-budget counter) even
     when the response is empty or throttled."""
     calls = 0
-    income = None
-    cashflow = None
-    try:
-        calls += 1
-        income = _http_get_json(f"{AV_BASE}?function=INCOME_STATEMENT&symbol={ticker}&apikey={key}")
-    except Exception as e:
-        log(f"AV INCOME_STATEMENT failed: {type(e).__name__}: {e}")
-    try:
-        calls += 1
-        cashflow = _http_get_json(f"{AV_BASE}?function=CASH_FLOW&symbol={ticker}&apikey={key}")
-    except Exception as e:
-        log(f"AV CASH_FLOW failed: {type(e).__name__}: {e}")
+    income, n = _av_get_with_retry(
+        f"{AV_BASE}?function=INCOME_STATEMENT&symbol={ticker}&apikey={key}",
+        "INCOME_STATEMENT")
+    calls += n
+    cashflow, n = _av_get_with_retry(
+        f"{AV_BASE}?function=CASH_FLOW&symbol={ticker}&apikey={key}", "CASH_FLOW")
+    calls += n
 
     if not isinstance(income, dict) or "quarterlyReports" not in income:
         # Throttle/limit responses carry a 'Note'/'Information' key instead of data.
@@ -494,23 +564,41 @@ def fetch_alphavantage(ticker: str, key: str) -> tuple[dict | None, int]:
     cf_by_date = {r.get("fiscalDateEnding"): r for r in cf_quarterly}
     acf_by_date = {r.get("fiscalDateEnding"): r for r in cf_annual}
 
+    # A throttled CASH_FLOW call used to pass silently: income data is complete,
+    # so the fetch logged "AV ok" and cached an all-None FCF column for 80 days.
+    # Say so instead — the caller decides, and cache_has_fcf() forces a refetch.
+    av_warnings = []
+    if not cf_quarterly:
+        note = ""
+        if isinstance(cashflow, dict) and (cashflow.get("Note") or cashflow.get("Information")):
+            note = " (rate-limited)"
+        elif not isinstance(cashflow, dict):
+            note = " (request failed)"
+        msg = f"AV CASH_FLOW returned no quarterly reports{note} — FCF series unavailable"
+        log(msg)
+        av_warnings.append(msg)
+
     records = _av_records(quarterly_income, cf_by_date)
     if not records:
         log("AV returned no usable quarterly rows")
         return None, calls
     annual_records = _av_annual_records(annual_income, acf_by_date)
 
-    currency = "USD"
-    if quarterly_income and quarterly_income[0].get("reportedCurrency"):
-        currency = quarterly_income[0]["reportedCurrency"]
+    # AV sends absent strings as the literal "None", which is truthy — so this
+    # used to overwrite the USD default with the word "None" and print it on the
+    # chart axis (MSFT, 2026-07-30).
+    currency = _av_currency(quarterly_income, "USD")
 
     # Fiscal year-end month from the most recent annual report; default December.
     fy_end_month = 12
     if annual_income and annual_income[0].get("fiscalDateEnding"):
         fy_end_month = int(annual_income[0]["fiscalDateEnding"][5:7])
 
-    log(f"AV ok: {len(records)} quarters, {len(annual_records)} years, currency={currency}")
-    return assemble_hist("alphavantage", currency, records, annual_records, fy_end_month, []), calls
+    n_fcf = sum(1 for r in records if r.get("fcf") is not None)
+    log(f"AV ok: {len(records)} quarters ({n_fcf} with FCF), "
+        f"{len(annual_records)} years, currency={currency}")
+    return assemble_hist("alphavantage", currency, records, annual_records,
+                         fy_end_month, av_warnings), calls
 
 
 # ===================================================================
@@ -696,6 +784,22 @@ def hist_from_cache(cached: dict) -> dict:
     }
 
 
+def suppression_reason(hist_or_cached: dict, forecast: dict | None) -> str | None:
+    """Why no forecast was produced — the honest reason, not a catch-all.
+
+    `insufficient_quarters` used to be reported for every suppression, including
+    MSFT's, which had 40 quarters of revenue and EBITDA and was missing only the
+    FCF leg. A label that names the wrong cause sends you looking for the wrong
+    bug, so distinguish the two."""
+    if forecast:
+        return None
+    series = hist_or_cached.get("series") or hist_or_cached
+    fcf = (series.get("fcf") if isinstance(series, dict) else None) or []
+    if fcf and not any(v is not None for v in fcf):
+        return "no_fcf_data"
+    return "insufficient_quarters"
+
+
 def build_output(ticker: str, hist: dict, forecast: dict | None, now_iso: str) -> dict:
     return {
         "ticker": ticker,
@@ -706,7 +810,7 @@ def build_output(ticker: str, hist: dict, forecast: dict | None, now_iso: str) -
         "series": hist["series"],
         "annual": hist["annual"],
         "forecast": forecast,
-        "forecast_suppressed_reason": None if forecast else "insufficient_quarters",
+        "forecast_suppressed_reason": suppression_reason(hist, forecast),
         "warnings": hist.get("warnings", []),
         # Inputs needed to recompute the forecast from cache without a refetch
         # (fresh consensus can change the forecast well inside the 80-day TTL).
@@ -727,7 +831,8 @@ def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> d
     if not force:
         cached = read_cache(cache_path)
         if (cached and cache_is_fresh(cached.get("fetched_at", ""), now_iso, TTL_DAYS)
-                and cache_has_net_income(cached)):
+                and cache_has_net_income(cached)
+                and cache_has_fcf(cached)):
             # A fresh cache serves the historical series verbatim (no network), but
             # the forecast can go stale well inside the 80-day TTL. If a fresh
             # consensus was supplied, recompute the forecast from the cached series
@@ -737,7 +842,7 @@ def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> d
             if consensus is not None and cached.get("_forecast_inputs"):
                 forecast = compute_forecast(hist_from_cache(cached), consensus)
                 cached["forecast"] = forecast
-                cached["forecast_suppressed_reason"] = None if forecast else "insufficient_quarters"
+                cached["forecast_suppressed_reason"] = suppression_reason(cached, forecast)
                 write_cache(cache_path, cached)
                 log(f"cache hit for {ticker} (fresh); forecast recomputed from supplied consensus")
             else:
