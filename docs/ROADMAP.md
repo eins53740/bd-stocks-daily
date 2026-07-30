@@ -74,9 +74,50 @@ untouched.
 - **Watch out**: raising the work-list size raises the run's API budget; the
   prefilter already runs a 2 h timeout.
 
+### R4. Twelve Data cross-check compares the wrong venue — **S**
+
+`fetch_twelvedata_validation` resolves `ADS.DE` on the free tier, but the quote comes back
+from **`exchange: XSTU` (Stuttgart)**, a thin secondary venue — not Xetra. On 2026-07-30 it
+returned a stale €182.25 while Xetra had gapped **−18%** on earnings, and the divergence was
+recorded as a yfinance `data_quality: suspect` flag. **The reference price was wrong, not the
+data being checked.**
+
+- **Found** 2026-07-30 by the provider audit (ReadNow PDF 0263).
+- **Plan**: read `exchange` from the TD response and either refuse the comparison when it is
+  not the ticker's primary venue, or record the venue alongside the divergence so a
+  cross-venue gap is never reported as a data error.
+- **Also**: free-tier TD covers **one** of the six non-US markets held. Euronext is
+  `402 Grow/Venture`, TW/HK/KR `402 Pro/Venture`. Restricting TD to US cross-checks is the
+  honest alternative.
+
+### R5. Rotate the six Alpha Vantage keys instead of retrying one — **S**
+
+`config/api_keys.txt` holds **six** AV keys (`api_key_alphavantage` + `…1`–`…5`). The free
+limit is 5 requests/**minute** per key, and a throttled `CASH_FLOW` call silently produced
+FCF-less caches for 10 of 33 names over three months (fixed 2026-07-30 with a 20 s spaced
+retry — which treats the symptom).
+
+- **Plan**: round-robin the pool in `financial_history.py` / `valuation_bands.py`, raising the
+  ceiling to ~30 req/min and removing the burst throttle at its cause.
+- **Keep** the spaced retry as the backstop; the pool reduces how often it fires.
+
 ---
 
 ## Next — AGREED-DEFERRED
+
+### N0. Probe FinancialReports for EU filings + new listings — **S**
+
+The provider audit found the only credible free source of **European** filings and new
+listings: FinancialReports (`financialreports.eu`, now 301→`financialfilings.com`) — 57
+markets, 69,647 companies, **500 free credits/month**, 600 req/min, REST + Python SDK, and a
+daily European IPO index. 500 calls/month is ample at weekly cadence.
+
+- **Why it matters**: **no free API gives European IPOs.** Finnhub's calendar returns 142
+  entries, all NASDAQ/NYSE; AlphaVantage's returns 3 rows; FMP's is `402`. yfinance has no
+  IPO endpoint at all.
+- **Unverified**: which fields the free 500 credits unlock, and whether the IPO index is
+  exposed via API or only on the website. One free key + one probe answers both.
+- **Caveat**: the domain rebranded recently — treat stability as unproven.
 
 ### N1. Revenue-segment charts, behind an opt-in `--segments` flag — **M**
 
