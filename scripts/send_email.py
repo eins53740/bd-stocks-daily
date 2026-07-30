@@ -112,6 +112,12 @@ except Exception as _wl_exc:  # never let a watch-list import break the digest
     load_watchlist = None
     distance_to_target_pct = None
 
+# "Buy today" lead section (selection logic lives in buy_list.py, rendering here).
+try:
+    import buy_list  # noqa: E402
+except Exception as _bl_exc:  # never let it break the digest
+    buy_list = None
+
 
 def regenerate_dashboard() -> None:
     """Regenerate _dashboard.html before sending so the attachment is fresh.
@@ -377,8 +383,8 @@ def build_growth_section_html(target_date: str) -> str:
         return ""
 
 
-def fetch_watchlist_live_prices(tickers: list[str]) -> dict:
-    """Live price per watch-list ticker. Reads the fresh _live_prices.json first
+def fetch_live_prices_for(tickers: list[str]) -> dict:
+    """Live price per ticker (watch-list and buy-list). Reads the fresh _live_prices.json first
     (written by regenerate_dashboard → live_prices.py), then best-effort yfinance
     for any ticker missing there (watch-list names usually aren't dashboard
     technical-read tickers, so this fallback is the common path). Degrades to a
@@ -465,6 +471,121 @@ def build_watchlist_html(rows: list[dict], live_prices: dict) -> tuple[str, int]
             f"</tr></thead><tbody>{body}</tbody></table></details>"
         )
     return "".join(parts), len(triggered)
+
+
+def build_buy_today_html(result: dict) -> str:
+    """The lead section: what is buyable today, best recommendation first, each with a
+    max entry price. Deterministic — see buy_list.select_buys for the selection rule.
+
+    Deliberately renders an explicit empty state rather than disappearing: "no section"
+    and "nothing to buy" are different messages, and only one of them is true on a
+    given day. Inline styles only (mail clients strip <style>)."""
+    buys = (result or {}).get("buys") or []
+    floor = (result or {}).get("floor", buy_list.BUY_FLOOR if buy_list else 7.5)
+    n_above = len((result or {}).get("above_entry") or [])
+    n_nocap = len((result or {}).get("no_max_entry") or [])
+
+    excluded_bits = []
+    if n_above:
+        excluded_bits.append(f"{n_above} above max entry")
+    if n_nocap:
+        excluded_bits.append(f"{n_nocap} without a stateable max entry")
+    excluded = (" · excluded: " + ", ".join(excluded_bits)) if excluded_bits else ""
+    footnote = (
+        f"<div style='font-size:11px;color:#777;margin-top:8px;'>"
+        f"Floor is the <b>invest</b> band (composite ≥ {floor:g}); quality names at "
+        f"7.0–{floor - 0.1:.1f} that are merely too expensive sit in the watch-list block, not here. "
+        f"Max entry = the 5-model fair-value blend, or the technical entry zone when a report "
+        f"carries no intrinsic value.{excluded}</div>"
+    )
+
+    if not buys:
+        return (
+            f"<section style='border:1px solid #d8d8d8;border-radius:8px;padding:12px 16px;"
+            f"margin:0 0 18px;background:#fbfbfb;'>"
+            f"<div style='font-weight:bold;font-size:15px;color:#555;'>🛒 Buy today — nothing</div>"
+            f"<div style='font-size:13px;color:#555;margin-top:4px;'>No evaluated name is both "
+            f"above the quality floor and at or below its max entry price. Patience is a position.</div>"
+            f"{footnote}</section>"
+        )
+
+    rows = []
+    for i, b in enumerate(buys, 1):
+        ccy = html.escape(b["currency"])
+        tags = []
+        if b["held"]:
+            tags.append(_chip("ADD to position", "#0a6640", "#e3f4ec"))
+        else:
+            tags.append(_chip("NEW position", "#1f4e79", "#e8f0fa"))
+        if b["thin"]:
+            tags.append(_chip("thin margin", "#8a6d00", "#fdf3d7"))
+        if b["go_no_go"] in ("NO-GO", "NOGO", "NO_GO"):
+            tags.append(_chip("timing NO-GO — scale in", "#8a6d00", "#fdf3d7"))
+        if b["price_source"] == "eval":
+            tags.append(_chip("price at eval, not live", "#a03000", "#fdeee4"))
+        head_color = "#0a8f0a" if not b["thin"] else "#8a6d00"
+        rows.append(
+            f"<tr>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #e8e8e8;color:#999;font-size:12px;'>{i}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #e8e8e8;'>"
+            f"<b>{html.escape(b['ticker'])}</b>"
+            f"<div style='font-size:11px;color:#777;'>{html.escape(b.get('company') or '')}</div></td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #e8e8e8;font-weight:bold;color:#0a8f0a;'>"
+            f"{b['score']:.2f}<span style='font-weight:normal;color:#777;font-size:11px;'> "
+            f"{html.escape((b.get('verdict') or '').upper())}</span></td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #e8e8e8;'>{b['price']:,.2f} {ccy}</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #e8e8e8;font-weight:bold;'>"
+            f"≤ {b['max_entry']:,.2f} {ccy}"
+            f"<div style='font-size:10px;color:#888;font-weight:normal;'>{html.escape(b['max_entry_basis'])}</div></td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #e8e8e8;color:{head_color};font-weight:bold;'>"
+            f"+{b['headroom_pct']:.1f}%</td>"
+            f"<td style='padding:7px 8px;border-bottom:1px solid #e8e8e8;'>{''.join(tags)}</td>"
+            f"</tr>"
+        )
+
+    return (
+        f"<section style='border:2px solid #0a8f0a;border-radius:8px;padding:14px 18px;"
+        f"margin:0 0 20px;background:#f4fbf4;'>"
+        f"<div style='font-weight:bold;font-size:16px;color:#0a8f0a;margin-bottom:2px;'>"
+        f"🛒 Buy today ({len(buys)}) — best recommendation first</div>"
+        f"<div style='font-size:12px;color:#666;margin-bottom:8px;'>"
+        f"Do not pay above the max entry price. Order is by composite score, not conviction in the price.</div>"
+        f"<table style='border-collapse:collapse;width:100%;font-size:13px;'>"
+        f"<thead><tr style='background:#e6f4e6;'>"
+        f"<th style='padding:7px 8px;text-align:left;width:22px;'>#</th>"
+        f"<th style='padding:7px 8px;text-align:left;'>Ticker</th>"
+        f"<th style='padding:7px 8px;text-align:left;'>Score</th>"
+        f"<th style='padding:7px 8px;text-align:left;'>Price now</th>"
+        f"<th style='padding:7px 8px;text-align:left;'>Max entry</th>"
+        f"<th style='padding:7px 8px;text-align:left;'>Room</th>"
+        f"<th style='padding:7px 8px;text-align:left;'>Notes</th>"
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        f"{footnote}</section>"
+    )
+
+
+def build_buy_today_text(result: dict) -> str:
+    """Plain-text twin of build_buy_today_html for the text/plain part."""
+    buys = (result or {}).get("buys") or []
+    if not buys:
+        return ("BUY TODAY: nothing — no evaluated name is both above the quality floor "
+                "and at or below its max entry price.\n\n")
+    lines = [f"BUY TODAY ({len(buys)}) — best recommendation first", "-" * 46]
+    for i, b in enumerate(buys, 1):
+        flags = ["ADD" if b["held"] else "NEW"]
+        if b["thin"]:
+            flags.append("thin margin")
+        if b["go_no_go"] in ("NO-GO", "NOGO", "NO_GO"):
+            flags.append("timing NO-GO")
+        if b["price_source"] == "eval":
+            flags.append("price at eval")
+        lines.append(
+            f"{i}. {b['ticker']} — {b['score']:.2f} {(b.get('verdict') or '').upper()} · "
+            f"now {b['price']:,.2f} {b['currency']} · max entry {b['max_entry']:,.2f} "
+            f"({b['max_entry_basis']}) · room +{b['headroom_pct']:.1f}% · {', '.join(flags)}"
+        )
+    lines.append("Do not pay above the max entry price.")
+    return "\n".join(lines) + "\n\n"
 
 
 _MD_INLINE_RE = re.compile(r"\*+|__|`")  # emphasis markers; literal * is not used in thesis text
@@ -857,24 +978,60 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         subject_parts.append(f"{r['ticker']} {score:.1f} [{tag}]")
     subject = f"StocksDaily {target_date} - " + " | ".join(subject_parts)
 
-    # v4 Phase E — price-triggered watch-list block + [WATCHLIST: n] subject tag.
-    # (Distinct token from verdict_style's per-ticker WATCH tag.) Fully guarded.
-    watchlist_html, n_watch = "", 0
+    # The dashboard bundle is the report corpus for both price-driven blocks below
+    # (buy list, watch-list), so it is extracted before them and reused afterwards.
+    bundle = extract_dashboard_bundle()
+
+    # Live prices, fetched ONCE for the union of both blocks' tickers — the yfinance
+    # fallback leg is the slow part of composing this email, so it runs a single time.
+    wl_rows = []
     if load_watchlist is not None:
         try:
             wl_rows = load_watchlist(OUT_DIR)
-            wl_live = fetch_watchlist_live_prices([r.get("ticker", "") for r in wl_rows])
-            watchlist_html, n_watch = build_watchlist_html(wl_rows, wl_live)
+        except Exception as exc:
+            log(f"watch-list load SKIP (non-fatal): {type(exc).__name__}: {exc}")
+    buy_candidates = []
+    if buy_list is not None and bundle:
+        try:
+            buy_candidates = buy_list.candidate_tickers(bundle.get("reports") or [])
+        except Exception as exc:
+            log(f"buy-list candidates SKIP (non-fatal): {type(exc).__name__}: {exc}")
+    price_tickers = sorted({r.get("ticker", "") for r in wl_rows} | set(buy_candidates))
+    live_prices = fetch_live_prices_for([t for t in price_tickers if t]) if price_tickers else {}
+
+    # "Buy today" lead section + [BUY: n] subject tag. Fully guarded.
+    buy_today_html, buy_today_text, n_buy = "", "", 0
+    if buy_list is not None and bundle:
+        try:
+            buy_result = buy_list.select_buys(
+                bundle.get("reports") or [], live_prices,
+                holdings=buy_list.load_holdings_safe(OUT_DIR),
+            )
+            buy_today_html = build_buy_today_html(buy_result)
+            buy_today_text = build_buy_today_text(buy_result)
+            n_buy = len(buy_result["buys"])
+            log(f"buy-list: {n_buy} buyable, {len(buy_result['above_entry'])} above max entry, "
+                f"{len(buy_result['no_max_entry'])} without a max entry")
+        except Exception as exc:
+            log(f"buy-list block SKIP (non-fatal): {type(exc).__name__}: {exc}")
+    if n_buy:
+        subject += f" [BUY: {n_buy}]"
+
+    # v4 Phase E — price-triggered watch-list block + [WATCHLIST: n] subject tag.
+    # (Distinct token from verdict_style's per-ticker WATCH tag.) Fully guarded.
+    watchlist_html, n_watch = "", 0
+    if wl_rows:
+        try:
+            watchlist_html, n_watch = build_watchlist_html(wl_rows, live_prices)
         except Exception as exc:
             log(f"watch-list block SKIP (non-fatal): {type(exc).__name__}: {exc}")
     if n_watch:
         subject += f" [WATCHLIST: {n_watch}]"
 
-    # HTML body — dashboard inline (top), summary cards, then full markdown reports.
-    # We embed a static no-JS render of the dashboard because mail clients
+    # HTML body — buy list + dashboard inline (top), summary cards, then full markdown
+    # reports. We embed a static no-JS render of the dashboard because mail clients
     # (Gmail/Yahoo) strip <script> tags from inline HTML. The interactive copy
     # is kept as the attachment for full functionality.
-    bundle = extract_dashboard_bundle()
     dashboard_inline_html = build_dashboard_inline_html(bundle, target_date) if bundle else ""
     adviser_take_html = build_adviser_take_html(rows, bundle)
     cards_html = "\n".join(build_card_html(r, bundle_meta(bundle, r)) for r in rows)
@@ -901,6 +1058,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         <p style="color: #666; font-size: 13px;">
           Auto-generated. Not investment advice. Verify all figures before acting.
         </p>
+        {buy_today_html}
         {watchlist_html}
         {adviser_take_html}
         {dashboard_inline_html}
@@ -934,6 +1092,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         f"StocksDaily — {target_date}\n"
         f"{'=' * 40}\n"
         f"Auto-generated. Not investment advice. Verify all figures before acting.\n\n"
+        f"{buy_today_text}"
         f"{watch_text}"
         f"SUMMARY\n-------\n{cards_text}\n\n"
         f"FULL REPORTS ({len(rows)})\n"

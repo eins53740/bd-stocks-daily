@@ -240,6 +240,10 @@ def slim_report(path: Path, today: dt.date) -> dict | None:
         "growth_composite": safe_float(fm.get("growth_composite")),
         "fair_price": fair_price,
         "fair_price_basis": fair_price_basis,
+        # The 5-model intrinsic-value blend. Carried separately from fair_price
+        # because fair_price may be a single surviving model, while the blend is the
+        # central estimate the buy-list and watch-list both anchor their caps on.
+        "fair_value_mid": safe_float(fm.get("fair_value_mid")),
         "gates_passed": safe_int(fm.get("gates_passed")),
         "piotroski": safe_int(fm.get("piotroski_fscore")),
         "altman": safe_float(fm.get("altman_zscore")),
