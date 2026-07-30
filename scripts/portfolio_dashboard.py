@@ -114,12 +114,20 @@ def decide(h: dict) -> dict:
             "trigger": "Thesis invalidated — pillar-integrity check returned BROKEN.",
         }
 
-    # 3) Fundamental deterioration -> Sell.
-    if verdict in WEAK_VERDICTS or (fund is not None and fund < 5.0):
+    # 3) Fundamental deterioration -> Sell. Cite only the clause that actually
+    # fired: a 'fair' verdict at fund 5.96 is NOT "< 5.0", and claiming so made
+    # the dashboard misstate its own reason for an exit on real money.
+    weak_verdict = verdict in WEAK_VERDICTS
+    below_band = fund is not None and fund < 5.0
+    if weak_verdict or below_band:
+        causes = []
+        if weak_verdict:
+            causes.append(f"verdict '{verdict}' is in the reject/fair band")
+        if below_band:
+            causes.append(f"fund score {fund:.2f} is below the 5.0 investable line")
         return {
             "decision": "Sell",
-            "trigger": f"Fundamental deterioration — verdict '{verdict or 'n/a'}', "
-                       f"fund score {fund:.2f} (< 5.0 / reject-fair band).",
+            "trigger": "Fundamental deterioration — " + "; ".join(causes) + ".",
         }
 
     # 4) Technical breakdown on an otherwise-OK name -> Sell (de-risk).

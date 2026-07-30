@@ -7,7 +7,9 @@ All pure-function, network-free and DB-free. Exercises:
   * derive_pillars()  — 3–5 pillars with status (intact/weakened/broken)
                         + conviction (High/Med/Low), incl. bear-trigger guard
   * pillar_summary()  — roll-up
-  * derive_stance()   — Buy / Hold / Sell on synthetic report data
+  * derive_stance()   — Buy / Hold / Sell / Avoid on synthetic report data,
+                        with Sell gated on the name actually being held
+  * load_held_tickers() — held set from _portfolio_holdings.yaml (tmp_path)
   * build_thesis_entry() — end-to-end shape
 """
 from __future__ import annotations
@@ -22,6 +24,7 @@ from thesis_dashboard import (  # noqa: E402
     build_thesis_entry,
     derive_pillars,
     derive_stance,
+    load_held_tickers,
     overall_score,
     pillar_summary,
     quality_read,
@@ -169,17 +172,47 @@ def test_stance_buy():
     assert any("conviction line" in r or "intact" in r for r in out["rationale"])
 
 
-def test_stance_sell_weak_verdict():
+def test_stance_sell_weak_verdict_requires_held():
     rep = _rep(verdict="reject", score=4.0, gates_passed=2)
-    out = derive_stance(rep, derive_pillars(rep))
-    assert out["stance"] == "Sell"
+    assert derive_stance(rep, derive_pillars(rep), held=True)["stance"] == "Sell"
+    # Same evidence on a name we don't own is Avoid — you cannot sell what you
+    # don't hold. This is the regression the held-gate was added for.
+    assert derive_stance(rep, derive_pillars(rep), held=False)["stance"] == "Avoid"
 
 
-def test_stance_sell_thesis_broken():
+def test_stance_sell_thesis_broken_requires_held():
     rep = _rep(thesis_status="broken")
-    out = derive_stance(rep, derive_pillars(rep))
+    out = derive_stance(rep, derive_pillars(rep), held=True)
     assert out["stance"] == "Sell"
     assert any("Thesis-failure" in r or "broken" in r.lower() for r in out["rationale"])
+    assert derive_stance(rep, derive_pillars(rep), held=False)["stance"] == "Avoid"
+
+
+def test_stance_defaults_to_not_held():
+    """Omitting `held` must never invent a Sell — a missing/unreadable holdings
+    file degrades to Avoid, not to an exit instruction on a phantom position."""
+    rep = _rep(thesis_status="broken")
+    assert derive_stance(rep, derive_pillars(rep))["stance"] == "Avoid"
+
+
+def test_stance_exit_branch_states_held_status_in_rationale():
+    rep = _rep(verdict="reject", score=4.0)
+    held = derive_stance(rep, derive_pillars(rep), held=True)
+    unheld = derive_stance(rep, derive_pillars(rep), held=False)
+    assert any("held" in r.lower() and "exit" in r.lower() for r in held["rationale"])
+    assert any("not held" in r.lower() for r in unheld["rationale"])
+    assert "own" in held["headline"].lower()
+    assert "do not open" in unheld["headline"].lower()
+
+
+def test_stance_held_does_not_affect_buy_or_hold():
+    """The held flag gates ONLY the exit branch — it must not perturb Buy/Hold."""
+    for kwargs in ({}, {"go_no_go": "NO-GO"}, {"verdict": "review", "score": 6.8}):
+        rep = _rep(**kwargs)
+        a = derive_stance(rep, derive_pillars(rep), held=False)
+        b = derive_stance(rep, derive_pillars(rep), held=True)
+        assert a["stance"] == b["stance"]
+        assert a["headline"] == b["headline"]
 
 
 def test_stance_hold_constructive_but_below_line():
@@ -207,11 +240,19 @@ def test_stance_rationale_nonempty():
 # ---------------------------------------------------------------- end-to-end
 def test_build_thesis_entry_shape():
     e = build_thesis_entry(_rep())
-    for key in ("ticker", "stance", "stance_headline", "rationale", "pillars",
+    for key in ("ticker", "held", "stance", "stance_headline", "rationale", "pillars",
                 "pillar_summary", "quality", "valuation", "risk", "overall_score"):
         assert key in e
-    assert e["stance"] in ("Buy", "Hold", "Sell")
+    assert e["stance"] in ("Buy", "Hold", "Sell", "Avoid")
+    assert e["held"] is False
     assert 3 <= len(e["pillars"]) <= 5
+
+
+def test_build_thesis_entry_propagates_held():
+    rep = _rep(verdict="reject", score=4.0)
+    assert build_thesis_entry(rep, held=True)["stance"] == "Sell"
+    assert build_thesis_entry(rep, held=True)["held"] is True
+    assert build_thesis_entry(rep, held=False)["stance"] == "Avoid"
 
 
 def test_build_thesis_entry_screen_only_missing_scalars():
@@ -221,7 +262,43 @@ def test_build_thesis_entry_screen_only_missing_scalars():
         "mode": "screen",
     }
     e = build_thesis_entry(rep)
-    assert e["stance"] in ("Buy", "Hold", "Sell")
+    assert e["stance"] in ("Buy", "Hold", "Sell", "Avoid")
     # quality/risk read should degrade to Unknown, not crash
     assert e["quality"]["label"] == "Unknown"
     assert e["risk"]["label"] == "Unknown"
+
+
+# ------------------------------------------------------- held detection (I/O)
+_HOLDINGS_YAML = """\
+version: 1
+holdings:
+- ticker: CSCO
+  asset_type: equity
+  quantity: 31.0
+- ticker: SHELL.AS
+  asset_type: equity
+  quantity: 47.0
+- ticker: BTC-EUR
+  asset_type: crypto
+  quantity: 0.056
+"""
+
+
+def test_load_held_tickers_equities_only(tmp_path):
+    (tmp_path / "_portfolio_holdings.yaml").write_text(_HOLDINGS_YAML, encoding="utf-8")
+    held = load_held_tickers(tmp_path)
+    assert "CSCO" in held and "SHELL.AS" in held
+    # crypto has no thesis report and is not sellable through this lens
+    assert "BTC-EUR" not in held
+
+
+def test_load_held_tickers_resolves_alias(tmp_path):
+    """SHEL.L is the _universe/analysis line for the held SHELL.AS position —
+    it must resolve as held, else the London report shows Avoid on a real stock."""
+    (tmp_path / "_portfolio_holdings.yaml").write_text(_HOLDINGS_YAML, encoding="utf-8")
+    assert "SHEL.L" in load_held_tickers(tmp_path)
+
+
+def test_load_held_tickers_missing_file_is_empty(tmp_path):
+    """No holdings file must mean no Sell stances, never a crash."""
+    assert load_held_tickers(tmp_path) == set()

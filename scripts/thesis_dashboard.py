@@ -19,7 +19,10 @@ nothing — it only renders ``_thesis.json``.
 For each name we emit:
   * Fundamental / Technical / Overall scores
   * Quality / Valuation / Risk reads (deterministic bands over stored scalars)
-  * a Buy / Hold / Sell stance with a cited rationale block
+  * a Buy / Hold / Sell / Avoid stance with a cited rationale block.
+    "Sell" is reserved for names actually HELD (per _portfolio_holdings.yaml) —
+    a position you don't own cannot be sold, so an un-held name that fails the
+    bar is "Avoid" instead.
   * 3–5 testable thesis pillars, each with status (intact / weakened / broken)
     and conviction (High / Med / Low) — the FS2 graft from thesis-tracker.
 
@@ -273,12 +276,16 @@ def pillar_summary(pillars: list[dict]) -> dict:
     }
 
 
-def derive_stance(rep: dict, pillars: list[dict]) -> dict:
-    """Buy / Hold / Sell stance with a cited rationale block.
+def derive_stance(rep: dict, pillars: list[dict], held: bool = False) -> dict:
+    """Buy / Hold / Sell / Avoid stance with a cited rationale block.
 
     Logic (deterministic, over stored signals — mirrors the spirit of
     portfolio_dashboard.decide but framed as an entry stance, not a position
     action). Returns {stance, headline, rationale[]}.
+
+    `held` gates the exit branch: only a position we actually own can be SOLD.
+    For an un-held name the same failing signals mean AVOID (don't open it).
+    Defaults to False so a missing holdings file can never invent a Sell.
     """
     verdict = (rep.get("verdict") or "").lower()
     score = rep.get("score")
@@ -292,11 +299,16 @@ def derive_stance(rep: dict, pillars: list[dict]) -> dict:
 
     rationale: list[str] = []
 
-    # ---- SELL: thesis broken, fundamental deterioration, or weak verdict.
+    # ---- SELL (held) / AVOID (not held): thesis broken, fundamental
+    # deterioration, or weak verdict. Same evidence, different actionability.
     if thesis_status == "broken" or summary["overall"] == "broken" or verdict in WEAK_VERDICTS \
             or (score is not None and score < 5.0):
-        stance = "Sell"
-        headline = "Avoid / exit — thesis does not hold."
+        stance = "Sell" if held else "Avoid"
+        headline = (
+            "Exit — thesis does not hold on a position you own."
+            if held else
+            "Avoid — thesis does not hold; do not open a position."
+        )
         if thesis_status == "broken":
             rationale.append("Thesis-failure: pillar-integrity drift check returned BROKEN.")
         if summary["broken"]:
@@ -308,6 +320,11 @@ def derive_stance(rep: dict, pillars: list[dict]) -> dict:
             rationale.append(f"Composite {score:.2f} (< 5.0) — below the investable band.")
         if bear:
             rationale.append(f"Exit condition already framed: {bear}")
+        rationale.append(
+            "Position is held — this is an exit decision."
+            if held else
+            "Not held — nothing to sell; this is a do-not-open."
+        )
         return {"stance": stance, "headline": headline, "rationale": rationale}
 
     # ---- BUY: strong verdict/score and thesis intact and no technical NO-GO.
@@ -344,13 +361,14 @@ def derive_stance(rep: dict, pillars: list[dict]) -> dict:
     return {"stance": stance, "headline": headline, "rationale": rationale}
 
 
-def build_thesis_entry(rep: dict) -> dict:
+def build_thesis_entry(rep: dict, held: bool = False) -> dict:
     """Compose the full per-name thesis card payload from a slim report dict."""
     pillars = derive_pillars(rep)
     summary = pillar_summary(pillars)
-    stance = derive_stance(rep, pillars)
+    stance = derive_stance(rep, pillars, held=held)
     return {
         "ticker": rep.get("ticker"),
+        "held": held,
         "date": rep.get("date"),
         "sector": rep.get("sector"),
         "region": rep.get("region"),
@@ -426,6 +444,43 @@ def merge_bear_triggers(reports: list[dict], root: Path) -> None:
                 rep["bear_case_trigger"] = hit[1]
 
 
+def load_held_tickers(root: Path) -> set[str]:
+    """Analysis-tickers we actually own, per _portfolio_holdings.yaml.
+
+    Reuses exit_plan.load_holdings + find_holding so held-detection has ONE
+    implementation and inherits its alias map (SHEL.L -> SHELL.AS, ADR/local
+    dual listings). Any failure degrades to the empty set, which is the safe
+    direction: no holdings known -> no Sell stance is ever emitted.
+    """
+    from importlib import util as _il_util
+
+    try:
+        spec = _il_util.spec_from_file_location("exit_plan", SCRIPT_DIR / "exit_plan.py")
+        xp = _il_util.module_from_spec(spec)
+        spec.loader.exec_module(xp)
+        holdings, warns = xp.load_holdings(root)
+    except Exception as e:
+        log(f"WARN: held-detection unavailable ({type(e).__name__}: {e}) — no Sell stances will be emitted")
+        return set()
+    for w in warns:
+        log(f"WARN: {w}")
+    out: set[str] = set()
+    for h in holdings:
+        t = (h.get("ticker") or "").strip()
+        if not t:
+            continue
+        # Only equities are sellable through this lens; crypto has no thesis report.
+        if (h.get("asset_type") or "equity") != "equity":
+            continue
+        out.add(t)
+    # Map every alias back onto the held set so an analysis ticker that differs
+    # from the holdings-yaml ticker (SHEL.L vs SHELL.AS) still resolves as held.
+    for alias, target in getattr(xp, "ALIASES", {}).items():
+        if target in out:
+            out.add(alias)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=str(ROOT))
@@ -439,16 +494,21 @@ def main() -> int:
     # build_dashboard.LOG points at the same root by default; only override if needed.
     merge_bear_triggers(reports, root)
 
-    entries = [build_thesis_entry(r) for r in reports]
-    # Order: actionable (Buy) first, then by overall score desc.
-    stance_rank = {"Buy": 0, "Hold": 1, "Sell": 2}
-    entries.sort(key=lambda e: (stance_rank.get(e["stance"], 3), -(e.get("overall_score") or 0)))
+    held = load_held_tickers(root)
+
+    entries = [build_thesis_entry(r, held=r.get("ticker") in held) for r in reports]
+    # Order: actionable first — Sell outranks Buy because it concerns real money
+    # already at risk; Avoid is informational only, so it sorts last.
+    stance_rank = {"Sell": 0, "Buy": 1, "Hold": 2, "Avoid": 3}
+    entries.sort(key=lambda e: (stance_rank.get(e["stance"], 4), -(e.get("overall_score") or 0)))
 
     bundle = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "today": today.isoformat(),
         "freshness_days": FRESHNESS_DAYS,
         "n_names": len(entries),
+        "n_held": sum(1 for e in entries if e.get("held")),
+        "held_tickers": sorted(held),
         "names": entries,
     }
     Path(args.out).write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -456,11 +516,11 @@ def main() -> int:
     from collections import Counter
     stances = Counter(e["stance"] for e in entries)
     log("=" * 64)
-    log(f"Thesis dashboard — {len(entries)} names")
+    log(f"Thesis dashboard — {len(entries)} names ({bundle['n_held']} held)")
     log(f"Stances: {dict(stances)}")
     for e in entries:
         ps = e["pillar_summary"]
-        log(f"  {e['ticker']:<12} {e['stance']:<5} ov={str(e['overall_score']):<5} "
+        log(f"  {e['ticker']:<12}{'*' if e.get('held') else ' '}{e['stance']:<5} ov={str(e['overall_score']):<5} "
             f"pillars {ps['intact']}i/{ps['weakened']}w/{ps['broken']}b "
             f"({ps['overall']}) | {e['stance_headline']}")
     log(f"Wrote {args.out}")
