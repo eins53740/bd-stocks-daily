@@ -6,6 +6,7 @@ every day ran the fallback, the fallback ranked purely by staleness, and TSMC he
 two slots (TSM + 2330.TW). The same few high scorers therefore repeated every
 fortnight. Pure functions only: no yaml, no network.
 """
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -212,3 +213,100 @@ def test_consecutive_fallback_days_do_not_repeat_a_company():
         picked.append(fb["ticker"])
         rows.append(row(fb["ticker"], f"2026-07-{27 + offset:02d}"))
     assert len(set(picked)) == 5, f"repeats within one cycle: {picked}"
+
+
+# --- slot budget (30-minute wall-clock cut, 2026-07-31) ----------------------
+
+def run_main(monkeypatch, capsys, pool, log_rows=()):
+    """Drive main() with an in-memory pool. Returns the parsed JSON result."""
+    monkeypatch.setattr(pc, "load_prefiltered", lambda: list(pool))
+    monkeypatch.setattr(pc, "load_log", lambda: list(log_rows))
+    assert pc.main() == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def cand(ticker, size="big", region="US"):
+    return {"ticker": ticker, "size": size, "region": region, "sector": "Tech"}
+
+
+def test_a_run_is_one_deep_plus_exactly_n_screens(monkeypatch, capsys):
+    """The 30-minute budget lives or dies on this count. At 5 tickers the job
+    measured 28-32 min and the timeout kill produced no email at all."""
+    pool = [cand(f"US{i}") for i in range(6)] + [cand(f"EU{i}", region="EU") for i in range(6)]
+    res = run_main(monkeypatch, capsys, pool)
+    assert res["deep"]["ticker"]
+    assert len(res["screens"]) == pc.N_SCREENS == 2
+
+
+def test_the_non_us_guarantee_survives_the_cut(monkeypatch, capsys):
+    pool = [cand(f"US{i}") for i in range(6)] + [cand(f"EU{i}", region="EU") for i in range(6)]
+    res = run_main(monkeypatch, capsys, pool)
+    non_us = [s for s in res["screens"] if s["region"] not in ("US", "?")]
+    assert len(non_us) >= pc.N_NON_US_SCREENS == 1
+
+
+def test_the_sized_screen_takes_the_bucket_the_deep_dive_did_not(monkeypatch, capsys):
+    """With one size-diverse slot, a fixed 'big' preference would starve
+    small_growth forever — the run must still span both size classes."""
+    pool = ([cand(f"B{i}", size="big") for i in range(4)]
+            + [cand(f"S{i}", size="small_growth") for i in range(4)]
+            + [cand(f"EU{i}", region="EU") for i in range(4)])
+    # Last deep was 'big', so today's deep is small_growth and the screen must be big.
+    res = run_main(monkeypatch, capsys, pool,
+                   log_rows=[row("OLD", "2026-01-01", size="big", mode="deep")])
+    assert res["deep"]["size"] == "small_growth"
+    sizes = {s["size"] for s in res["screens"]}
+    assert "big" in sizes, f"size diversity lost: {res['screens']}"
+
+
+def test_screen_follows_the_size_actually_picked_not_the_intended_one(monkeypatch, capsys):
+    """When the intended deep bucket is empty, pick() falls back — and keying the
+    screen on the intended size would then aim it at the bucket the deep just took."""
+    # Last deep was 'big', so today intends small_growth; the pool has none, so the
+    # deep falls back to big and the screen must NOT also be the last big name.
+    pool = ([cand("B1", size="big"), cand("B2", size="big")]
+            + [cand("EU1", region="EU")])
+    res = run_main(monkeypatch, capsys, pool,
+                   log_rows=[row("OLD", "2026-01-01", size="big", mode="deep")])
+    assert res["deep"]["size"] == "big"
+    assert len(res["screens"]) == pc.N_SCREENS
+    assert res["deep"]["ticker"] not in {s["ticker"] for s in res["screens"]}
+
+
+def test_no_hyper_growth_name_reaches_a_quality_slot(monkeypatch, capsys):
+    """The non-US slot takes any size, so the reservation must happen upstream."""
+    pool = ([cand("PLTR", size="hyper_growth")]
+            + [cand("HYPE_EU", size="hyper_growth", region="EU")]
+            + [cand(f"US{i}") for i in range(3)]
+            + [cand(f"EU{i}", region="EU") for i in range(3)])
+    res = run_main(monkeypatch, capsys, pool)
+    chosen = [res["deep"]] + res["screens"]
+    assert all(c["size"] != "hyper_growth" for c in chosen), chosen
+    assert res["pool_stats"]["hyper_growth_reserved"] == 2
+
+
+def test_an_all_us_pool_still_fills_every_screen_slot(monkeypatch, capsys):
+    """No non-US candidate must not cost us a slot — it warns, then backfills."""
+    pool = [cand(f"US{i}") for i in range(8)]
+    res = run_main(monkeypatch, capsys, pool)
+    assert len(res["screens"]) == pc.N_SCREENS
+    assert "EU" not in {s["region"] for s in res["screens"]}
+
+
+def test_the_size_slot_does_not_eat_the_only_non_us_candidate(monkeypatch, capsys):
+    """Size slots take any region, so claiming them first lets one swallow the sole
+    non-US name and break the region guarantee. The deep is forced onto a US big here
+    (last deep was small_growth) so the only way EU1 can be lost is that ordering."""
+    pool = [cand("B1"), cand("B2"), cand("EU1", size="small_growth", region="EU")]
+    res = run_main(monkeypatch, capsys, pool,
+                   log_rows=[row("OLD", "2026-01-01", size="small_growth", mode="deep")])
+    assert res["deep"]["region"] == "US"
+    assert len(res["screens"]) == pc.N_SCREENS
+    assert "EU1" in {s["ticker"] for s in res["screens"]}
+
+
+def test_screens_never_duplicate_the_deep_dive(monkeypatch, capsys):
+    pool = [cand("ONLY_US"), cand("ONLY_EU", region="EU")]
+    res = run_main(monkeypatch, capsys, pool)
+    tickers = [res["deep"]["ticker"]] + [s["ticker"] for s in res["screens"]]
+    assert len(tickers) == len(set(tickers)), tickers

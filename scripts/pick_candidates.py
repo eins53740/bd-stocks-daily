@@ -1,10 +1,10 @@
 """
-pick_candidates.py — Selecciona 5 tickers do pool pre-filtrado para avaliação diária.
+pick_candidates.py — Selecciona 3 tickers do pool pre-filtrado para avaliação diária.
 
 Regras:
-- 1 deep-dive + 4 screens
+- 1 deep-dive + 2 screens (ver N_SCREENS)
 - Deep alterna big <-> small_growth stateful (last_mode em _log.csv)
-- Screens: 1 big + 1 small_growth + 2 non-USA (region != US, qualquer size)
+- Screens: 1 do bucket de tamanho oposto ao deep + 1 non-USA (region != US)
 - Dedupe: tickers avaliados nos últimos 183 dias são excluídos
 - Round: se ticker já foi avaliado antes (com gap >183d), round += 1
 - Identidade por EMPRESA, não por listing: um ADR e a sua cotação local
@@ -47,6 +47,16 @@ DEDUPE_DAYS = 183
 FALLBACK_MIN_AGE_DAYS = 45
 FALLBACK_MAX_ROUND = 5       # cap re-evaluation rounds to avoid infinite loops on perma-stale tickers
 FALLBACK_SHORTLIST_MIN_SCORE = 7.5
+
+# Screen slots per run. Cut 4 -> 2 on 2026-07-31 to fit the 30-minute wall-clock
+# budget for the whole scheduled job (StocksDaily 13:30, digest by ~13:52). At 5
+# tickers the quality run measured 28-32 min on three consecutive days, and Phase 6
+# writes _log.csv only at the very end — so capping the timeout without cutting the
+# work turned a late email into no email at all (the bat gates on today's row count).
+N_SCREENS = 2
+# Of those, how many must come from non-US markets. Held at half the screen slots so
+# the global-coverage emphasis survives the reduction unchanged (was 2 of 4).
+N_NON_US_SCREENS = 1
 
 # Dual listings and dual share classes are ONE company. Without this, TSMC held
 # two independent slots (TSM as the US ADR, 2330.TW as the Taiwan line): two
@@ -309,25 +319,41 @@ def main() -> int:
     # Remove deep from the pool before picking screens
     remaining = [c for c in pool if c["ticker"] != deep["ticker"]]
 
-    screen_big = pick(remaining, "big")
-    screen_small = pick(remaining, "small_growth")
-
-    screens = [s for s in (screen_big, screen_small) if s is not None]
-    # If one is missing, try to pick another from the other bucket
-    if len(screens) < 2:
-        extras = [c for c in remaining if c not in screens]
-        random.shuffle(extras)
-        while len(screens) < 2 and extras:
-            screens.append(extras.pop())
-
-    # Non-USA focus: +2 screens guaranteed from non-US markets (any size).
-    taken = {deep["ticker"]} | {s["ticker"] for s in screens}
-    non_us = [c for c in remaining
-              if c["ticker"] not in taken and c.get("region") not in ("US", "?")]
+    # Non-USA focus FIRST. The size slots below take any region, so filling them
+    # first lets them consume the only non-US name and silently break the guarantee
+    # -- which is what happens on a pool with few non-US candidates. Region is the
+    # documented invariant, size diversity is best-effort, so region is claimed first.
+    non_us = [c for c in remaining if c.get("region") not in ("US", "?")]
     random.shuffle(non_us)
-    screens.extend(non_us[:2])
-    if len(non_us) < 2:
-        log(f"WARN: only {len(non_us)} non-US candidates available for the 2 non-US screen slots")
+    screens: list[dict] = list(non_us[:N_NON_US_SCREENS])
+    if len(non_us) < N_NON_US_SCREENS:
+        log(f"WARN: only {len(non_us)} non-US candidates available for the "
+            f"{N_NON_US_SCREENS} non-US screen slot(s)")
+
+    # Size-diverse slots from what is left, opposite bucket first. With only one such
+    # slot a fixed "big" preference would starve small_growth entirely, so the order
+    # follows the deep-dive: a run spans both size classes when the pool allows it.
+    # Keyed on the size actually picked, not deep_size -- those diverge whenever the
+    # intended bucket was empty and pick() fell back, and the intended value would
+    # then aim the screen at the same bucket the deep just took.
+    actual_deep_size = "small_growth" if deep.get("size") in ("small_growth", "micro") else "big"
+    size_order = (("small_growth", "big") if actual_deep_size == "big"
+                  else ("big", "small_growth"))
+    taken = {deep["ticker"]} | {s["ticker"] for s in screens}
+    rest = [c for c in remaining if c["ticker"] not in taken]
+    for size in size_order:
+        if len(screens) >= N_SCREENS:
+            break
+        s = pick(rest, size)
+        if s is not None:
+            screens.append(s)
+            rest = [c for c in rest if c["ticker"] != s["ticker"]]
+
+    # If both buckets came up empty, backfill from anywhere so a slot is not wasted.
+    if len(screens) < N_SCREENS:
+        random.shuffle(rest)
+        while len(screens) < N_SCREENS and rest:
+            screens.append(rest.pop())
 
     def enrich(t: dict) -> dict:
         return {

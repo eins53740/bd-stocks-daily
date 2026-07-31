@@ -1,12 +1,12 @@
 ---
 name: bd-stocks-daily
-description: Daily stock evaluation — picks 5 tickers (1 deep + 4 screens, 2 of them from non-USA markets) from the pre-filtered pool, applies Quality Compounder 7-gates, Piotroski/Altman, peer comparison, management quality score (LLM), industry context (cached per sector), 3-layer risk audit, bear case, computes 0-10 composite score (v2 weights), and writes tiered reports (5min TL;DR / 30min deep) to C:\BD_Obsidian\Personal\Finance\StocksDaily\. Run via Task Scheduler daily 17:00.
+description: Daily stock evaluation — picks 3 tickers (1 deep + 2 screens, 1 of them from a non-USA market) from the pre-filtered pool, applies Quality Compounder 7-gates, Piotroski/Altman, peer comparison, management quality score (LLM), industry context (cached per sector), 3-layer risk audit, bear case, computes 0-10 composite score (v2 weights), and writes tiered reports (5min TL;DR / 30min deep) to C:\BD_Obsidian\Personal\Finance\StocksDaily\. Run via Task Scheduler daily 13:30.
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
 # Daily Stock Evaluation (v4 wave-1 complete + v4.1 wave-2 Phase H — scoring schema 2.2)
 
-Avaliação diária automática de 5 acções (1 deep-dive + 4 screens, dos quais 2 garantidamente de mercados não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 22 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.59 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
+Avaliação diária automática de 3 acções (1 deep-dive + 2 screens, dos quais 1 garantidamente de mercado não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 22 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.59 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
@@ -43,7 +43,7 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 
 ## Headless rule (CRITICAL)
 
-**Este skill corre quase sempre sem ninguém a ler.** O job das 17:00 invoca-o como `claude -p` (**non-interactive**) via `C:\Github\.scripts\stocks-daily.bat`. Nesse modo **não existe utilizador para responder** a nada. Logo:
+**Este skill corre quase sempre sem ninguém a ler.** O job das 13:30 invoca-o como `claude -p` (**non-interactive**) via `C:\Github\.scripts\stocks-daily.bat`. Nesse modo **não existe utilizador para responder** a nada. Logo:
 
 - **NUNCA terminar um run com uma pergunta** — "envio o email?", "queres (a), (b) ou (c)?" — nem usar ferramentas de pergunta interactiva. Não há resposta possível; a pergunta apenas atrasa (ou bloqueia) o pipeline.
 - **Decidir e registar, não perguntar.** Havendo julgamento a fazer, escolhe o **default documentado**, executa-o, e escreve no output final *o que* decidiste e *porquê* — ex. "digest enviado com 10 reports; 5 são do run da manhã, duplicados de propósito". O Bruno lê um resultado, não um menu.
@@ -212,7 +212,7 @@ Output JSON:
 
 Os screens são 4: 1 big + 1 small_growth (qualquer região) + **2 garantidamente non-US** (`region != US`, qualquer size — foco deliberado em mercados fora dos EUA). Se o pool elegível tiver menos de 2 nomes non-US disponíveis, o script avisa em stderr e devolve os que houver.
 
-**Nomes `size: hyper_growth` são excluídos deste run** (desde 2026-07-28) — pertencem ao `/bd_stocks_daily_growth`, que corre logo a seguir no mesmo job das 17:00 e os avalia com critérios de crescimento. O gate-5 (net margin > 10%) deste modelo rejeitá-los-ia por construção. Os slots deep/big/small já filtravam por size, mas o slot non-US e o shuffle de extras aceitavam qualquer size — daí a exclusão explícita. `pool_stats.hyper_growth_reserved` conta quantos foram reservados.
+**Nomes `size: hyper_growth` são excluídos deste run** (desde 2026-07-28) — pertencem ao `/bd_stocks_daily_growth`, que desde 2026-07-31 corre **antes** deste, na sua própria task (`StocksGrowth`, 12:45), e os avalia com critérios de crescimento. O gate-5 (net margin > 10%) deste modelo rejeitá-los-ia por construção. Os slots deep/big/small já filtravam por size, mas o slot non-US e o shuffle de extras aceitavam qualquer size — daí a exclusão explícita. `pool_stats.hyper_growth_reserved` conta quantos foram reservados.
 
 If any ticker has `round > 1`, the report gets a `🔁 Reavaliação #N` badge at the top and a link back to the prior evaluation.
 
@@ -249,7 +249,7 @@ Screens do NOT trigger industry cache checks.
 
 ### Phase 2 — Analyse each ticker (sequential, to avoid yfinance rate limits)
 
-For **each** of the 5 tickers (deep first, then the 4 screens):
+For **each** of the 3 tickers (deep first, then the 2 screens):
 
 ```bash
 python "%SCRIPTS%\analyze_ticker.py" --ticker ASML.AS --mode deep
