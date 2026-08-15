@@ -14,27 +14,24 @@ Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 13:30) �
 under a **30-minute wall-clock budget**: 3 tickers (1 deep + 2 screens), **1800 s timeout**, then the email. The growth
 lens is a separate task (`StocksGrowth`, 12:45) so it can never delay the digest — see `docs/SCHEDULING.md`.
 
-Version history lives in **`docs/CHANGELOG.md`**; the open backlog in **`docs/ROADMAP.md`**.
+### Where the documentation lives
+
+| File | Holds |
+|---|---|
+| `docs/CHANGELOG.md` | version history — what shipped, per version |
+| `docs/ROADMAP.md` | the open backlog only — reason + trigger per item, never DONE rows |
+| `docs/AUDIT_v43.md` | the v4.3 four-lens audit: findings, fixes, and what was deliberately left alone |
+| `docs/SCHEDULING.md` | the ten scheduled tasks, their order, and the 30-minute budget |
+| `docs/STAR_RATINGS.md` | the published bands behind the ⭐ quality ratings |
+| `docs/CATEGORIES.md` | cyclical / turnaround / asset-play thresholds (`category_lens.py`) |
+| `docs/ROIC_vs_ROE.md` | which return metric applies, and why (`roic_lens.py`) |
+| `StocksDaily/docs/STRATEGY_GUIDE.md` | the *why* — mandate, the four metric sets and their coverage (§6, §6b–§6d, §7) |
+| `StocksDaily/docs/MANUAL.md` | operator manual — running it by hand, the universe, troubleshooting |
+
+Each `docs/*.md` above whose thresholds appear in a report is a **contract**: a test asserts
+the document and the code still agree, so a threshold cannot be changed in one place only.
 The heavy `Stocks*` jobs serialise through `C:\Github\.scripts\job_lock.ps1` so a Task
 Scheduler catch-up burst cannot run four of them at once (incident 2026-08-15).
-
-**v3.1 (2026-07-15)**: quarterly EBITDA+FCF chart with hybrid 4Q forecast (`financial_history.py`, Alpha Vantage for US listings + yfinance fallback, 80-day cache, 20-call/day AV guard); top-of-report metrics strip (`top_strip`); 3-year revenue-segments chart; 30-month relative-performance chart vs region benchmark + sector SPDR; promoted thesis/risk callouts; €1500 broker-recommendation section (composite ≥ 7.0, reuses `broker_compare.py`); daily macro section with `_macro/` cache (`macro_snapshot.py` + `prompts/macro_daily.md`).
-
-**v4 wave-1 · Phase B (2026-07-22)**: valuation depth, overlay-only (spec rev 3 §7) — own-history P/E & P/S bands with `depth_years` + unit guards (`valuation_bands.py`, node 2.3, shared AV budget, `_valuation/` cache), FY+3 forward target (target @ date + est. return + IRR, median exit multiple, IRR sanity flag), sensitivity table with margin-bear row, and the 5-model intrinsic-value blend + margin-of-safety verdict (`intrinsic_value.py`). Additive JSON keys `valuation_bands` / `intrinsic_value`; composite untouched.
-
-**v4 wave-1 · Phase E (2026-07-22)**: return profile + watch-list, overlay-only (spec rev 3 §10) — `alpha_beta.py` (node 2.56, ambient Python) adds α/β (3y monthly vs regional benchmark, β=cov/var, Jensen α), a CAPM realized-vs-expected line, a 1/3/5/10/15-yr price/total-return CAGR ladder, a Lynch-category return/drawdown prior, and a portfolio-fit line (portfolio α/β vs URTH from FX→EUR weighted equity holdings, cached daily in `_portfolio_riskprofile.json`); β/α are injected into `top_strip`. `watchlist.py` (node 2.57) maintains `_watchlist.csv` (quality names ≥7 held back only by price → target = fair-low), and `send_email.py` shows a red "⭐ Watch-list triggered" block + `[WATCHLIST: n]` subject tag when live ≤ target. `financial_history.py` annual cap lifted 6→20y. Additive JSON key `alpha_beta`; composite untouched.
-
-**v4 wave-1 · Phase G (2026-07-22)**: 3-persona opinion panel, overlay-only (spec rev 3 §10b) — `second_opinion.py` (node 2.58, ambient Python) asks an **independent** model chain (Groq `llama-3.3-70b-versatile` → Gemini `gemini-2.0-flash`, via the new reusable `llm_client.py`) for three prompted personas (value/growth/contrarian), each a 0–100 conviction (50=neutral). The panel sees the evidence but **not** the composite/verdict (independence); consensus = median, divergence flagged on ≥25pt spread or gap vs composite×10. A dead persona degrades to "not available" without blocking the run. Additive JSON key `opinion_panel`; composite untouched.
-
-**v4 wave-1 · Phase F session 1 (2026-07-23)**: HTML-primary report renderer (spec §11) — `render_report.py` (node 5.7, pure stdlib) + `report_template.html` (CSS ported from the locked `docs/v4_design/sample_report_v2.html`). Reads the report `.md` (source, frozen contract — `slim_report` regression test) + the analysis JSON → writes a self-contained, static, JS-free `{report}.html`: answer-first header with a deterministic **action verb** (verdict × mos_class × go_no_go → ACCUMULATE/BUY-DIP/HOLD/WATCH/AVOID), a 5-axis Quality/Value/Growth/Health/Mgmt snowflake (inline SVG), fair-value gauge + bear/base/bull range bar, the A/B/C/E/G cards, peer A–D grades, base64 charts ≤1.5 MB, null renders, currency from JSON. Email is untouched (styled HTML never inlined).
-
-**v4 wave-1 · Phase F session 2 (2026-07-23)**: equity-vs-enterprise **metric families** with cheap/fair/rich value tint + a **greyed metric cheat-sheet** in 3 CSS-only modes (tooltip on screen · `<details>` on mobile · grey print column) from a static, no-API `metrics_glossary.py`, plus an optional daily `index.html` hub (`--index DATE`). 422 tests → **wave 1 complete.**
-
-**v4.1 wave-2 · Phase H (2026-07-23)**: news & market sentiment, overlay-only (spec §11c) — `news_sentiment.py` (node 2.59, ambient Python) collects headlines (**yfinance news primary**; one optional NewsAPI query on the disposable trial key `api_key_newsapi`) and runs **one LLM call** (via `llm_client`) classifying them into a **stock** dial and a **market** dial, each −1..+1 with named themes + citations. **Not in the composite** — sentiment is context, complementing `news_freshness`. Additive JSON key `news_sentiment`; a report card (`build_news_sentiment` — two dials + headlines) + a 📰 chip in the email digest (via frontmatter `news_sentiment_stock`/`_label`) + a TL;DR line. Degrades to an n/a card when there are no headlines or no LLM key. Composite untouched.
-
-**v4.1 wave-2 · Phase I (2026-07-23)**: screener dashboard, overlay-only (spec §11c) — `build_dashboard.py` gains a `screener` bundle over the **full pre-filtered pool** (`load_universe()` reads `_prefiltered.yaml` stdlib; `build_screener()` LEFT-JOINs evaluations, durable β/α/MoS from report frontmatter, `_tmp` supplements P/E & FCF). The vault `template.html` gains a **Screener** hub section: category + **range filters** (score/upside/P/E/β/α/MoS%/tech), **localStorage presets**, **CSV export**, and rows that **deep-link to the Phase-F HTML report**; the top-nav gains "Screener". Client-side vanilla JS. 449 tests (data layer); filter/CSV/preset logic verified in a Node harness over the real 179-row bundle. α/β stay sparse until the daily job re-runs the pool under Phase E — surfaced honestly. Composite untouched.
-
-**v4.1 wave-2 · `--version` flag (2026-07-23)**: an orchestration arg `--version {v3, v4}` (alongside `--ticker`/`--mode`). **Latest is always the default** (dynamic rule — `LATEST = VERSIONS[-1]` in `version_gate.py`, never hard-coded). `v4` = full pipeline; `v3` = full minus the v4 overlay nodes (2.3/2.4/2.55/2.56/2.57/2.58/2.59/5.7) → the v3.1 markdown-primary shape. Cheap for v3↔v4 only (v4 is overlay-only on schema 2.2) so the **deterministic composite inputs are identical** — the flag changes what renders, never the weights (the 8%-weight LLM management component is LLM-sourced in both, so the score is materially, not bitwise, identical). v1/v2 predate schema 2.2 and aren't reachable via the flag (git tags + worktrees only). `version_gate.py` is the single source of the version→skip map; 10 tests. 459 tests total. Composite untouched.
 
 ---
 
