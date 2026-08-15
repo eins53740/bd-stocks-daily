@@ -14,27 +14,11 @@ ETA) · **WON'T DO** (decided against).
 
 ## Now — READY, nothing blocking
 
-### R1. `update_shortlist.py`: deep must supersede screen on the same day — **S**
-
-`build_shortlist()` dedupes per ticker with `r["date"] > latest[t]["date"]`. On a
-Phase 5.5 auto-cascade the screen and the deep row share a date, so the strict `>`
-keeps the **first** CSV row — the screen — and the shortlist links the screen
-report. That contradicts the skill spec ("deep supersedes screen on the
-shortlist").
-
-Fix is written and is one function:
-
-```python
-def _rank(r):
-    return (r["date"], 1 if r.get("mode", "").lower() == "deep" else 0)
-# keep r when t not in latest or _rank(r) > _rank(latest[t])
-```
-
-- **Found** 2026-06-10. Deferred only because editing `~/.claude/skills/` was
-  denied by the auto-mode classifier at the time; that is no longer true.
-- **Known symptom**: PYPL's shortlist row was hand-corrected on 2026-06-10 and
-  reverts on every `update_shortlist.py` run until this lands.
-- **Needs**: a go-ahead. Nothing else.
+*(R1 removed 2026-08-15 — **shipped**. `update_shortlist.py` gained `_rank()` (L119) and
+`_supersedes()` (L129, used L146) in the v4.2 work committed as `70d02d6`. The entry had gone
+stale on disk while the fix sat uncommitted, and the v4.3 plan re-scheduled work that was
+already done as a result — the reason this file must be pruned when things ship, not just
+appended to. Recorded in `CHANGELOG.md` under v4.2.)*
 
 ### R2. Macro gauges — Buffett Indicator + M2 regime + forward-profit horizons — **M**
 

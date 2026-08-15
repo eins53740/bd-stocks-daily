@@ -101,6 +101,10 @@ Composite v2.2 untouched. **854 tests.**
   capital, instead of emitting a divide-by-almost-zero artefact. Note the side effect: the
   Buffett moat multiplier (ROIC > 25 %) correctly does not fire for those names.
 - **Digest second recipient** — `bruno.dias@secil.pt` alongside `eins.ist@gmail.com`.
+- **Closes roadmap R1** — `update_shortlist.py` `_rank()` / `_supersedes()`: on a Phase 5.5
+  auto-cascade the deep row now supersedes the same-day screen row, so the shortlist links the
+  deep report. (The roadmap entry stayed open for weeks because the fix sat uncommitted on
+  disk; that drift is what the release checklist at the top of this file exists to prevent.)
 
 ## v4.1 wave-2 — 2026-07-23 · tag `v4.1` · commit `bf05181`
 
