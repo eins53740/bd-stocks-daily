@@ -471,9 +471,63 @@ def enrich_from_tmp(ticker: str, date: str) -> dict:
     ts = d.get("top_strip") or {}
     ab = d.get("alpha_beta") or {}
     iv = d.get("intrinsic_value") or {}
+    f = d.get("fundamentals") or {}
+    stmts = d.get("statements_raw") or {}
+    tech = d.get("technical") or {}
+
+    def _first(seq):
+        return safe_float(seq[0]) if isinstance(seq, (list, tuple)) and seq else None
+
+    # --- the three metrics the screener asked for that do not exist as scalars ---
+    # 1. EBITDA margin: both inputs are present, the ratio simply was not stored.
+    ebitda, revenue = safe_float(f.get("ebitda_ttm")), safe_float(f.get("revenue_ttm"))
+    ebitda_margin = (ebitda / revenue) if (ebitda is not None and revenue) else None
+    # 2. Cash-flow / EBITDA: CFO is not a `fundamentals` scalar but IS in the 2-year
+    #    statements snapshot persisted for red_flags.py — derive, never re-fetch.
+    cfo = _first((stmts.get("cashflow") or {}).get("operating_cash_flow"))
+    cf_ebitda = (cfo / ebitda) if (cfo is not None and ebitda) else None
+    # 3. "P/E TTM" as a column distinct from "P/E": MEASURED, and they are the same
+    #    number — `top_strip.pe_ttm` is `fundamentals.pe_ratio` rounded to 2dp on 167 of
+    #    169 comparable reports (the 2 exceptions are exact ties). Publishing both would
+    #    print one figure under two headings, so the screener ships `pe` (TTM) and
+    #    `forward_pe`, which genuinely differ.
     return {
-        "pe": safe_float(ts.get("pe_ttm")),
+        "pe": safe_float(ts.get("pe_ttm")) or safe_float(f.get("pe_ratio")),
+        "forward_pe": safe_float(f.get("forward_pe")),
+        "peg": safe_float(f.get("peg")),
+        "ps": safe_float(f.get("ps_ratio")),
+        "ev_ebitda": safe_float(f.get("ev_ebitda")),
+        "ev_ebit": safe_float(f.get("ev_ebit")),
+        "ev_revenue": safe_float(f.get("ev_revenue")),
         "fcf_yield": safe_float(ts.get("fcf_yield_pct")),
+        "roic": safe_float(f.get("roic_ttm")),
+        "roe": safe_float(f.get("roe_ttm")),
+        "roe_5y": safe_float(f.get("roe_5y_avg")),
+        "roce": safe_float(f.get("roce_ttm")),
+        "net_margin": safe_float(f.get("net_margin_ttm")),
+        "operating_margin": safe_float(f.get("operating_margin_ttm")),
+        "gross_margin": safe_float(f.get("gross_margin_ttm")),
+        "ebitda_margin": ebitda_margin,
+        "cf_ebitda": cf_ebitda,
+        "debt_to_equity": safe_float(f.get("debt_to_equity")),
+        "net_debt_ebitda": safe_float(f.get("net_debt_ebitda")),
+        "current_ratio": safe_float(f.get("current_ratio")),
+        "quick_ratio": safe_float(f.get("quick_ratio")),
+        "altman_z": safe_float(d.get("altman_zscore")),
+        "piotroski": safe_float(d.get("piotroski_fscore")),
+        "revenue_cagr_5y": safe_float(f.get("revenue_cagr_5y")),
+        "eps_cagr_5y": safe_float(f.get("eps_cagr_5y")),
+        "shares_change_5y_pct": safe_float(f.get("shares_change_5y_pct")),
+        "net_payout_yield": safe_float((d.get("capital_returns") or {}).get("net_payout_yield")),
+        "dividend_yield": safe_float(f.get("dividend_yield")),
+        "gates_passed": safe_float(d.get("gates_passed")),
+        "lynch_category": d.get("lynch_category"),
+        "category_lens": (d.get("category_lens") or {}).get("primary"),
+        # GO/NO-GO is SPARSE BY DESIGN: `technical` only populates when
+        # scores.fundamentals >= 7.0 (the Phase 3.5 gate). "technical not run" is a
+        # distinct state from NO-GO and the screener must be able to tell them apart.
+        "go_no_go": tech.get("go_no_go") if tech else None,
+        "technical_run": bool(tech),
         "beta": safe_float(ab.get("beta")),
         "alpha": safe_float(ab.get("alpha_ann_pct")),
         "mos_class": iv.get("mos_class"),
@@ -527,6 +581,106 @@ def _report_href(filename: str | None) -> str | None:
         if (ROOT / href).exists():
             return href
     return None
+
+
+SCREENERS_YAML = ROOT / "screeners.yaml"
+
+# Operators a screener filter may use. Deliberately tiny: a screen definition is a
+# declaration, not a program, and an expression language here would be a second place
+# where investment logic lives.
+SCREENER_OPS = ("gte", "lte", "eq", "in", "is_true", "is_false")
+
+
+def load_screeners(path: Path | None = None) -> list[dict]:
+    """Read `screeners.yaml` — the vault-side, hand-editable screen definitions.
+
+    Presets used to live in browser localStorage: invisible, unshareable, and lost with
+    the cache. A file can be read, diffed and versioned.
+
+    A malformed entry is DROPPED with a warning rather than silently half-applied — a
+    filter that quietly does nothing is worse than a screen that is missing, because the
+    result still looks like a screen.
+    """
+    path = path or SCREENERS_YAML
+    if not path.is_file():
+        return []
+    try:
+        import yaml  # noqa: PLC0415
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except ImportError:
+        return []
+    except Exception as exc:                                  # noqa: BLE001
+        print(f"[build_dashboard] screeners.yaml unreadable: {exc}", file=sys.stderr)
+        return []
+    out = []
+    for s in (doc.get("screeners") or []):
+        if not isinstance(s, dict) or not s.get("key") or not s.get("filters"):
+            continue
+        bad = [f for f in s["filters"]
+               if not isinstance(f, dict) or f.get("op") not in SCREENER_OPS
+               or not f.get("metric")]
+        if bad:
+            print(f"[build_dashboard] screener '{s['key']}' dropped: "
+                  f"{len(bad)} malformed filter(s)", file=sys.stderr)
+            continue
+        out.append(s)
+    return out
+
+
+def screener_matches(row: dict, screen: dict) -> tuple[bool, bool]:
+    """(passes, evaluable). A metric the row does not carry makes the row NOT EVALUABLE
+    for this screen — never a failed filter. Absence is not a rejection; that rule is
+    what stops an un-evaluated pool name being presented as a rejected one."""
+    for f in screen.get("filters") or []:
+        v = row.get(f["metric"])
+        if v is None:
+            return False, False
+        op, target = f["op"], f.get("value")
+        try:
+            if op == "gte" and not v >= target:
+                return False, True
+            if op == "lte" and not v <= target:
+                return False, True
+            if op == "eq" and v != target:
+                return False, True
+            if op == "in" and v not in (target or []):
+                return False, True
+            if op == "is_true" and not v:
+                return False, True
+            if op == "is_false" and v:
+                return False, True
+        except TypeError:
+            return False, False
+    return True, True
+
+
+def apply_screeners(rows: list[dict], screens: list[dict]) -> list[dict]:
+    """One summary per screen: which tickers pass, and how many could not be judged."""
+    out = []
+    for s in screens:
+        passes, not_evaluable = [], 0
+        for r in rows:
+            ok, evaluable = screener_matches(r, s)
+            if not evaluable:
+                not_evaluable += 1
+            elif ok:
+                passes.append(r.get("ticker"))
+        sort = s.get("sort") or {}
+        key = sort.get("metric")
+        if key:
+            reverse = (sort.get("dir") or "desc") == "desc"
+            by_ticker = {r.get("ticker"): r for r in rows}
+            passes.sort(key=lambda tk: (by_ticker.get(tk, {}).get(key) is None,
+                                        by_ticker.get(tk, {}).get(key) or 0),
+                        reverse=reverse)
+        out.append({
+            "key": s["key"], "label": s.get("label") or s["key"],
+            "lens": s.get("lens"), "mandate": s.get("mandate") or "core",
+            "note": s.get("note"), "filters": s.get("filters"), "sort": sort,
+            "n_pass": len(passes), "n_not_evaluable": not_evaluable,
+            "n_rows": len(rows), "tickers": passes,
+        })
+    return out
 
 
 def build_screener(reports: list[dict], universe: list[dict]) -> list[dict]:
@@ -587,8 +741,15 @@ def build_screener(reports: list[dict], universe: list[dict]) -> list[dict]:
             row["alpha"] = r.get("alpha") if r.get("alpha") is not None else e.get("alpha")
             row["mos_class"] = r.get("mos_class") or e.get("mos_class")
             row["mos_pct"] = e.get("mos_pct")
-            row["pe"] = e.get("pe")
-            row["fcf_yield"] = e.get("fcf_yield")
+            # v4.3 wave 4.3 — merge the WHOLE enrichment rather than cherry-picking six
+            # keys. Adding a metric to `enrich_from_tmp` and then forgetting this line is
+            # how a screener filter silently becomes "not evaluable" for every row: the
+            # first live run of screeners.yaml returned 0 passes on all nine screens for
+            # exactly that reason. Existing keys are never overwritten — durable
+            # frontmatter still wins over the in-flight JSON.
+            for key, val in e.items():
+                if row.get(key) is None:
+                    row[key] = val
         return row
 
     # `seen` holds COMPANY keys: _prefiltered.yaml can carry both sides of a dual
@@ -649,7 +810,11 @@ def main() -> int:
         "thesis": load_thesis(),
         "technical_store": (tech_store := load_technical_store()),
         "live_prices": load_live_prices(reports, tech_store, skip="--no-live" in sys.argv),
-        "screener": build_screener(reports, load_universe()),
+        "screener": (_screener_rows := build_screener(reports, load_universe())),
+        # v4.3 wave 4.3 — named, file-defined screens over the same rows. `mandate:
+        # counter_thesis` entries (Deep Value) exist so the opposite case can be seen;
+        # they are not buy lists, and the label says so.
+        "screeners": apply_screeners(_screener_rows, load_screeners()),
     }
 
     template = TEMPLATE.read_text(encoding="utf-8")
