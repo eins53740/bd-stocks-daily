@@ -1301,6 +1301,17 @@ python "%SCRIPTS%\render_report.py" --index {date} --out-dir "%OUT_DIR%"
 - **Estático, JS-free, self-contained**: templating Python-side contra `report_template.html` (NÃO o `__DATA__` client-JS do dashboard). Header answer-first com **action verb determinístico** (`verdict × mos_class × go_no_go → ACCUMULATE/BUY-DIP/HOLD/WATCH/AVOID`), snowflake 5-eixos (Quality/Value/Growth/Health/Mgmt, derivado dos 7 `scores`) em SVG inline, gauge fair-value + range bar bear/base/bull, cartões A/B/C/E/G, tabela de peers com grades A–D, e um `<details>` "Full written analysis" (md→HTML minimal). PNGs do `IMG/` embebidos base64 com budget ≤1.5 MB (dropa os de menor prioridade + loga). Moeda vem do JSON (nunca `€` hardcoded); cada visual tem null-render.
 - **Email intocado** (BLOCKER B1): o HTML estilizado NUNCA é inlined no corpo do email; o digest continua md→inline-table; os links `obsidian://` continuam a apontar para o `.md`. O HTML é o primário on-disk (+ anexo opcional, wave 2).
 - Falha → `{"error": ...}` + exit 0; o `.md` já está em disco. **Deep e screen** (screen = variante curta).
+- **v4.3 — três cartões novos, que fecham o buraco `.md` → HTML.** Até aqui o `.md` tinha
+  conteúdo que o HTML (o artefacto entregue) **não tinha builder nenhum** para renderizar, o
+  que tornava lossy qualquer passagem a HTML-only:
+  - **`build_thesis_duel`** (§0 v4.2) — tabela bull/bear + o veredicto **LEAN** (`MAIS
+    PROVÁVEL`), com a direcção a chegar à classe CSS (`lean bull|bear|even`). Reports
+    pré-v4.2 não têm duelo → devolve `""`, nunca um cartão vazio.
+  - **`build_swot`** (§2.18a) — 2×2 com **Threats primeiro**, como `prompts/06_swot.md` os
+    pesa. Os quadrantes são casados pela **etiqueta**, não pela posição, e o parser aceita as
+    **duas** disposições que existem no corpus (grelha 2×2 e lista um-quadrante-por-linha).
+    40/40 SWOTs do corpus parseiam completos.
+  - **`build_sankey`** — ver a secção "Business-model Sankey" no fim deste ficheiro.
 - **Phase F sessão 2 ✅** — cartão **"Valuation metric families — equity vs enterprise"**: Equity (P/E, PEG, P/S, P/B, earnings yield) + Enterprise (EV/Sales, EV/EBITDA, EV/EBIT, FCF/EV), valores tirados do JSON (`fundamentals` + `score_details.valuation.ev_ebit`; P/B e FCF/EV calculados; yields em %), com **tint cheap/fair/rich** por banda (`metrics_glossary.band_for`). Cheat-sheet estático (`metrics_glossary.py`, sem API) em **3 modos**: tooltip `title=` no ecrã · `<details>` por família no mobile · **coluna cinzenta** em impressão (`@media print`). Hub diário opcional `index.html` (`--index {date}`) varre os reports do dia (via frontmatter do `.md` irmão) → grelha de cartões ticker/verdict/score/action.
 
 ### Phase 6 — Update state
@@ -1488,12 +1499,33 @@ python "%SCRIPTS%\build_dashboard.py"
 - **Tests**: `tests/test_thesis_dashboard.py` covers reads / pillars / stance / shape
   (network-free, synthetic report dicts).
 
-## Business-model Sankey — standardised palette (v3 Phase 5)
+## Business-model Sankey — rendered to PNG, no palette (v4.3)
 
-`prompts/01_business_model.md` now defines an explicit colour palette so every money-
-engine Sankey is consistent: 🔵 Revenue `#2563eb` · 🟢 value-creation/profit `#16a34a`
-(reserved — Gross Profit, Operating Income, Net Income, FCF, Retained Earnings) ·
-🔴 operating costs `#dc2626` · 🟤 Interest & Tax `#b45309` · 🟣 Capex `#7c3aed` ·
-🟡 capital allocation `#ca8a04`. Uses a YAML `config.sankey.nodeColors` map +
-`linkColor: source`, plus a **mandatory legend caption** so the mapping survives
-renderers that ignore `nodeColors`. Validated as `sankey-beta` via mermaid-cli 11.12.
+**The standardised colour palette this section used to document never existed.**
+`sankey.nodeColors` is not a Mermaid API — the string appears nowhere in mermaid 11.12's
+distribution, the version behind both mermaid-cli and Obsidian's bundled renderer — and
+`themeVariables.cScale0..N` is ignored for sankey as well, because node hues come from a
+hard-coded d3 scheme. Measured against `2026-08-12_FAE.MC_review.md`, which emits the full
+`nodeColors` map and still renders in the defaults. So from v4.3 the prompt emits **no
+colour config and no colour legend**: meaning is carried by position and width, and the
+report caption says so rather than describing a palette the reader never sees.
+
+What v4.3 *does* deliver is the diagram itself reaching the HTML. `scripts/mermaid_render.py`
+renders the fence to a transparent PNG via mermaid-cli 11.12, and `render_report.build_sankey`
+embeds it as the **Money engine** card. Before this, 170 reports carried a diagram that
+Obsidian rendered and the primary artifact did not.
+
+- **Cached by content hash** (`IMG/_mermaid/{sha}.png`, key = source + config + renderer
+  version). A render spawns headless Chromium — measured 7.3 s cold, 3.6 s warm — so a
+  re-run of the same ticker costs a file read. Bump `RENDERER_VERSION` to invalidate.
+- **Fallback-first**: missing `mmdc`, a parse error, a timeout and `BD_MERMAID=0` all return
+  no image and no exception. The fence still sits in the collapsed appendix.
+- **Shared image budget**: the Sankey is embedded *before* the charts and its bytes are
+  passed into `build_charts(used=…)`, so the 1.5 MB cap stays one allowance instead of
+  silently becoming one-per-builder.
+- **Doc diagrams**: the 9 mermaid blocks in `docs/` are committed as PNGs in `docs/IMG/`
+  with the source kept in a collapsed `<details>`, so they survive PDF/HTML export (pdfgen
+  has no mermaid support at all). Two were broken and were fixed rather than baked into an
+  image: `STRATEGY_GUIDE.md`'s Layer-3 chart failed to parse (chained arrows + a
+  backtick-string node containing `<slug>`), and `_sources/Stocks - buy 5y.md` had an
+  unterminated fence *and* the dead P/E gate the audit found.

@@ -28,13 +28,23 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import metrics_glossary as glossary
-except ImportError:  # pragma: no cover - only if scripts/ not on path
-    import importlib.util as _ilu
-    _spec = _ilu.spec_from_file_location("metrics_glossary", Path(__file__).resolve().parent / "metrics_glossary.py")
-    glossary = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(glossary)
+def _sibling(mod_name):
+    """Import a sibling script whether or not scripts/ is on sys.path."""
+    try:
+        return __import__(mod_name)
+    except ImportError:  # pragma: no cover - only if scripts/ not on path
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            mod_name, Path(__file__).resolve().parent / f"{mod_name}.py")
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        return _mod
+
+
+glossary = _sibling("metrics_glossary")
+# Pure stdlib, like this module — see mermaid_render's docstring for why it does not
+# import chart_theme (and therefore matplotlib) to get its ink.
+mermaid_render = _sibling("mermaid_render")
 
 for _name in ("stdout", "stderr"):
     _s = getattr(sys, _name, None)
@@ -255,9 +265,96 @@ def extract_label(body: str, label: str) -> str | None:
     return re.sub(r"^\s*>\s?", "", m.group(1).strip(), flags=re.M).strip() or None
 
 
+_HEADING_RE = re.compile(r"^(#{1,6})\s")
+
+
+def extract_section(body: str, pattern: str) -> str | None:
+    """The text under the first heading matching `pattern`, up to the next heading of
+    the same or higher level.
+
+    Matched with `re.search` against the heading's own text, not `==`, because these
+    headings carry decoration the prompts vary freely: emoji, a score
+    ("### 🏰 MOAT — 8.95/10 · WIDE") and italic parentheticals
+    ("### 2.18a SWOT *(v4 Phase C · overlay …)*"). Anchoring on the stable words and
+    letting the rest float is what makes this survive a prompt edit.
+    """
+    rx = re.compile(pattern, re.IGNORECASE)
+    lines = (body or "").split("\n")
+    start = level = None
+    for i, ln in enumerate(lines):
+        m = _HEADING_RE.match(ln.strip())
+        if not m:
+            continue
+        if start is None:
+            if rx.search(ln):
+                start, level = i + 1, len(m.group(1))
+            continue
+        if len(m.group(1)) <= level:
+            return "\n".join(lines[start:i]).strip() or None
+    if start is None:
+        return None
+    return "\n".join(lines[start:]).strip() or None
+
+
+def parse_md_table(chunk: str) -> list[list[str]]:
+    """The first markdown table in `chunk` as rows of raw cell text, separator dropped.
+
+    Returns [] when there is no table. Cells keep their markdown — callers run them
+    through the same inline formatter the appendix uses, so bold and code survive.
+    """
+    rows: list[list[str]] = []
+    for ln in (chunk or "").split("\n"):
+        s = ln.strip()
+        if not s.startswith("|"):
+            if rows:
+                break          # table ended
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        if all(set(c) <= set("-: ") and c for c in cells):
+            continue           # the |---|---| separator
+        rows.append(cells)
+    return rows
+
+
+def extract_callout(body: str, kind: str) -> tuple[str, list[str]] | None:
+    """An Obsidian callout `> [!kind] title` → (title, following lines).
+
+    Used for the v4.2 LEAN verdict (`[!abstract] ⚖️ MAIS PROVÁVEL: …`), which lives in
+    the markdown and had no path into the HTML at all.
+    """
+    lines = (body or "").split("\n")
+    head = re.compile(r"^\s*>\s*\[!" + re.escape(kind) + r"\]\s*(.*)$", re.IGNORECASE)
+    for i, ln in enumerate(lines):
+        m = head.match(ln)
+        if not m:
+            continue
+        rest = []
+        for nxt in lines[i + 1:]:
+            if not nxt.strip().startswith(">"):
+                break
+            rest.append(re.sub(r"^\s*>\s?", "", nxt).strip())
+        return m.group(1).strip(), [r for r in rest if r]
+    return None
+
+
 _INLINE = [(re.compile(r"\*\*(.+?)\*\*"), r"<b>\1</b>"),
+           # Single-asterisk italics run AFTER bold, so `**x**` is already <b>x</b> and
+           # cannot be re-matched. The lookarounds stop a stray `*` from swallowing the
+           # rest of a line. Without this rule the reports leaked literal asterisks into
+           # the HTML — "*and*", "*negative*", "*(inferred)*" all appear in real prose.
+           (re.compile(r"(?<![\*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\*\w])"), r"<i>\1</i>"),
            (re.compile(r"`(.+?)`"), r"<code>\1</code>"),
            (re.compile(r"==(.+?)=="), r"<mark>\1</mark>")]
+
+
+def md_inline(t) -> str:
+    """Escape, then apply the inline markdown the reports actually use.
+    Module-level because the card builders format single cells with it, not just
+    the appendix."""
+    t = esc(t)
+    for pat, rep in _INLINE:
+        t = pat.sub(rep, t)
+    return t
 
 
 def md_to_html(body: str) -> str:
@@ -267,12 +364,7 @@ def md_to_html(body: str) -> str:
     lines = body.split("\n")
     out: list[str] = []
     i, n = 0, len(lines)
-
-    def inline(t):
-        t = esc(t)
-        for pat, rep in _INLINE:
-            t = pat.sub(rep, t)
-        return t
+    inline = md_inline
 
     while i < n:
         ln = lines[i]
@@ -321,8 +413,12 @@ def md_to_html(body: str) -> str:
 # Section builders (return HTML strings)
 # ===================================================================
 def _card(title, inner, anchor=None, new=False):
+    """`new` may be True (legacy "v4" badge) or a version string like "v4.3" — a badge
+    that says v4 on a card introduced in v4.3 tells the reader the wrong thing about
+    what changed in the report they are holding."""
     aid = f' id="{anchor}"' if anchor else ""
-    tag = '<span class="new">NEW · v4</span>' if new else ""
+    ver = "v4" if new is True else new
+    tag = f'<span class="new">NEW · {esc(ver)}</span>' if new else ""
     return (f'<section class="card"{aid}><h2><span class="pip"></span>{esc(title)}{tag}</h2>'
             f'{inner}</section>')
 
@@ -695,12 +791,205 @@ def build_peers(data):
     return _card("Peer comparison", f"<table>{header}{''.join(rows)}</table>", "peer")
 
 
-def build_charts(md_path: Path, out_dir: Path, ticker: str, fm: dict):
-    """Base64-embed the render_charts PNGs under IMG_BUDGET_BYTES. Returns (html, dropped)."""
+_LEAN_CLASS = {"BULL": "bull", "BEAR": "bear", "EQUILIBRADO": "even"}
+
+
+def build_thesis_duel(body: str) -> str:
+    """The v4.2 §0 thesis duel — bull/bear table + the LEAN verdict.
+
+    Present in every report since v4.2 and absent from the HTML entirely, which is
+    one of the three gaps that made an HTML-only switch lossy. Returns "" for the
+    pre-v4.2 reports that have no duel, so re-rendering the back catalogue is safe.
+    """
+    chunk = extract_section(body, r"Bull\s*vs\s*Bear")
+    rows = parse_md_table(chunk) if chunk else []
+    lean = extract_callout(body, "abstract")
+    if not rows and not lean:
+        return ""
+
+    inner = ""
+    if len(rows) >= 2:
+        head = rows[0]
+        # The leading cell of the header row is empty by design (it labels the row
+        # axis, not a column), so a 3-column table is the expected shape.
+        cols = head[1:] if len(head) >= 3 else head
+        body_rows = ""
+        for r in rows[1:]:
+            if len(r) < len(cols) + 1:
+                continue
+            label = md_inline(r[0])
+            cells = "".join(f'<td class="duel-{i}">{md_inline(c)}</td>'
+                            for i, c in enumerate(r[1:len(cols) + 1]))
+            body_rows += f'<tr><th class="duel-lbl">{label}</th>{cells}</tr>'
+        if body_rows:
+            hdr = "".join(f"<th>{md_inline(c)}</th>" for c in cols)
+            inner += f'<table class="duel"><tr><th></th>{hdr}</tr>{body_rows}</table>'
+
+    if lean:
+        title, rest = lean
+        verdict = ""
+        m = re.search(r"MAIS\s+PROV[ÁA]VEL\s*:\s*(.+)$", title, re.IGNORECASE)
+        if m:
+            verdict = re.sub(r"\*+", "", m.group(1)).strip()
+        key = next((k for k in _LEAN_CLASS if k in verdict.upper()), "")
+        # The italic boilerplate that follows the reasoning explains the rule to the
+        # reader of the .md; in a card with its own caption it is noise, so only the
+        # first substantive line is carried over.
+        reason = next((r for r in rest if not r.startswith("*")), "")
+        inner += (f'<div class="lean {_LEAN_CLASS.get(key, "even")}">'
+                  f'<span class="lean-k">MAIS PROVÁVEL</span> '
+                  f'<b>{md_inline(verdict or "—")}</b>'
+                  f'{("<div class=\"lean-why\">" + md_inline(reason) + "</div>") if reason else ""}'
+                  f'</div>')
+        inner += ('<p class="sub">Leitura narrativa — não entra no composite, não altera o '
+                  'veredicto e nunca é expressa em percentagem.</p>')
+    return _card("⚔️ Thesis duel — bull vs bear", inner, "duel", new="v4.2") if inner else ""
+
+
+_SWOT_QUADRANTS = [
+    ("threat", "⚠️ Threats / Risks", r"threat"),
+    ("strength", "✅ Strengths", r"strength"),
+    ("weakness", "🔸 Weaknesses", r"weakness"),
+    ("opportunity", "🚀 Opportunities", r"opportunit"),
+]
+
+
+SWOT_LABEL_MAX_CHARS = 30
+_SWOT_DECOR = re.compile(r"\*\([^)]*\)\*|[*`_]|[^\w\s/&-]", re.UNICODE)
+
+
+def _swot_label(cell: str) -> str | None:
+    """The quadrant a cell NAMES, or None if it is content.
+
+    A label is a name — "⚠️ **Threats / Risks** *(leads · deepest)*" is 15 characters
+    once the decoration comes off. A quadrant's content is a paragraph. So the test is
+    "does this reduce to a short name that matches", not "does the keyword appear
+    anywhere", which is what the first version asked and which misread real reports:
+    MPWR's threats body opens *"**Valuation is the primary threat**: 83.34× P/E…"*, so
+    900 characters of analysis were classified as a header and the quadrant vanished.
+
+    Stripping first, then bounding, is what makes the bound tight enough to be safe —
+    a raw-length bound loose enough to admit the decorated label also admits a short
+    sentence that happens to mention the word.
+    """
+    if not cell:
+        return None
+    bare = _SWOT_DECOR.sub("", cell).strip()
+    if not bare or len(bare) > SWOT_LABEL_MAX_CHARS:
+        return None
+    for key, _lbl, pat in _SWOT_QUADRANTS:
+        if re.search(pat, bare, re.IGNORECASE):
+            return key
+    return None
+
+
+def parse_swot(body: str) -> dict:
+    """§2.18a's 2×2 table → {threat, strength, weakness, opportunity} of raw markdown.
+
+    Matched by the LABEL cell rather than by position. The prompt emits
+    Threats/Strengths on the first header row and Weaknesses/Opportunities on the
+    third, but that ordering is prose written by a model — keying on position would
+    turn a reordered table into a report that labels strengths as threats, which is
+    worse than showing nothing.
+
+    **Two table layouts are in the corpus, and both must work.** The common one is a
+    2×2 grid (label row, content row, label row, content row); four reports from
+    2026-08-05 instead use a vertical list, one quadrant per row as
+    `| **Strengths** | …content… |`. A parser that only looked down at the next row
+    read all four of those as empty and dropped the card. So content is taken from the
+    cell to the RIGHT first, then the cell BELOW — in the grid layout the cell to the
+    right is the neighbouring *label*, which is rejected as content and falls through
+    to the correct one.
+    """
+    chunk = extract_section(body, r"SWOT")
+    rows = parse_md_table(chunk) if chunk else []
+    found: dict[str, str] = {}
+    for ri, row in enumerate(rows):
+        for ci, cell in enumerate(row):
+            key = _swot_label(cell)
+            if not key or key in found:
+                continue
+            right = row[ci + 1] if ci + 1 < len(row) else ""
+            below = rows[ri + 1][ci] if (ri + 1 < len(rows) and ci < len(rows[ri + 1])) else ""
+            for cand in (right, below):
+                if cand and _swot_label(cand) is None:
+                    found[key] = cand
+                    break
+    return found
+
+
+def build_swot(body: str) -> str:
+    """SWOT as a 2×2 card, Threats first — matching the prompt's own weighting.
+
+    Like the Sankey and the duel, this content existed only in the markdown. Threats
+    lead because `prompts/06_swot.md` weights them double, and a card that opened with
+    Strengths would quietly invert the emphasis the analysis was written with.
+    """
+    quads = parse_swot(body)
+    if not quads:
+        return ""
+    cells = []
+    for key, label, _pat in _SWOT_QUADRANTS:
+        txt = quads.get(key)
+        if not txt:
+            continue
+        cells.append(f'<div class="swot-q swot-{key}"><h3>{esc(label)}</h3>'
+                     f'<p>{md_inline(txt)}</p></div>')
+    if not cells:
+        return ""
+    note = ('<p class="sub">Qualitative overlay — no score enters the composite. '
+            'Threats lead by design.</p>')
+    return _card("SWOT", f'<div class="swot-grid">{"".join(cells)}</div>{note}',
+                 "swot", new="v4.3")
+
+
+def build_sankey(body: str, out_dir: Path, ticker: str, fm: dict):
+    """The money-engine Sankey, rendered to PNG and embedded. Returns (html, bytes_used).
+
+    170 deep reports carry a ```mermaid `sankey-beta` block that Obsidian renders and
+    the HTML — the artifact that is actually delivered — did not. This is where that
+    gap closes.
+
+    Fallback-first, three ways: no diagram in the body, mermaid disabled, or a failed
+    render all return ("", 0). The fence still appears inside the collapsed "Full
+    written analysis" appendix, so the reader loses the picture, never the numbers.
+    """
+    src = mermaid_render.find_sankey(body or "")
+    if not src:
+        return "", 0
+    date = fm.get("date") or ""
+    safe = (ticker or "").replace("/", "_")
+    png = out_dir / "IMG" / f"{date}_{safe}_sankey.png"
+    if not mermaid_render.render(src, png):
+        return "", 0
+    try:
+        raw = png.read_bytes()
+    except OSError:
+        return "", 0
+    if not raw or len(raw) > IMG_BUDGET_BYTES:
+        # A single image must never eat the whole budget and starve all 8 charts.
+        log(f"sankey PNG {len(raw)} B exceeds the image budget — dropped")
+        return "", 0
+    b64 = base64.b64encode(raw).decode("ascii")
+    fig = (f'<figure style="margin:4px 0 0"><img class="chart" alt="Money-flow Sankey" '
+           f'src="data:image/png;base64,{b64}">'
+           f'<figcaption class="sub">Revenue → costs → net income → capital allocation. '
+           f'Hues are assigned by the renderer and carry no meaning; read the diagram '
+           f'left to right.</figcaption></figure>')
+    return _card("Money engine", fig, "sankey", new="v4.3"), len(raw)
+
+
+def build_charts(md_path: Path, out_dir: Path, ticker: str, fm: dict, used: int = 0):
+    """Base64-embed the render_charts PNGs under IMG_BUDGET_BYTES. Returns (html, dropped).
+
+    `used` carries bytes already spent by earlier images (the Sankey) so the budget is
+    one shared allowance rather than one-per-builder — otherwise adding images silently
+    multiplies the cap the spec fixed at 1.5 MB.
+    """
     date = fm.get("date") or (md_path.stem.split("_")[0] if "_" in md_path.stem else "")
     safe = (ticker or "").replace("/", "_")
     img_dir = out_dir / "IMG"
-    used, dropped, blocks = 0, [], []
+    dropped, blocks = [], []
     labels = {"price": "Price & moving averages", "ni_pe": "Net income vs P/E",
               "ebitda_fcf": "EBITDA & FCF history", "relperf": "Relative performance 30m",
               "dcf": "DCF fan", "peers": "Peer comparison", "radar": "Score radar",
@@ -742,10 +1031,12 @@ def build_footer(data, fm):
             f'· host: {esc(run_host())}</footer>')
 
 
-NAV_ITEMS = [("tldr", "TL;DR"), ("exit", "Exit Plan"), ("val", "Valuation"),
+NAV_ITEMS = [("tldr", "TL;DR"), ("duel", "Bull vs Bear"), ("exit", "Exit Plan"),
+             ("val", "Valuation"),
              ("metrics", "Metric families"), ("flags", "Red Flags"),
              ("ret", "Return profile"), ("op", "Opinion panel"), ("news", "News & sentiment"),
-             ("peer", "Peers"), ("charts", "Charts")]
+             ("peer", "Peers"), ("swot", "SWOT"), ("sankey", "Money engine"),
+             ("charts", "Charts")]
 
 
 def build_nav(present_ids):
@@ -766,12 +1057,24 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
 
     cards = []
     cards.append(build_tldr(fm, body, data))
+    duel = build_thesis_duel(body)
+    if duel:
+        cards.append(duel)
     for fn in (build_exit, build_valuation, build_metric_families, build_redflags,
                build_return_profile, build_opinion, build_news_sentiment, build_peers):
         html_ = fn(data)
         if html_:
             cards.append(html_)
-    charts_html, _ = build_charts(md_path, out_dir, ticker, fm)
+    swot = build_swot(body)
+    if swot:
+        cards.append(swot)
+    # The Sankey is embedded before the charts so it competes for the SAME 1.5 MB
+    # budget rather than adding to it; on a tight report a low-priority chart is
+    # dropped, which is the behaviour the budget already defines.
+    sankey_html, sankey_bytes = build_sankey(body, out_dir, ticker, fm)
+    if sankey_html:
+        cards.append(sankey_html)
+    charts_html, _ = build_charts(md_path, out_dir, ticker, fm, used=sankey_bytes)
     if charts_html:
         cards.append(charts_html)
     # bull/bear + full written analysis appendix

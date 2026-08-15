@@ -228,6 +228,60 @@ gate found no rows and logged `No reports for 2026-08-15 - skipping email` — *
 sent**. The reports on disk for that date came from manual recovery runs. Nothing enforces
 the growth-before-daily ordering that `SCHEDULING.md` calls load-bearing.
 
+### Wave 2 — charts & report delivery (2026-08-15, in progress)
+
+**2.3 + 2.7 + thesis duel — the HTML report stops losing content the markdown has.**
+These three ship first because they *gate* the HTML-only delivery switch: `render_report.py`
+had no builder for the Sankey, the SWOT or the v4.2 LEAN card, so making HTML the sole format
+first would have silently dropped three sections the reader relies on.
+
+- **`scripts/mermaid_render.py` (new)** — mermaid → transparent PNG via mermaid-cli 11.12.
+  Content-addressed cache (`IMG/_mermaid/{sha}.png`, key = source + config + renderer
+  version) because each render spawns headless Chromium: **measured 7.3 s cold, 3.6 s warm**
+  against a 30-minute job budget with ~6 min of headroom. Fallback-first throughout —
+  missing `mmdc`, a parse error, a timeout, a zero-byte cache entry and `BD_MERMAID=0` all
+  return no image and no exception.
+- **`build_sankey`** — the money engine reaches the HTML for the first time. **170 deep
+  reports** carried a diagram Obsidian rendered and the delivered artifact did not. Embedded
+  *before* the charts and its bytes passed into `build_charts(used=…)`, so the 1.5 MB image
+  cap stays **one shared allowance** instead of quietly becoming one-per-builder.
+- **`build_swot`** — 2×2, Threats first (the prompt weights them double). Quadrants matched
+  by **label, not position**, and the parser handles both table layouts in the corpus.
+  **40/40 SWOTs parse complete.**
+- **`build_thesis_duel`** — bull/bear table + the LEAN verdict, with the direction reaching
+  the CSS class. **10/10 duels render**; pre-v4.2 reports correctly render nothing.
+- **Single-asterisk italics** now render. `*and*`, `*negative*`, `*(inferred)*` all occur in
+  real prose and the asterisks were leaking into the HTML verbatim.
+- **9 doc diagrams committed as PNGs** in `docs/IMG/`, source kept in a collapsed
+  `<details>` — pdfgen has no mermaid support at all, so a PDF of `STRATEGY_GUIDE.md`
+  previously showed a raw code block.
+
+**Four defects found by running the new code over the whole corpus rather than one sample:**
+
+1. **`sankey.nodeColors` is not a Mermaid API.** The string appears nowhere in mermaid
+   11.12's distribution — the version behind both mermaid-cli and Obsidian. Since v3 Phase 5
+   the prompt had asserted it *was* the official API, so every diagram carried a 15-line
+   colour map that did nothing **and a mandatory legend describing a palette the reader never
+   saw**. `themeVariables.cScale0..N` was tested as an alternative and is ignored for sankey
+   too. Verified against `2026-08-12_FAE.MC_review.md`, which emits the full map and renders
+   in the defaults. Prompt and `SKILL.md` corrected; the report caption now says the hues
+   carry no meaning. The referenced `IMG/sankey_money_engine_demo.png` never existed either.
+2. **Two mermaid preambles hid the diagram from the extractor** — a `---` YAML config block
+   and an `%%{init:…}%%` directive both returned the wrong diagram kind. Fixed; **114/114**
+   sankeys in the corpus now extract.
+3. **`STRATEGY_GUIDE.md`'s Layer-3 diagram did not parse at all** (chained `-->` plus a
+   backtick-string node containing `<slug>`) — it has been a broken block in the docs, not
+   just an unexported one.
+4. **`_sources/Stocks - buy 5y.md` had an unterminated fence**, and the dead P/E gate the
+   audit found: node `B` routed *both* Yes and No to `C`, leaving `Reject2` ("Overvalued")
+   unreachable. Both fixed before rendering, so the PNG does not bake in the bug. The note
+   now carries an explicit warning that it is a **legacy source**, not the implemented
+   screen — its thresholds diverge from `evaluate_gates()` (Gate 2 is
+   `P/E < 35 OR (PEG < 2.5 AND ROE > 20%)`, and Gate 3 `FCF > 0` has no node at all).
+   Re-cutting the ladder to match the code belongs to the §3.1 audit.
+
+**Tests**: 1072 passed, 1 skipped (from 1001 at Wave 1 close) — +71.
+
 ---
 
 ## v4.2 — 2026-08-05 → 2026-08-15 · tag `v4.2` · commit `70d02d6`

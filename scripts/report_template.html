@@ -126,6 +126,26 @@
   summary{cursor:pointer;font-weight:600;color:var(--bd-teal);padding:6px 0}
   .md h1,.md h2,.md h3,.md h4{color:var(--ink)} .md table{margin:8px 0} .md blockquote{border-left:3px solid var(--line);margin:8px 0;padding:2px 12px;color:var(--muted)}
   footer{grid-column:1/-1;border-top:1px solid var(--line);margin-top:8px;padding-top:12px;color:var(--muted);font-size:12px}
+  /* ---- THESIS DUEL (v4.3) ---- */
+  table.duel{width:100%;table-layout:fixed}
+  table.duel th.duel-lbl{width:16%;text-align:left;vertical-align:top;color:var(--muted);font-size:12.5px}
+  table.duel td{vertical-align:top;font-size:13.5px}
+  table.duel td.duel-0{border-left:3px solid var(--bd-green)}
+  table.duel td.duel-1{border-left:3px solid var(--reject)}
+  .lean{margin:12px 0 2px;padding:11px 14px;border-radius:11px;border:1px solid var(--line);
+    border-left-width:4px;background:var(--bg)}
+  .lean.bull{border-left-color:var(--bd-green)} .lean.bear{border-left-color:var(--reject)}
+  .lean.even{border-left-color:var(--muted)}
+  .lean-k{font-size:10.5px;font-weight:700;letter-spacing:1.1px;color:var(--muted);margin-right:7px}
+  .lean-why{margin-top:5px;font-size:13.5px;color:var(--ink)}
+  /* ---- SWOT (v4.3) ---- */
+  .swot-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .swot-q{border:1px solid var(--line);border-radius:11px;padding:0 0 10px;overflow:hidden}
+  .swot-q h3{margin:0 0 8px;padding:8px 12px;font-size:13px;color:#fff;background:var(--muted)}
+  .swot-q p{margin:0;padding:0 13px;font-size:13.3px;line-height:1.55}
+  .swot-threat h3{background:var(--reject)} .swot-strength h3{background:var(--bd-green)}
+  .swot-weakness h3{background:#B8860B} .swot-opportunity h3{background:var(--bd-teal)}
+  @media(max-width:640px){.swot-grid{grid-template-columns:1fr}}
   /* ---- PRINT ---- */
   @media print{
     @page{size:A4;margin:11mm 9mm}
@@ -135,7 +155,7 @@
     nav{display:none}
     header{border-radius:0}
     .card,.metric,.side,.hero{box-shadow:none}
-    .metric,.side,.exit-grid .box,.op .oc{break-inside:avoid;page-break-inside:avoid}
+    .metric,.side,.exit-grid .box,.op .oc,.swot-q,.lean{break-inside:avoid;page-break-inside:avoid}
     .flags li,tbody tr{break-inside:avoid}
     th.cheat,td.cheat{display:table-cell}          /* grey cheat column visible in print */
     details.cheat-m{display:none!important}          /* mobile block never prints */
