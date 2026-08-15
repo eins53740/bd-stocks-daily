@@ -140,6 +140,7 @@ Source-framework lineage (the two reference docs at `OneDrive/Ambiente de Trabal
 | `05_bear_case.md`                | `5_step_system.md` Step 5                                      | "If X happens, thesis is broken."                                            | §2.16                    |
 | `06_swot.md`                     | v4 Phase C (idea #3)                                           | SWOT 2×2, Threats/Risks-weighted; cites `red_flags` + numbers JSON           | SWOT card (§2.18a)       |
 | `07_thesis_duel.md`              | v4.2 (2026-08-05)                                              | Moat mechanism · bull vs bear side-by-side · **LEAN** (BULL/BEAR/BALANCED, never a %) · sector structural forces | **Cartão §0** (topo do report) |
+| `08_earnings_commentary.md`      | v4.3 (2026-08-15) · **OPT-IN** `BD_EARNINGS_COMMENT=1`         | O que a gestão disse e o que mudou no último 10-Q/10-K real (`edgar.py --text`); guidance, segmentos, margem, one-offs, tom vs print anterior | §2.8 (e §2.7 no annual) |
 | `industry_macro.md`              | `ai_industry_analysis_framework.md` Step 1                     | Market, value chain, players, disruption                                     | `_industry/<slug>.md` §1 |
 | `industry_customer.md`           | `ai_industry_analysis_framework.md` Step 2                     | Buyer journey, switching costs                                               | `_industry/<slug>.md` §2 |
 | `industry_architecture.md`       | `ai_industry_analysis_framework.md` Step 3                     | Winning models, moats, top-15 KPIs                                           | `_industry/<slug>.md` §3 |
@@ -436,6 +437,21 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
 
 7d. **Statement commentary (v4 Phase C)** — for each of the three statement sub-sections (Income / Balance / Cash-Flow, §2.6a–c), write a 2–3 sentence anomaly note. **The 0-10 sub-score is the deterministic number from `red_flags.py` (Phase 2.4) — do NOT recompute it in the LLM**; the LLM only names the anomalies behind the flagged checks (ground-truth rule). Skip a statement's commentary if its sub-score is `null` (all checks n/a).
 
+7d-bis. **Earnings-report commentary (v4.3 · OPT-IN, default OFF no path agendado)** — se `BD_EARNINGS_COMMENT=1` (o default é `1` em runs manuais/`--dry-run`, `0` no job das 13:30), correr `08_earnings_commentary.md` para **cada um dos 3 picks**:
+
+   ```bash
+   REM US: metadata + prosa do último 10-Q/10-K numa só chamada (já cacheada)
+   python "%SCRIPTS%\edgar.py" --ticker {TICKER} --text --out-dir "%OUT_DIR%"
+   ```
+
+   Non-US não tem EDGAR → usar o annual/quarterly report já apanhado na Phase 4 (`find_reports.py` + `get_narrative.py`).
+
+   **Output → §2.8 (quarterly) e §2.7 (annual). NÃO é uma secção nova.** As duas secções já existem e já são exactamente este trabalho — o que lhes faltava era a prosa do filing. Hoje imprimem `⚠️ Official report narrative unavailable` mesmo em nomes US grandes (MPWR 2026-08-14 diz-o com todas as letras, e dá a razão: *"SEC EDGAR is not fetched directly per the skill's 403 policy"* — uma política que a Phase 1.5 já removeu). Uma §2.6d nova ao lado destas seria uma terceira secção a dizer o mesmo enquanto as duas antigas continuavam vazias.
+
+   **Custa um WebFetch + uma chamada LLM por ticker**, por isso fica opt-in até o timing harness provar que cabe nos 30 min (o job já corre a 22-24 min do tecto). Sem filing → a secção imprime `Latest filing not available.` e mais nada — nunca uma secção vazia.
+
+   ⚠️ **Ground-truth rule**: a prosa do filing alimenta **só narrativa**. Todo o número citado vem do `{NUMBERS_JSON}` da Phase 2 (ou dos factos XBRL, que são structured data de um helper Python). Isto **não** cria uma terceira excepção — é a mesma fronteira que a Phase 4 já impõe.
+
 7e. **Thesis duel (v4.2)** — run `07_thesis_duel.md` **last of the qualitative calls**, with `{BULL_THESIS}` (step 7), `{BEAR_CASE}` (the `05_bear_case.md` output), `{MOAT_JSON}` (`scores.moat` + `score_details.moat`), `{SECTOR}` and `{INDUSTRY_CACHE}` (the `_industry/<slug>.md` body). It **judges** the two cases already written — it must not re-derive them. Output → the **cartão §0** at the top of the report (moat band, bull-vs-bear table, LEAN, sector context). Overlay-only: the LEAN never touches the composite or the verdict, and is never rendered as a percentage.
 
 8. **Finalise composite**:
@@ -626,7 +642,15 @@ Para **deep-dive**: depois disto usa WebFetch sobre `annual_url` e `quarterly_ur
 python "%SCRIPTS%\get_narrative.py" --ticker NVDA --max-news 5
 ```
 
-Returns a JSON dict with `business_summary` (yfinance `longBusinessSummary`, ~1500 chars MD&A-equivalent), `recent_news` (yfinance `Ticker.news`), `ir_url`, `stockanalysis_fundamentals_url`, and a `narrative_quality` grade (`good` / `partial` / `degraded`). Use the combined `business_summary + recent_news` content as the `{ANNUAL_NARRATIVE}` substitution. If quality is `good` or `partial`, you can skip WebFetch entirely. If `degraded`, try WebFetch on `annual_url` / `ir_page_url` from `find_reports.py`. Degraded final state → §2.7 / §2.8 carry the `⚠️ Official report narrative unavailable` note and Phase 2.5 prompts label inferred claims accordingly. **Always copy the final grade into report frontmatter as `narrative_quality`** (after any WebFetch upgrade attempt — record what the report was actually written from), so degraded narratives are visible without opening the report.
+**US primeiro — o EDGAR é a fonte, não o `get_narrative.py`.** Para qualquer nome sem sufixo, corre primeiro:
+
+```bash
+python "%SCRIPTS%\edgar.py" --ticker MPWR --text --out-dir "%OUT_DIR%"
+```
+
+O bloco `filing_text` que isso devolve (MD&A do último 10-Q, ou Item 7 do 10-K, ≤12000 chars, com `form`/`period`/`filed`/`url`) é o `{QUARTERLY_NARRATIVE}` / `{ANNUAL_NARRATIVE}`. **Só se isso falhar** (não-US, sem CIK, rede em baixo) é que se cai para o `get_narrative.py` abaixo. Um 10-Q real vale muito mais do que um blurb de 1500 chars, e desde a Phase 1.5 não há razão nenhuma para não o ler.
+
+Returns a JSON dict with `business_summary` (yfinance `longBusinessSummary`, ~1500 chars MD&A-equivalent), `recent_news` (yfinance `Ticker.news`), `ir_url`, `stockanalysis_fundamentals_url`, and a `narrative_quality` grade (`good` / `partial` / `degraded`). Use the combined `business_summary + recent_news` content as the `{ANNUAL_NARRATIVE}` substitution **when EDGAR was unavailable**. If quality is `good` or `partial`, you can skip WebFetch entirely. If `degraded`, try WebFetch on `annual_url` / `ir_page_url` from `find_reports.py`. Degraded final state → §2.7 / §2.8 carry the `⚠️ Official report narrative unavailable` note and Phase 2.5 prompts label inferred claims accordingly. **Always copy the final grade into report frontmatter as `narrative_quality`** (after any WebFetch upgrade attempt — record what the report was actually written from), so degraded narratives are visible without opening the report.
 
 > **v4.3 — a instrução "evita o SEC EDGAR, dá 403" foi REMOVIDA daqui, e deliberadamente.**
 > O 403 nunca foi um bloqueio: é a política declarada da SEC de recusar pedidos sem um
@@ -927,7 +951,10 @@ Frontmatter que acompanha: `listing_home`, `listing_alternatives`, `listing_reas
 
 ### 2.8 Wrap-up Quarterly Report {quarter}
 **Link**: [{quarterly_url}]({quarterly_url}) — publicado {quarterly_date}
-({Que mudou no último trimestre — guidance, segment trends, one-offs})
+
+({Output de `08_earnings_commentary.md` (Phase 2.5 step 7d-bis) quando `BD_EARNINGS_COMMENT=1`. Formato: linha `**{FORM}, {PERIOD}, filed {DATE}**`, depois 3-5 bullets de uma frase, depois `**Tone vs prior print:** …`. Para nomes US a prosa vem do `edgar.py --text` (MD&A do 10-Q real); non-US do IR fetch da Phase 4.})
+
+({Sem filing e sem commentary: manter o comportamento actual — "Que mudou no último trimestre — guidance, segment trends, one-offs" a partir do que houver, ou `Latest filing not available.`})
 
 ### 2.9 Growth decomposition & constraints
 ({Combined output a partir de prompts\03a + 03b + 03c — volume/price/M&A breakdown, Theory of Constraints bottleneck, growth assumption verdict Supported/Weakly/Not.})
