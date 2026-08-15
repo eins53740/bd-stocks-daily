@@ -125,6 +125,57 @@ classifier now checks `"per minute"` first, and the ordering is asserted.
 scheduled job was affected — the ledger shows the pipeline made **zero** AV calls today (its
 run had already timed out before that node) — and the allowance resets daily.*
 
+**1.2 — financial history for the two screen tickers (G-B, G-C).** Phase 2.2 now runs for
+all three picks, not just the deep dive. This turned out to be an **orchestration change
+only**: `chart_ebitda_fcf()` and the report path have no deep/screen gate anywhere in code,
+so the restriction lived entirely in `SKILL.md` prose. Screens gain the EBITDA/FCF chart and
+the `fin_history_*` frontmatter for free.
+
+- **Measured marginal cost: 3–5 s per ticker** (~10 s for both screens) against ~6 min of
+  headroom in a 22–24 min job — 0.6 % of the budget, so this ships default-on rather than
+  behind a flag. Instrumented with `node_timing.py` like the other heavy nodes.
+- Corrected the stale AV arithmetic in `SKILL.md` (it claimed 2 calls per deep; it is 3 —
+  `INCOME_STATEMENT` + `CASH_FLOW` here plus `valuation_bands`' `EARNINGS` in the same run).
+- **Half-yearly markets degrade to nothing, correctly.** `LYC.AX` (ASX) returns no quarterly
+  rows at all, because Australian issuers report half-yearly. `financial_history.py` writes
+  **no cache file** on total failure — right, since a failure must not be served for 80 days
+  — so the chart is skipped and `fin_history_*` is omitted. That is market structure, not a
+  bug, and the report says so instead of inventing a series.
+
+**1.3 — SEC EDGAR (`scripts/edgar.py`, new).** The skill had spent months routing around
+EDGAR because `SKILL.md` said it 403s. **It does not.** Measured: no `User-Agent` → 403, with
+one → 200, on all three endpoints. The blocker was a missing header.
+
+- `submissions` → 10-K / 10-Q / 8-K with dates, periods and **direct working links**
+  (verified: a generated 10-Q URL returns HTTP 200 and 3.67 MB of filing).
+- **8-K items become catalysts** — `2.02` earnings release, `5.02` officer departure, `4.01`
+  auditor change, and `4.02` *PRIOR FINANCIALS NOT RELIABLE*, the worst signal EDGAR carries.
+- `companyfacts` → XBRL US-GAAP facts, **opt-in** at 5.6 MB / 2.7 s. Annual-only
+  (`fp == "FY"`, form 10-K) so a quarterly row can never stand in for a full year.
+- **`--text` delivers the half the plan flagged as missing**: the filing *prose* now reaches
+  `{QUARTERLY_NARRATIVE}` / `{ANNUAL_NARRATIVE}` for US names, replacing a ~1,500-char
+  yfinance blurb with the real MD&A.
+- **Deleted the stale "avoid SEC EDGAR — they 403" instruction**, and demoted
+  `get_narrative.py` to the fallback it should always have been for US names.
+- TTLs deliberately depart from the plan's single 30-day figure: **1 day** for submissions
+  (a 30-day TTL would hide a new 8-K for a month, defeating the point) and 30 days for the
+  heavy facts payload.
+
+**Three real-world failures found by running it against IBM's actual 10-Q, not by reasoning
+about it** — each produced output that *looked* successful:
+1. The heading match failed because filers write **U+2019**, not an ASCII apostrophe.
+2. After fixing that it matched the **table of contents**, because the body heading is
+   `Item 2.  MANAGEMENT'S…` with irregular spacing while the contents page uses one space.
+   Matching is now whitespace-flexible, and a contents block is rejected by line-shape.
+3. The no-section fallback returned the filing's **hidden inline-XBRL context block** —
+   pages of `http://fasb.org/us-gaap/2026#CostOfRevenue`. `first_prose()` now skips it.
+
+Degradation is tested end-to-end and verified live: non-US → no HTTP call at all; unknown
+ticker → explicit reason; **foreign private issuer** (`NVO`, a real ADR filing 20-F) →
+`available: true` with an explanation rather than an error; dead network → never raises.
+
+**965 passed, 1 skipped** (+87).
+
 **Known incident, 2026-08-15** — worth recording because it shaped the plan. `StocksGrowth`
 and `StocksDaily` both fired at **13:36** as Task Scheduler missed-task catch-up (the machine
 was asleep at their 12:45 / 13:30 triggers). They contended and **both hit their timeouts**

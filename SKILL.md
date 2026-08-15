@@ -352,7 +352,7 @@ v2 output JSON (the ground truth — USE THESE NUMBERS):
 }
 ```
 
-### Phase 2.2 — Financial history + forecast (deep only, v3.1)
+### Phase 2.2 — Financial history + forecast (deep **+ screens**, v3.1 · screens desde v4.3)
 
 Runs right after `analyze_ticker.py` for the deep ticker (needs its JSON for the consensus block):
 
@@ -361,11 +361,16 @@ python "%SCRIPTS%\financial_history.py" --ticker ASML.AS --analysis-json "%OUT_D
 ```
 
 - Fetches a quarterly EBITDA/FCF/revenue series (alvo 40 trimestres): Alpha Vantage para listings US (sem sufixo), yfinance fallback (~5-6 trimestres + série anual) para o resto. Cache `_fin_history/{TICKER}.json` (TTL 80 dias) — re-runs e re-avaliações não voltam à rede.
-- **AV budget**: 2 chamadas por deep; worst case diário (1 deep + 4 cascades) = 10 vs limite free de 25. Guard automático em `_fin_history/_av_budget.json` — a partir de 20 chamadas/dia o script salta AV e usa yfinance.
+- **AV budget** (corrigido v4.3, medido — não estimado): são **3 chamadas por nome US**, não 2 — `INCOME_STATEMENT` + `CASH_FLOW` aqui, mais o `EARNINGS` que a Phase 2.3 (`valuation_bands`) dispara na mesma run. Com 3 picks todos US e todos cache-cold ≈ **9 chamadas**.
+- **O limite de 25/dia da free tier é por ENDEREÇO IP, não por key** (medido 2026-08-15: uma key esgotada, as outras quatro recusadas no mesmo instante). As 6 entradas em `api_keys.txt` são **5 keys distintas** e valem exactamente o mesmo que uma. Logo esta máquina tem **um único orçamento de 25 chamadas/dia**, partilhado por `financial_history.py` e `valuation_bands.py` — que é precisamente o que o contador partilhado `_fin_history/_av_budget.json` já modela. **Não adicionar key pools** (ver `docs/ROADMAP.md`, R5 em WON'T DO).
+- Guard automático: a partir de 20 chamadas/dia o script salta AV e usa yfinance. Uma recusa de cap diário **satura o contador de imediato** e não é repetida — esperar não a resolve antes da meia-noite.
 - Forecast 4 trimestres (híbrido): receita interpolada do consensus (`revenue_estimate_current/next_year`) via seasonal split histórico × margem mediana trailing → EBITDA/FCF. Sem consensus (`analyst_count < 3`) → extrapolação de tendência, labelled. Menos de 4 trimestres de histórico → forecast suprimido (`forecast_suppressed_reason`).
 - Copiar `source` e `quarters_available` para o frontmatter (`fin_history_source`, `fin_history_quarters`).
-- Falha total → JSON `{"error": ...}`, chart skipped, nota no report. Non-fatal.
-- Screens NÃO correm esta phase.
+- Falha total → JSON `{"error": ...}` em stdout, **nenhum ficheiro de cache escrito** (uma falha nunca fica cacheada 80 dias), chart skipped, nota no report. Non-fatal.
+- **Screens TAMBÉM correm esta phase (v4.3)** — G-B e G-C, a seguir ao respectivo `analyze_ticker.py`, exactamente com o mesmo comando. Os screens ganham o chart EBITDA/FCF e o frontmatter `fin_history_*`.
+  - **Custo medido**: ~3-5 s por ticker (≈10 s pelos dois screens), contra ~6 min de folga num job de 22-24 min — 0,6 % do orçamento. Instrumentar com `node_timing.py --node 2.2 --ticker <T>` como nos restantes nós pesados.
+  - **Degradação honesta**: em screens não-US a AV devolve vazio → yfinance (~5-6 trimestres + anual), etiquetado em `fin_history_source`. Mercados que reportam **semestralmente** (p. ex. `.AX` australiano) não têm linhas trimestrais de todo → sem ficheiro, sem chart, `fin_history_*` omitido. Isto é estrutura de mercado, não falha — não inventar uma série.
+  - Se o orçamento AV do dia já estiver gasto, os screens US caem em yfinance como qualquer outro nome; o report continua completo, só com menos profundidade.
 
 ### Phase 2.3 — Valuation depth (deep only, v4 Phase B)
 
@@ -577,6 +582,24 @@ python "%SCRIPTS%\technical_score.py" --ticker ASML.AS --fundamental-score {scor
 - **Wire the output into the report:** fill §2.10's callout + indicator table from this JSON, and write the six scalars into frontmatter (`technical_score`, `go_no_go`, `combined_score`, `entry_zone`, `suggested_stop_loss`, `tech_risk_level`) so `build_dashboard.py` surfaces the row in the Technical GO/NO-GO table. Use `go_callout = "success"` when GO, `"warning"` when NO-GO.
 - Screens do **not** run this phase.
 
+### Phase 1.5 — SEC EDGAR official filings (US listings, v4.3)
+
+Corre **antes** da Phase 4 para nomes US (sem sufixo); nomes não-US saltam-na sozinha (o script devolve `available: false` com a razão, sem fazer um único pedido HTTP).
+
+```bash
+python "%SCRIPTS%\edgar.py" --ticker IBM --out-dir "%OUT_DIR%"            :: filings (deep + screens)
+python "%SCRIPTS%\edgar.py" --ticker IBM --out-dir "%OUT_DIR%" --text     :: + narrativa do 10-Q/10-K (deep)
+python "%SCRIPTS%\edgar.py" --ticker IBM --out-dir "%OUT_DIR%" --facts    :: + XBRL companyfacts (opt-in)
+```
+
+- **Sem API key.** Só exige um `User-Agent` que identifique quem chama — é isso, e apenas isso, que o antigo "EDGAR dá 403" era.
+- **Custo medido (2026-08-15)**: `submissions` 166 KB / 0,28 s · documento primário do 10-Q **3,67 MB** / 0,5 s · `companyfacts` **5,6 MB** / 2,7 s. Run completo com `--text`: **~1,0 s**. Cache em `_edgar/` — TTL **1 dia** para filings (um 8-K novo não pode esperar um mês para aparecer) e **30 dias** para companyfacts.
+- **`--facts` é opt-in** — 5,6 MB é demasiado para o caminho agendado sem motivo; usar quando se quiser cruzar os números do yfinance com os que a empresa **de facto arquivou**.
+- **Fronteira ground-truth (não há excepção nova)**: os **XBRL facts são números estruturados vindos de um helper Python** → válidos como ground truth. O **texto** do filing é narrativa e **nunca** é lido para extrair números — exactamente a mesma regra da Phase 4.
+- **Bloco no report**: "Latest official filings" com form, data, período e link directo. Os **items do 8-K são traduzidos para catalisadores** (`2.02` = earnings release, `5.02` = saída/entrada de administrador, `4.01` = mudança de auditor). **`4.02` = *PRIOR FINANCIALS NOT RELIABLE*** — é o pior sinal que o EDGAR carrega e tem de aparecer com destaque, nunca como uma linha discreta.
+- **`--text` alimenta `{QUARTERLY_NARRATIVE}` / `{ANNUAL_NARRATIVE}` da Phase 2.5** para nomes US, substituindo o blurb de ~1500 chars do yfinance pelo MD&A verdadeiro (extracção limitada a 12 000 chars, secção localizada por heading).
+- **Degradação honesta, toda testada**: não-US → `available: false` sem rede · ticker sem CIK → razão explícita · **foreign private issuer** (ADR que arquiva 20-F/40-F, p. ex. `NVO`) → `available: true` com `filings: []` e nota a dizer porquê, **não** um erro · rede morta → nunca levanta excepção, exit 0.
+
 ### Phase 4 — Find official reports (narrative-only WebFetch OK here)
 
 ```bash
@@ -597,13 +620,20 @@ Output JSON com URLs oficiais:
 
 Para **deep-dive**: depois disto usa WebFetch sobre `annual_url` e `quarterly_url` para extrair **narrativa** (tese management, strategic priorities, riscos materiais, guidance). Os textos fetched aqui alimentam `{ANNUAL_NARRATIVE}` e `{QUARTERLY_NARRATIVE}` em Phase 2.5. **Não** extraias números daí — os números já vêm da Phase 2.
 
-**v2.1 narrative fallback** — SEC EDGAR routinely returns 403 to WebFetch (rate-limit / UA gate) and other filing aggregators are inconsistent. Before WebFetch attempts, run:
+**v2.1 narrative fallback** — para nomes **não-US** (e como rede de segurança em qualquer nome), corre primeiro:
 
 ```bash
 python "%SCRIPTS%\get_narrative.py" --ticker NVDA --max-news 5
 ```
 
-Returns a JSON dict with `business_summary` (yfinance `longBusinessSummary`, ~1500 chars MD&A-equivalent), `recent_news` (yfinance `Ticker.news`), `ir_url`, `stockanalysis_fundamentals_url`, and a `narrative_quality` grade (`good` / `partial` / `degraded`). Use the combined `business_summary + recent_news` content as the `{ANNUAL_NARRATIVE}` substitution. If quality is `good` or `partial`, you can skip WebFetch entirely. If `degraded`, then try WebFetch on `annual_url` / `ir_page_url` from `find_reports.py` (avoid SEC EDGAR direct URLs — they 403). Degraded final state → §2.7 / §2.8 carry the `⚠️ Official report narrative unavailable` note and Phase 2.5 prompts label inferred claims accordingly. **Always copy the final grade into report frontmatter as `narrative_quality`** (after any WebFetch upgrade attempt — record what the report was actually written from), so degraded narratives are visible without opening the report.
+Returns a JSON dict with `business_summary` (yfinance `longBusinessSummary`, ~1500 chars MD&A-equivalent), `recent_news` (yfinance `Ticker.news`), `ir_url`, `stockanalysis_fundamentals_url`, and a `narrative_quality` grade (`good` / `partial` / `degraded`). Use the combined `business_summary + recent_news` content as the `{ANNUAL_NARRATIVE}` substitution. If quality is `good` or `partial`, you can skip WebFetch entirely. If `degraded`, try WebFetch on `annual_url` / `ir_page_url` from `find_reports.py`. Degraded final state → §2.7 / §2.8 carry the `⚠️ Official report narrative unavailable` note and Phase 2.5 prompts label inferred claims accordingly. **Always copy the final grade into report frontmatter as `narrative_quality`** (after any WebFetch upgrade attempt — record what the report was actually written from), so degraded narratives are visible without opening the report.
+
+> **v4.3 — a instrução "evita o SEC EDGAR, dá 403" foi REMOVIDA daqui, e deliberadamente.**
+> O 403 nunca foi um bloqueio: é a política declarada da SEC de recusar pedidos sem um
+> User-Agent que identifique quem chama. **Medido 2026-08-15**: sem User-Agent → 403; com
+> User-Agent → 200, nos três endpoints. Para **nomes US o EDGAR é agora a fonte preferida**
+> de narrativa (Phase 1.5 abaixo) e o `get_narrative.py` passa a ser o fallback, não o
+> caminho principal — um 10-Q real vale muito mais do que um blurb de 1500 chars do yfinance.
 
 ### Phase 5 — Write the report
 
