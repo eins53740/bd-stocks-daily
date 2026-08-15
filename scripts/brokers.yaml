@@ -8,9 +8,27 @@
 # broker's live fee page before acting. This file needs a PERIODIC MANUAL
 # REFRESH. Last full review: 2026-06.
 #
-# Scope: exactly the 9 brokers the user actually holds:
+# Scope (v4.3 wave 4.5): 10 brokers — the 9 held plus Bankinter:
 #   IBKR, DEGIRO, Trade Republic, Robinhood, Revolut, XTB,
-#   Banco BIG, Banco CTT, Banco BEST.
+#   Banco BIG, Banco CTT, Banco BEST, Bankinter,
+#   plus eToro and Trading212 as SCHEMA-ONLY entrants (see below).
+#
+# ---------------------------------------------------------------------------
+# WHY SOME ENTRIES CARRY NO NUMBERS (v4.3 wave 4.5)
+# Three brokers were added to the comparator this wave: eToro, Trading 212 and
+# Bankinter. Their tariffs were NOT invented. A fabricated commission in a file
+# the owner uses to decide where to place real money is worse than an obvious
+# gap, so each carries `verified: false`, an empty `markets:` map and a
+# `pending_verification` list naming exactly what has to be filled in and from
+# where. `broker_compare.py` excludes an unverified broker from every cost
+# matrix and reports it separately, so it can never win a "cheapest" row on
+# numbers nobody checked.
+#
+# The STATUTORY fields below (investor compensation, deposit-guarantee
+# treatment of cash) are a different class of fact: they come from law, not
+# from a tariff sheet, they change on a scale of years, and they are stated
+# with their scheme name. They are filled in.
+# ---------------------------------------------------------------------------
 #
 # Schema (per broker):
 #   name:              display name
@@ -19,6 +37,14 @@
 #   fx_fee_pct:        cost to convert EUR->local for a non-base-currency trade
 #                      (percentage of traded notional, charged once per leg)
 #   custody_fee:       free-text custody / inactivity note (annualised, not per-trade)
+#   verified:          false => tariffs unconfirmed; excluded from cost matrices
+#   cash_interest:     interest paid on UNINVESTED cash (free text + as_of)
+#   investor_compensation: statutory investor-compensation scheme + cover
+#   cash_protection_100k:  is EUR 100k of CASH protected on insolvency, and HOW —
+#                      deposit guarantee (cash held as a deposit at a credit
+#                      institution) vs segregated client money (not a deposit)
+#   dividend_handling: how dividends arrive (auto-credit, FX applied, fees)
+#   fx_spread_note:    the spread ON TOP of any quoted fx_fee_pct
 #   markets:           map of MARKET_KEY -> per-market fee block, OR absent =>
 #                      broker does NOT offer that market (excluded from compare)
 #
@@ -444,6 +470,79 @@ brokers:
       # NOTE: Banco BEST does NOT offer Asian markets (TW/HK/JP/CN_SZ) to retail.
 
 # Market display metadata (for the dashboard + summaries).
+  # ---------------------------------------------------------------------------
+  # v4.3 wave 4.5 — SCHEMA-ONLY entrants. `verified: false` keeps them out of every
+  # cost matrix until a human fills the tariffs in from the live fee page. The
+  # statutory fields are filled because they come from law, not from a tariff.
+  Bankinter:
+    name: "Bankinter"
+    profile: "Portuguese/Spanish retail bank brokerage; branch-grade service, bank pricing."
+    base_currency: "EUR"
+    fx_fee_pct: null
+    custody_fee: "Custody fee applies on securities accounts — value NOT verified."
+    verified: false
+    pending_verification: "commission_pct / commission_min per market (PT, ES, US) — Bankinter tarifario · custody fee schedule and any minimum per semester · fx conversion spread on non-EUR settlement"
+    cash_interest: "Not verified. Bank current-account rates apply, typically near zero."
+    investor_compensation:
+      scheme: "Sistema de Indemnização aos Investidores (CMVM, PT) / FOGAIN (ES)"
+      cover_eur: 25000
+      note: "Statutory investor-compensation cover for SECURITIES, per investor."
+      as_of: "2026-08"
+    cash_protection_100k:
+      protected: true
+      mechanism: "deposit guarantee"
+      note: "Cash held at a credit institution is a DEPOSIT, covered by the deposit-guarantee scheme to EUR 100,000 per depositor per institution — a different and stronger route than segregated client money."
+      as_of: "2026-08"
+    dividend_handling: "Not verified."
+    fx_spread_note: "Not verified."
+    markets: {}
+
+  eToro:
+    name: "eToro"
+    profile: "Social/CFD-first platform; real-stock offering with FX-heavy USD base."
+    base_currency: "USD"
+    fx_fee_pct: null
+    custody_fee: "No custody fee; INACTIVITY fee applies after 12 months — value NOT verified."
+    verified: false
+    pending_verification: "per-market commission (eToro advertises 0% commission on real stocks — CONFIRM, and confirm what replaces it) · USD conversion fee on EUR deposits and withdrawals (the real cost centre for a EUR investor) · withdrawal fee · inactivity fee amount and trigger"
+    cash_interest: "Not verified."
+    investor_compensation:
+      scheme: "Depends on the contracting entity (eToro (Europe) Ltd, CySEC — ICF)"
+      cover_eur: 20000
+      note: "Cyprus Investor Compensation Fund cover where the client contracts with the CySEC entity. CONFIRM the entity on the account."
+      as_of: "2026-08"
+    cash_protection_100k:
+      protected: false
+      mechanism: "segregated client money"
+      note: "Client money is segregated, NOT a bank deposit — the EUR 100,000 deposit guarantee does not apply. Cover falls back to the investor-compensation scheme above."
+      as_of: "2026-08"
+    dividend_handling: "Not verified."
+    fx_spread_note: "USD base with a EUR funding source means an FX leg on every deposit, trade and withdrawal — NOT verified, and likely the dominant cost."
+    markets: {}
+
+  Trading212:
+    name: "Trading 212"
+    profile: "Zero-commission retail broker; revenue from FX and spread."
+    base_currency: "EUR"
+    fx_fee_pct: null
+    custody_fee: "No custody fee advertised — NOT verified."
+    verified: false
+    pending_verification: "FX conversion fee percentage (the headline cost on a zero-commission broker) · which markets are actually offered to a PT resident · interest paid on uninvested cash and on what balance · any deposit fee above a monthly threshold"
+    cash_interest: "Advertised on uninvested cash — rate and cap NOT verified."
+    investor_compensation:
+      scheme: "Depends on the contracting entity (Trading 212 Markets Ltd, CySEC — ICF; or UK entity, FSCS)"
+      cover_eur: 20000
+      note: "CONFIRM the contracting entity: cover and the regulator differ between the CySEC and FCA entities."
+      as_of: "2026-08"
+    cash_protection_100k:
+      protected: false
+      mechanism: "segregated client money (partly placed in qualifying money-market funds)"
+      note: "Not a bank deposit, so the EUR 100,000 deposit guarantee does not apply. Where cash is swept into a money-market fund it is an investment, not cash."
+      as_of: "2026-08"
+    dividend_handling: "Not verified."
+    fx_spread_note: "Zero commission means the FX leg IS the price. Unverified and material."
+    markets: {}
+
 markets_meta:
   US:    { label: "NYSE / Nasdaq (US)", currency: "USD", region: "US" }
   IE:    { label: "Euronext Dublin / ISEQ (Ireland)", currency: "EUR", region: "IE" }
@@ -452,3 +551,9 @@ markets_meta:
   HK:    { label: "Hong Kong Stock Exchange", currency: "HKD", region: "HK" }
   JP:    { label: "Tokyo Stock Exchange (Japan)", currency: "JPY", region: "JP" }
   CN_SZ: { label: "Shenzhen Stock Exchange", currency: "CNY", region: "CN" }
+  # v4.3 wave 4.5 — the four EU venues most of the universe actually trades on were
+  # missing entirely, so `.AS/.PA/.DE/.L` names had no cost comparison at all.
+  NL:    { label: "Euronext Amsterdam (.AS)", currency: "EUR", region: "NL" }
+  FR:    { label: "Euronext Paris (.PA)", currency: "EUR", region: "FR" }
+  DE:    { label: "Xetra (.DE)", currency: "EUR", region: "DE" }
+  UK:    { label: "London Stock Exchange (.L)", currency: "GBP", region: "UK" }

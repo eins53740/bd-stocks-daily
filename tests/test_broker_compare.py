@@ -14,11 +14,14 @@ All pure-function, network-free. Exercises:
 from __future__ import annotations
 
 import sys
+
+import pytest
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import broker_compare as bc  # noqa: E402
 from broker_compare import (  # noqa: E402
     MARKET_ORDER,
     brokers_for_market,
@@ -147,12 +150,17 @@ def test_recommendation_flip_small_vs_large():
 
 
 # --------------------------------------------------- real brokers.yaml
-def test_yaml_parses_nine_brokers():
+def test_yaml_parses_every_broker_including_the_unverified_ones():
     data = load_brokers_yaml(YAML_PATH)
     brokers = data["brokers"]
-    assert len(brokers) == 9
+    # v4.3 wave 4.5 added Bankinter, eToro and Trading 212. They parse like any other
+    # broker and are then EXCLUDED from the cost matrices by `verified: false` — see
+    # test_unverified_brokers_never_enter_a_cost_matrix.
+    assert len(brokers) == 12
+    assert sum(1 for b in brokers.values() if b.get("verified") is False) == 3
     expected = {"IBKR", "DEGIRO", "TradeRepublic", "Robinhood", "Revolut",
-                "XTB", "BancoBIG", "BancoCTT", "BancoBEST"}
+                "XTB", "BancoBIG", "BancoCTT", "BancoBEST",
+                "Bankinter", "eToro", "Trading212"}
     assert set(brokers) == expected
 
 
@@ -178,7 +186,7 @@ def test_banco_brokers_absent_from_asia():
 def test_build_bundle_shape_and_recommendations():
     data = load_brokers_yaml(YAML_PATH)
     bundle = build_bundle(data)
-    assert bundle["n_brokers"] == 9
+    assert bundle["n_brokers"] == 12
     assert len(bundle["markets"]) == len(MARKET_ORDER)
     us = next(m for m in bundle["markets"] if m["key"] == "US")
     # every applicable broker on US should have a recommendation
@@ -190,3 +198,62 @@ def test_build_bundle_shape_and_recommendations():
     assert "IBKR" in tw_ids
     assert not (tw_ids & {"Robinhood", "BancoBIG", "BancoCTT", "BancoBEST",
                           "TradeRepublic", "Revolut", "XTB", "DEGIRO"})
+
+
+# ===================================================================
+# v4.3 wave 4.5 — the new brokers, markets and structural dimensions
+# ===================================================================
+class TestWave45:
+    @pytest.fixture(scope="class")
+    def bundle(self):
+        return bc.build_bundle(load_brokers_yaml(YAML_PATH))
+
+    def test_unverified_brokers_never_enter_a_cost_matrix(self, bundle):
+        """A broker with unconfirmed tariffs and an empty fee map would win every
+        'cheapest' row on numbers nobody checked — the worst failure available in a file
+        used to decide where to place real money."""
+        unverified = {u["id"] for u in bundle["unverified"]}
+        assert unverified == {"Bankinter", "eToro", "Trading212"}
+        for market in bundle["markets"]:
+            assert not (unverified & {r["broker"] for r in market["rows"]})
+
+    def test_an_unverified_broker_says_what_is_missing(self, bundle):
+        for u in bundle["unverified"]:
+            assert u["pending_verification"], f"{u['id']} claims nothing to verify"
+
+    def test_the_four_eu_venues_exist_as_market_keys(self, bundle):
+        keys = {m["key"] for m in bundle["markets"]}
+        assert {"NL", "FR", "DE", "UK"} <= keys
+
+    def test_an_empty_market_is_reported_as_a_gap_not_as_no_brokers(self, bundle):
+        for market in bundle["markets"]:
+            if market["n_brokers"] == 0:
+                assert market["gap_note"] and "verified tariff" in market["gap_note"]
+            else:
+                assert market["gap_note"] is None
+
+    def test_structural_fields_are_reported_for_every_broker(self, bundle):
+        for bid, prof in bundle["broker_profiles"].items():
+            for field in bc.STRUCTURAL_FIELDS:
+                assert field in prof, f"{bid} missing {field}"
+
+    def test_cash_protection_distinguishes_a_deposit_from_client_money(self, bundle):
+        """The EUR 100k question turns on WHICH mechanism holds the cash, and the two
+        differ sharply between a bank and a broker."""
+        bank = bundle["broker_profiles"]["Bankinter"]["cash_protection_100k"]
+        broker = bundle["broker_profiles"]["eToro"]["cash_protection_100k"]
+        assert bank["protected"] is True and bank["mechanism"] == "deposit guarantee"
+        assert broker["protected"] is False
+        assert "not a bank deposit" in broker["note"].lower()
+
+    def test_investor_compensation_names_its_scheme(self, bundle):
+        for bid in ("Bankinter", "eToro", "Trading212"):
+            ic = bundle["broker_profiles"][bid]["investor_compensation"]
+            assert ic["scheme"] and ic["cover_eur"] and ic["as_of"]
+
+    def test_the_requested_trade_sizes_are_declared(self):
+        assert bc.TRADE_SIZES_EUR == [500.0, 1500.0, 2000.0]
+
+    def test_the_bundle_explains_the_structural_fields(self, bundle):
+        assert "deposit guarantee" in bundle["structural_note"]
+        assert "not tariffs" in bundle["structural_note"]

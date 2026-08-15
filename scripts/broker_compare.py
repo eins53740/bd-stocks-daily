@@ -62,9 +62,19 @@ OUT_JSON = ROOT / "_brokers.json"
 # Representative trade sizes in EUR (documented in the module docstring).
 SMALL_EUR = 1_000.0
 LARGE_EUR = 25_000.0
+# v4.3 wave 4.5 asks for $500 / $2,000 / EUR 1,500. The comparator works in EUR, so the
+# USD legs are carried as their own row rather than silently converted at a rate that
+# would be stale by the time anyone read the table.
+TRADE_SIZES_EUR = [500.0, 1_500.0, 2_000.0]
 
-# The seven example markets the spec asks for, in display order.
-MARKET_ORDER = ["US", "IE", "PT", "TW", "HK", "JP", "CN_SZ"]
+# Display order. The four EU venues were added in v4.3 wave 4.5: most of the universe
+# trades on .AS/.PA/.DE/.L and none of them had a cost comparison at all.
+MARKET_ORDER = ["US", "IE", "PT", "NL", "FR", "DE", "UK", "TW", "HK", "JP", "CN_SZ"]
+
+# Fields that are statutory or structural rather than tariff, so they are reported for
+# every broker including the unverified ones.
+STRUCTURAL_FIELDS = ("cash_interest", "investor_compensation", "cash_protection_100k",
+                     "dividend_handling", "fx_spread_note")
 
 
 def log(msg: str) -> None:
@@ -115,10 +125,26 @@ def brokers_for_market(brokers: dict, market_key: str) -> list[str]:
     logic the tests assert (a PT-only broker must not surface for Taiwan)."""
     out = []
     for bid, b in brokers.items():
-        markets = (b or {}).get("markets") or {}
+        b = b or {}
+        # `verified: false` means the tariffs were never confirmed. Such a broker must
+        # never appear in a cost matrix, because with empty or partial fees it would win
+        # the "cheapest" row on numbers nobody checked — the worst possible failure for a
+        # file the owner uses to decide where to place real money.
+        if b.get("verified") is False:
+            continue
+        markets = b.get("markets") or {}
         if market_key in markets:
             out.append(bid)
     return out
+
+
+def unverified_brokers(brokers: dict) -> list:
+    """Brokers excluded from every cost matrix, with what has to be filled in."""
+    return [{"id": bid, "name": (b or {}).get("name") or bid,
+             "profile": (b or {}).get("profile"),
+             "pending_verification": (b or {}).get("pending_verification") or [],
+             **{k: (b or {}).get(k) for k in STRUCTURAL_FIELDS}}
+            for bid, b in brokers.items() if (b or {}).get("verified") is False]
 
 
 def cost_matrix_for_market(
@@ -328,6 +354,15 @@ def build_bundle(data: dict, small_eur: float = SMALL_EUR, large_eur: float = LA
             "n_brokers": len(rows),
             "rows": rows,
             "recommendation": recommend(rows),
+            # A market with no rows is a COVERAGE GAP, not an absence of brokers. The four
+            # EU venues added in v4.3 wave 4.5 are exactly this: the keys exist, most of
+            # the universe trades there, and no broker in this file yet carries a verified
+            # tariff for them. Saying so beats copying a neighbouring venue's numbers and
+            # calling it coverage.
+            "gap_note": (None if rows else
+                         f"no broker in this file carries a verified tariff for {mk} — "
+                         f"the market key exists so the gap is visible; fill the fee "
+                         f"blocks from each broker's live schedule before comparing"),
         })
 
     return {
@@ -338,11 +373,22 @@ def build_bundle(data: dict, small_eur: float = SMALL_EUR, large_eur: float = LA
         "broker_profiles": {
             bid: {"name": b.get("name") or bid, "profile": b.get("profile"),
                   "base_currency": b.get("base_currency"), "fx_fee_pct": b.get("fx_fee_pct"),
-                  "custody_fee": b.get("custody_fee")}
+                  "custody_fee": b.get("custody_fee"),
+                  "verified": b.get("verified") is not False,
+                  **{k: b.get(k) for k in STRUCTURAL_FIELDS}}
             for bid, b in brokers.items()
         },
+        "unverified": unverified_brokers(brokers),
         "support_matrix": support_matrix(brokers, MARKET_ORDER),
         "markets": markets_out,
+        "structural_note": (
+            "cash_interest / investor_compensation / cash_protection_100k / "
+            "dividend_handling / fx_spread_note are reported for EVERY broker, including "
+            "unverified ones: they are statutory or structural facts, not tariffs. Note "
+            "the distinction cash_protection_100k draws — cash held as a DEPOSIT at a "
+            "credit institution carries the EUR 100,000 deposit guarantee, while "
+            "segregated client money does not and falls back to the investor-compensation "
+            "scheme."),
         "caveat": ("Fee schedules change often and many figures are estimates "
                    "(approx). Verify on the broker's live tariff page before acting. "
                    "Recurring custody/market-data/dividend fees are reported as "
