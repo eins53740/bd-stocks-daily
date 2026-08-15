@@ -42,6 +42,10 @@ def _sibling(mod_name):
 
 
 glossary = _sibling("metrics_glossary")
+# Pure function of the analysis JSON, so it is COMPUTED here rather than persisted. A
+# stored star could disagree with the published bands after a band change; a computed one
+# cannot. `star_ratings.py` also has a CLI, so any other consumer gets the same numbers.
+star_ratings = _sibling("star_ratings")
 # Pure stdlib, like this module — see mermaid_render's docstring for why it does not
 # import chart_theme (and therefore matplotlib) to get its ink.
 mermaid_render = _sibling("mermaid_render")
@@ -791,6 +795,38 @@ def build_peers(data):
     return _card("Peer comparison", f"<table>{header}{''.join(rows)}</table>", "peer")
 
 
+def build_stars(data: dict) -> str:
+    """The ⭐ quality card — five dimensions, 1-5 stars, from published bands.
+
+    Deterministic Python end to end (`docs/STAR_RATINGS.md` is the contract), overlay-only:
+    no star touches the composite or the verdict. A dimension with too little data renders
+    **n/a**, never one star — absence and a damning judgement must not look the same.
+    """
+    res = star_ratings.compute(data or {})
+    dims = res.get("dimensions") or {}
+    if not res.get("rated_dimensions"):
+        return ""
+    rows = []
+    for key, _label, _fn in star_ratings.DIMENSIONS:
+        d = dims.get(key) or {}
+        n = d.get("stars")
+        glyphs = star_ratings.render_stars(n)
+        cls = "stars-na" if n is None else "stars-on"
+        note = "" if n is not None else '<span class="sub"> — insufficient data</span>'
+        rows.append(f'<tr><td class="sname">{esc(d.get("label") or key)}</td>'
+                    f'<td class="{cls}">{esc(glyphs)}</td>'
+                    f'<td class="num sub">{d.get("coverage", 0):.0%} coverage{note}</td></tr>')
+    overall = res.get("overall")
+    head = (f'<div class="stars-overall">Overall <b>{overall}</b>/5 '
+            f'<span class="sub">across {res["rated_dimensions"]} rated dimensions</span></div>'
+            if overall is not None else
+            '<p class="sub">Fewer than three dimensions could be rated — no overall shown.</p>')
+    note = ('<p class="sub">Computed from the bands published in <code>docs/STAR_RATINGS.md</code>. '
+            'Qualitative overlay — <b>no star enters the composite or the verdict</b>.</p>')
+    return _card("⭐ Quality ratings", f'{head}<table class="stars">{"".join(rows)}</table>{note}',
+                 "stars", new="v4.3")
+
+
 _LEAN_CLASS = {"BULL": "bull", "BEAR": "bear", "EQUILIBRADO": "even"}
 
 
@@ -1031,9 +1067,9 @@ def build_footer(data, fm):
             f'· host: {esc(run_host())}</footer>')
 
 
-NAV_ITEMS = [("tldr", "TL;DR"), ("duel", "Bull vs Bear"), ("exit", "Exit Plan"),
-             ("val", "Valuation"),
-             ("metrics", "Metric families"), ("flags", "Red Flags"),
+NAV_ITEMS = [("tldr", "TL;DR"), ("duel", "Bull vs Bear"), ("stars", "⭐ Ratings"),
+             ("exit", "Exit Plan"),
+             ("val", "Valuation"), ("metrics", "Metric families"), ("flags", "Red Flags"),
              ("ret", "Return profile"), ("op", "Opinion panel"), ("news", "News & sentiment"),
              ("peer", "Peers"), ("swot", "SWOT"), ("sankey", "Money engine"),
              ("charts", "Charts")]
@@ -1060,6 +1096,9 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     duel = build_thesis_duel(body)
     if duel:
         cards.append(duel)
+    stars = build_stars(data)
+    if stars:
+        cards.append(stars)
     for fn in (build_exit, build_valuation, build_metric_families, build_redflags,
                build_return_profile, build_opinion, build_news_sentiment, build_peers):
         html_ = fn(data)
