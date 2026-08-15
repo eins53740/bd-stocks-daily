@@ -94,6 +94,46 @@ Verified 2026-07-31 by reproducing the timeout with a 25–30 s copy of the bat:
 fix, exit 1 + a `claude` orphan alive 5 minutes later + an unappendable log; after, exit
 124, no survivors, and the status lines land.
 
+## Growth-skill cadence — decision note (v4.3 §4.4, 2026-08-15)
+
+**Question**: `StocksGrowth` runs daily at 12:45. Keep it daily, or drop to 2–3×/week given
+the hyper-growth pool is 46 names?
+
+**Recommendation: keep it daily for now, and revisit when the first pass closes.**
+
+The measurement that decides it — `_growth_log.csv`, 2026-06-09 → 2026-08-14:
+
+| | |
+|---|---|
+| runs | 15 distinct days |
+| names evaluated | **71**, and **zero repeats** |
+| per run | 3–4 (one 23-name backfill day) |
+| pool | **46** names tagged `hyper_growth` in `_prefiltered.yaml`; **178** in the raw `_universe.yaml` |
+
+**Zero repeats in 71 evaluations is the whole answer.** The job is still on its *first pass*
+through the hyper-growth slice — it has never yet re-evaluated a name, so the dedupe window
+has not begun to bind. First-pass discovery is the highest-value phase of this skill's life,
+and cutting the cadence now would slow the only thing it is currently doing.
+
+At 3–4 names per run and ~5 runs a week, the 46-name prefiltered pool covers in ~2.5 weeks;
+the job has evidently been drawing from the wider 178-name universe slice, which takes
+~9–12 weeks. **The trigger to revisit is the first repeat appearing in `_growth_log.csv`** —
+at that point the job is re-evaluating rather than discovering, and 2–3×/week delivers the
+same coverage for 40–60 % of the cost.
+
+**What does *not* argue for cutting it**: the 2026-08-15 collision with `StocksDaily`. That
+was a missed-task catch-up burst running both jobs in the same minute, and it is fixed
+properly by `job_lock.ps1` (wave 0). Reducing the cadence to dodge a race would have been
+treating the symptom.
+
+**Cost note**: the growth job never emails (guarded) and finishes ~16 min, well inside its
+1500 s ceiling, so it does not compete with the digest for the 30-minute budget as long as
+the lock holds the ordering.
+
+*Owner's call recorded: keep daily. Re-open when `_growth_log.csv` shows its first repeated
+ticker.*
+
+
 ## Traps
 
 - **`run_hidden.vbs` launches the bat non-waiting** (`.Run(..., 0, False)`), so wscript

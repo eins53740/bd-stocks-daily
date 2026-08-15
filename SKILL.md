@@ -1,7 +1,7 @@
 ---
 name: bd-stocks-daily
 description: Daily stock evaluation — picks 3 tickers (1 deep + 2 screens, 1 of them from a non-USA market) from the pre-filtered pool, applies Quality Compounder 7-gates, Piotroski/Altman, peer comparison, management quality score (LLM), industry context (cached per sector), 3-layer risk audit, bear case, computes 0-10 composite score (v2 weights), and writes tiered reports (5min TL;DR / 30min deep) to C:\BD_Obsidian\Personal\Finance\StocksDaily\. Run via Task Scheduler daily 13:30.
-argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
+argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] [--add-ticker SYMBOL] [--list-pending] — optional overrides for manual runs"
 ---
 
 # Daily Stock Evaluation (v4.2 — scoring schema 2.2)
@@ -1531,6 +1531,33 @@ Cost: ~${X}.
 
 - `/bd-stocks-daily --ticker NVDA --mode deep` → força deep-dive dum ticker específico (skip `pick_candidates.py`). Útil para testar ou avaliar on-demand.
 - `/bd-stocks-daily --ticker NVDA --mode deep --dry-run` → escreve output em `OUT_DIR\_dry\` em vez do destino normal, pula Phase 6 (`_log.csv` intacto) e Phase 7 (no email). Usar para smoke-test após alterações ao skill.
+
+### Administração do pool (v4.3 wave 4.2)
+
+Estes dois argumentos **não correm o pipeline** — despacham para `universe_admin.py` e saem.
+Nenhum deles toca em `_log.csv`, em reports, ou em qualquer número que chegue a um relatório.
+
+- `/bd-stocks-daily --add-ticker ADYEN.AS [--region NL] [--sector Technology] [--size big] [--note "..."]`
+  → valida o símbolo no yfinance, rejeita duplicados contra `_universe.yaml`,
+  `_prefiltered.yaml`, `_universe_pending.yaml`, `_universe_paused.yaml` e
+  `_universe_retry.yaml`, e acrescenta a `_universe_pending.yaml`. O prefilter de segunda
+  valida-o e — desde a **R3** — promove-o para `_universe.yaml`, que é o que faz a adição
+  sobreviver a mais do que uma segunda-feira.
+  ```bash
+  python "%SCRIPTS%\universe_admin.py" --add-ticker ADYEN.AS --region NL --sector Technology --note "Payments"
+  ```
+  Uma falha de rede **não** é prova de que o símbolo não existe: a razão vem etiquetada
+  (`could not verify (...)` vs `yfinance returned no price`) para se distinguir uma da outra.
+  `--no-validate` salta a verificação (uso offline).
+
+- `/bd-stocks-daily --list-pending` → três baldes, deliberadamente separados porque exigem
+  acções diferentes: **pending entrants** (esperam a segunda-feira), **never evaluated**
+  (estão no universo e nunca tiveram linha no `_log.csv` — medido a 2026-08-15: **1441 de
+  1720**), e **shortlist expired** (passaram os 90 dias de validade; a data é *lida* da
+  coluna `Expires`, nunca recalculada, para não existirem duas definições de "expirado").
+  ```bash
+  python "%SCRIPTS%\universe_admin.py" --list-pending
+  ```
 
 ## Migration notes (v1 → v2)
 
