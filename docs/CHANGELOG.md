@@ -30,7 +30,7 @@ face of every report.
 
 ---
 
-## v4.3 — *in progress*
+## v4.3 — 2026-08-15 · tag `v4.3` · schema 2.2 · **1516 tests**
 
 Wave-based upgrade. See `~/.claude/plans/` for the master plan. Waves land one at a time.
 
@@ -539,6 +539,76 @@ value on some filers, which would silently re-rate 40+ reports through the red-f
 sub-scores if fixed casually.
 
 **Tests**: 1397 passed, 1 skipped (from 1268 at Wave 2 close) — +129.
+
+---
+
+### Wave 4 — new surfaces (2026-08-15)
+
+**§4.0 `docs/PORTFOLIO_DATAFLOW.md`** — the prerequisite for the monitor skill, verified
+from the live code, the live Task Scheduler and the run logs. The chain works: wages →
+audit → report → BankBD import; last run 231 payslip values agreeing and 0 differing,
+1041 snapshots imported, exit 0; all ten finance tasks `Ready`.
+
+Two plan premises corrected by reading the code: the **BankBD importer was never broken**
+(it resolves by header, Trading212/eToro/CGD are mapped, the unmapped check is
+bidirectional) — what is missing is one reconciliation assert, ~1 h; and **"automate bank
+cash" tops out at 10 of 17 live columns**, with PSD2 consents expiring ~90 days. The real
+gap is position lots: nothing writes back to `Accoes (BD)`, and `workbook.read()` is
+hard-wired to the `Dados` sheet.
+
+**§4.1 `/bd-stocks-monitor`** — the four guardrails existed only as prose, so a P/E of 140
+on a holding broke a rule nobody evaluated. `monitor_alerts.py` makes each a pure function
+with `computable` on every alert. `recommendation_ledger.py` scores the skill's own calls
+off `price_at_eval`.
+
+The first live ledger run was **wrong**, and the correction is the interesting part: it
+printed a mean of **+601 %** for `invest` against a **+4.63 %** median, and every outlier
+was a London name — `_log.csv` stores GBP while yfinance answers in GBp. The same pence
+defect that printed RIO.L at 280× book in wave 3.5, from the other direction. Fixed twice
+over: the fetcher normalises, *and* a guard excludes any |return| over 500 % as a unit
+mismatch, because no price source is trustworthy enough to skip it.
+
+**The corrected answer**: 378 of 384 calls scored, `invest` median **+4.63 %**, `reject`
+median **−1.34 %**, spread **+5.97 pp**, and `reject` beat the benchmark only **29 %** of
+the time against ~48–50 % elsewhere. The composite discriminates, mostly on the downside.
+
+**§4.2 `universe_admin.py`** — `--add-ticker` and `--list-pending`, shipped **with**
+roadmap **R3** rather than before it: the prefilter wiped pending every run and never wrote
+`_universe.yaml`, so a seeded ticker was evaluated once and vanished. First real answer:
+**1441 of 1720** universe names have never had a `_log.csv` row.
+
+**§4.3 `screeners.yaml`** — nine declarative screens replacing browser-localStorage
+presets, plus the full metric set on the screener rows. The three genuinely missing
+metrics: EBITDA margin (derived), cash-flow/EBITDA (from `statements_raw`), and the
+"P/E TTM" question — **measured, and they are the same number**, so the screener ships
+`pe` and `forward_pe` rather than one figure under two headings.
+
+**§4.4** — growth cadence: **keep it daily**. 71 names across 15 runs with **zero repeats**
+means the job is still on its first pass. The trigger to revisit is the first repeated
+ticker, not a calendar date.
+
+**§4.5 brokers** — 4 EU venues added (`.AS/.PA/.DE/.L` had no cost comparison at all) and
+3 entrants (Bankinter, eToro, Trading 212) whose **tariffs were not invented**: they carry
+`verified: false`, are excluded from every cost matrix, and name what must be filled in.
+What *is* filled in is the statutory layer, which answers the plan's actual question —
+cash at a credit institution is a **deposit** covered to €100,000; segregated client money
+at a broker is **not**, and falls back to a €20–25k investor-compensation scheme.
+
+**Tests**: 1506 passed, 1 skipped — +109.
+
+### Wave 5 — packaging (2026-08-15, indirection only)
+
+`skills_root.py` resolves `%BD_SKILLS_ROOT%` → its own location → the current absolute
+path. **The third rule is the point**: unconfigured, everything resolves exactly where it
+did before, which is what makes this safe to land ahead of the cutover. The three runtime
+coupling points (`run_prefilter` imports `analyze_ticker` in-process, `growth_analyze`
+shells out to it, `pick_earnings_review_targets` imports `listings.REGISTRY`) now resolve
+through it. `bd-finance/.claude-plugin/` declares v4.3.0 and all eight skills.
+
+**Not done, deliberately**: moving the skills, re-pointing the bats, re-registering any of
+the ten live tasks. See `docs/PACKAGING.md` for the five-step cutover.
+
+**Tests**: 1516 passed, 1 skipped — +10.
 
 ---
 

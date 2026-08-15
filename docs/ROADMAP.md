@@ -36,37 +36,13 @@ three gauges are WebFetch-sourced and no source is pinned in `macro_daily.md`.
   source must never blank the section, and **"not available" always beats an
   estimate**.
 
-### R3. Prefilter never re-validates what it promoted — **M**
-
-Two halves of the same hole, both verified 2026-07-30:
-
-1. `run_prefilter.py` **clears `_universe_pending.yaml`** after every run
-   (line 451) and **never writes `_universe.yaml`** (only reads it, line 152). A
-   ticker seeded via pending therefore gets exactly **one** evaluation, ever.
-2. `build_work_list()` reads universe + pending + retry only, so a name sitting in
-   `_prefiltered.yaml` but absent from `_universe.yaml` is **never re-checked and
-   never droppable** — it coasts in the pool indefinitely on a stale verdict.
-
-Twelve names were in exactly that state on 2026-07-30 (`MRVL, DELL, UBER, NUE,
-UMC, GFS, HPE, LDO.MI, SAAB-B.ST, MRLN, 2026.HK, 066570.KS`) and were repaired by
-hand-adding them to `_universe.yaml`. The mechanism that created the drift is
-untouched.
-
-- **Plan**: merge passing pending entrants into `_universe.yaml` at the end of a
-  run, and/or fold `_prefiltered.yaml` members into the work list so every pool
-  member is re-validated.
-- **Watch out**: raising the work-list size raises the run's API budget; the
-  prefilter already runs a 2 h timeout.
-
-*(R4 removed 2026-08-15 — **shipped** by the v4.3 §3.1 audit. `venue_mismatch()` resolves
-the Twelve Data venue and the ticker's own venue to canonical tokens; a gap between two
-different venues is recorded under `venue_notes` and excluded from `agree`, so a
-cross-venue quote can no longer be published as a yfinance data error. An unrecognised
-venue on either side stays silent rather than manufacturing a false flag. See
-`AUDIT_v43.md` D1.)*
-
-
----
+*(R3 removed 2026-08-15 — **shipped** with v4.3 wave 4.2. `run_prefilter.py` now promotes
+ANSWERED pending entrants (pass or fail) into `_universe.yaml` before wiping PENDING, so a
+ticker added through `--add-ticker` survives past one Monday. Answered rather than only
+passing, deliberately: the universe is the WORK LIST, not the pool, and a name that fails
+this quarter may pass the next. Names that keep ERRORING are still handled by RETRY/PAUSED.
+A test asserts the promotion happens before the wipe — reversed, it would promote nothing.
+See `CHANGELOG.md` v4.3 wave 4.)*
 
 ### R6. The balance sheet's `shares` row can be a currency amount — **S**
 
