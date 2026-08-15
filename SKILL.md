@@ -1085,6 +1085,8 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 ### 2.18a SWOT  *(v4 Phase C · overlay — qualitative, no score into the composite)*
 (Output de `06_swot.md` (Phase 2.5 step 7c). Render como um cartão 2×2 com o quadrante **Threats/Risks primeiro e com dupla profundidade**. Cada facto cita um número da JSON entre parênteses ou é marcado `(inferred)`.)
 
+**Cada item leva a sua tag de materialidade e vai numa linha própria separada por `<br>`:** `**MATERIAL** — …` quando mudaria o *veredicto* ou o *tamanho da posição*, `*minor* — …` quando não mudaria nenhum dos dois. Reports antigos sem tags continuam a renderizar como parágrafo — `build_swot` degrada, não parte.
+
 | ⚠️ **Threats / Risks** *(leads · deepest)* | ✅ **Strengths** |
 |---|---|
 | ({external/downside forces; reconcilia cada flag `bad`/`warn` do §2.12a + o veredicto Beneish; cross-link §2.14 risco + §2.16 bear}) | ({vantagens competitivas evidenciadas pelos números — margens, ROIC/ROCE, net-payout, balanço}) |

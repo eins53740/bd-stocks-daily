@@ -36,18 +36,35 @@ COVER per quadrant:
   are company-internal — leverage, margin trend, cash conversion).
 - OPPORTUNITIES: realistic upside optionality (TAM, pricing, capital allocation).
 
-OUTPUT (strict format):
-- Four `### ` sub-headings in this order: `### Threats / Risks`, `### Strengths`,
-  `### Weaknesses`, `### Opportunities`.
-- Under each, 3–6 bullets (Threats/Risks may run to 8). Every factual claim ends
-  with the number that supports it in parentheses, e.g. "(Net debt/EBITDA 4.6×)",
-  or is tagged `(inferred)` when it is judgement, not a figure in the inputs.
+OUTPUT (strict format) — this fills the four cells of the §2.18a 2×2 table, so
+emit the CELL CONTENTS, not headings. One block of text per quadrant, in the
+order Threats/Risks, Strengths, Weaknesses, Opportunities.
+
+Inside a cell, write 3-6 separate items (Threats/Risks may run to 8), each on its
+own line separated by `<br>` — a literal `<br>`, which is what renders as a line
+break inside both an Obsidian table cell and the HTML report.
+
+Every item starts with its MATERIALITY TAG and follows this shape:
+
+  **MATERIAL** — claim, with the number that supports it (ROIC 27.66%)<br>
+  *minor* — claim, with its number (share count +3.40% 5y)<br>
+
+- **MATERIAL** means: this would change the VERDICT or the POSITION SIZE. If it
+  would do neither, it is `*minor*`. Apply the test to each item honestly — a
+  SWOT where everything is material ranks nothing, and one where nothing is
+  material says the analysis found no reason to act.
+- Every factual claim ends with the number that supports it in parentheses, e.g.
+  "(Net debt/EBITDA 4.6×)", or is tagged `(inferred)` when it is judgement rather
+  than a figure in the inputs.
 - No score, no verdict line — this is a qualitative overlay, not a rating.
 
 RULES:
 - Ground-truth rule: every number you cite must come from the inputs above —
   never invent a figure. Narrative/opinion is allowed but must be tagged
   `(inferred)`.
+- Every scanner flag that is `bad` or `warn` in {RED_FLAGS_JSON} must appear
+  somewhere in Threats/Risks or Weaknesses. A statement check the scanner failed
+  cannot be absent from the SWOT — that is the specific gap this rule closes.
 - Be specific and balanced; no boilerplate.
 
 {STYLE_RULES}

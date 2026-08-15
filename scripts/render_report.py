@@ -1313,6 +1313,46 @@ def parse_swot(body: str) -> dict:
     return found
 
 
+_SWOT_ITEM_SPLIT = re.compile(r"<br\s*/?>", re.IGNORECASE)
+# The tag as prompts/06_swot.md emits it, plus the separator it is followed by.
+# Bold for MATERIAL and italic for minor is the markdown a reader sees in
+# Obsidian; the class is what the HTML styles on.
+# The letter/digit lookahead stops "Materially different capital structure" being
+# read as a tag and truncated to "ly different…". It is spelled out rather than
+# written \b because underscore IS a word character, so \b would reject the
+# perfectly valid `__MATERIAL__`. The dash/colon separator is MANDATORY for the
+# same class of reason: without it, an item legitimately opening "Material
+# weakness in controls" would lose its first word.
+_SWOT_TAG = re.compile(
+    r"^\s*(?:[*_]{1,2})?\s*(MATERIAL|minor)(?![A-Za-z0-9])\s*"
+    r"(?:[*_]{1,2})?\s*[-–—:]\s*",
+    re.IGNORECASE)
+
+
+def split_swot_items(cell: str) -> list[tuple[str | None, str]]:
+    """A SWOT cell → [(materiality, text)], materiality in {"material","minor",None}.
+
+    Splits on the literal `<br>` the prompt emits — chosen because it is the one
+    line break that renders inside BOTH an Obsidian table cell and the HTML card.
+    A cell with no `<br>` yields one item, and a cell whose items carry no tag
+    yields None for every materiality, which is how the 40 pre-v4.3 reports on
+    disk keep rendering as the prose their author actually wrote.
+    """
+    out: list[tuple[str | None, str]] = []
+    for raw in _SWOT_ITEM_SPLIT.split(cell or ""):
+        # NOT _normalise_ws — that lowercases, because it exists to compare two
+        # prose strings. This text is displayed.
+        txt = re.sub(r"\s+", " ", str(raw or "")).strip()
+        if not txt:
+            continue
+        m = _SWOT_TAG.match(txt)
+        if m:
+            out.append((m.group(1).lower(), txt[m.end():].strip()))
+        else:
+            out.append((None, txt))
+    return out
+
+
 def build_swot(body: str) -> str:
     """SWOT as a 2×2 card, Threats first — matching the prompt's own weighting.
 
@@ -1323,17 +1363,31 @@ def build_swot(body: str) -> str:
     quads = parse_swot(body)
     if not quads:
         return ""
-    cells = []
+    cells, tagged_any = [], False
     for key, label, _pat in _SWOT_QUADRANTS:
         txt = quads.get(key)
         if not txt:
             continue
+        items = split_swot_items(txt)
+        if any(m for m, _ in items):
+            tagged_any = True
+            lis = "".join(
+                f'<li class="swot-{mat or "untagged"}">{md_inline(t)}</li>'
+                for mat, t in items)
+            inner = f"<ul class=\"swot-items\">{lis}</ul>"
+        else:
+            # Untagged prose — every report written before v4.3 tags. Rendering
+            # one <li> per sentence would invent a structure the analyst did not
+            # write, so it stays a paragraph.
+            inner = f"<p>{md_inline(txt)}</p>"
         cells.append(f'<div class="swot-q swot-{key}"><h3>{esc(label)}</h3>'
-                     f'<p>{md_inline(txt)}</p></div>')
+                     f'{inner}</div>')
     if not cells:
         return ""
     note = ('<p class="sub">Qualitative overlay — no score enters the composite. '
-            'Threats lead by design.</p>')
+            'Threats lead by design.'
+            + (' <b>MATERIAL</b> = would change the verdict or the position size.'
+               if tagged_any else '') + '</p>')
     return _card("SWOT", f'<div class="swot-grid">{"".join(cells)}</div>{note}',
                  "swot", new="v4.3")
 

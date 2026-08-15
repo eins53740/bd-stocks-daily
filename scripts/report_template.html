@@ -207,6 +207,14 @@
   .swot-q{border:1px solid var(--line);border-radius:11px;padding:0 0 10px;overflow:hidden}
   .swot-q h3{margin:0 0 8px;padding:8px 12px;font-size:13px;color:#fff;background:var(--muted)}
   .swot-q p{margin:0;padding:0 13px;font-size:13.3px;line-height:1.55}
+  /* Tagged items (v4.3). MATERIAL carries full ink and a marker rule; minor is
+     set back so the eye lands on what would change the decision. */
+  .swot-items{margin:0;padding:0 13px 0 28px;font-size:13.3px;line-height:1.5}
+  .swot-items li{margin:0 0 7px}
+  .swot-items li.swot-material{color:var(--ink);font-weight:500}
+  .swot-items li.swot-material::marker{color:var(--reject);font-weight:700}
+  .swot-items li.swot-minor{color:var(--muted);font-size:12.6px}
+  .swot-items li.swot-minor::marker{color:var(--line)}
   .swot-threat h3{background:var(--reject)} .swot-strength h3{background:var(--bd-green)}
   .swot-weakness h3{background:#B8860B} .swot-opportunity h3{background:var(--bd-teal)}
   @media(max-width:640px){.swot-grid{grid-template-columns:1fr}}

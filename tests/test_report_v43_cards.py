@@ -15,7 +15,10 @@ first cell is empty, and the mermaid block that opens with a YAML config preambl
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+import pytest
+
+SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 
 import render_report as rr  # noqa: E402
 
@@ -582,3 +585,111 @@ class TestIndexSplit:
             encoding="utf-8")
         out = rr.refresh_cumulative_index(tmp_path)
         assert out and (tmp_path / "index.html").read_text(encoding="utf-8") == "<html>cumulative</html>"
+
+
+# --- SWOT materiality tags (v4.3 wave 2.7) ----------------------------------
+
+TAGGED_SWOT_MD = """### 2.18a SWOT  *(v4 Phase C · overlay)*
+
+| ⚠️ **Threats / Risks** | ✅ **Strengths** |
+|---|---|
+| **MATERIAL** — Valuation at the 100th percentile (P/E 83.34)<br>*minor* — FX drag on EU revenue (inferred) | **MATERIAL** — ROIC 27.66% vs 13.07% cost of equity<br>*minor* — Long CEO tenure (inferred) |
+| 🔸 **Weaknesses** | 🚀 **Opportunities** |
+| *minor* — Share count +3.40% over 5y | **MATERIAL** — AI rack power content compounding (inferred) |
+"""
+
+
+class TestSwotItemSplitting:
+    def test_items_split_on_the_literal_br(self):
+        items = rr.split_swot_items("a<br>b<br>c")
+        assert [t for _, t in items] == ["a", "b", "c"]
+
+    @pytest.mark.parametrize("sep", ["<br>", "<br/>", "<br />", "<BR>"])
+    def test_every_br_spelling_splits(self, sep):
+        assert len(rr.split_swot_items(f"a{sep}b")) == 2
+
+    def test_a_cell_without_a_break_is_one_item(self):
+        assert len(rr.split_swot_items("one long paragraph")) == 1
+
+    def test_empty_input_yields_nothing(self):
+        assert rr.split_swot_items("") == []
+        assert rr.split_swot_items(None) == []
+
+    def test_blank_segments_are_dropped(self):
+        assert len(rr.split_swot_items("a<br><br>  <br>b")) == 2
+
+    @pytest.mark.parametrize("prefix", [
+        "**MATERIAL** — ", "*MATERIAL* - ", "MATERIAL: ", "material — ",
+        "__MATERIAL__ – ",
+    ])
+    def test_every_material_spelling_is_recognised(self, prefix):
+        (mat, txt), = rr.split_swot_items(prefix + "Valuation stretched")
+        assert mat == "material"
+        assert txt == "Valuation stretched"
+
+    @pytest.mark.parametrize("prefix", ["*minor* — ", "minor: ", "**minor** - "])
+    def test_every_minor_spelling_is_recognised(self, prefix):
+        (mat, txt), = rr.split_swot_items(prefix + "FX drag")
+        assert mat == "minor"
+        assert txt == "FX drag"
+
+    def test_the_tag_is_stripped_from_the_displayed_text(self):
+        (_, txt), = rr.split_swot_items("**MATERIAL** — ROIC 27.66%")
+        assert "MATERIAL" not in txt
+
+    def test_casing_of_the_item_text_survives(self):
+        # _normalise_ws lowercases (it compares prose); using it here would have
+        # shipped every SWOT item in lower case.
+        (_, txt), = rr.split_swot_items("**MATERIAL** — ROIC vs WACC in the EU")
+        assert txt == "ROIC vs WACC in the EU"
+
+    def test_an_untagged_item_reports_no_materiality(self):
+        (mat, txt), = rr.split_swot_items("Plain prose with no tag")
+        assert mat is None
+        assert txt == "Plain prose with no tag"
+
+    def test_a_word_merely_containing_the_tag_is_not_a_tag(self):
+        (mat, txt), = rr.split_swot_items("Materially different capital structure")
+        assert mat is None
+        assert txt == "Materially different capital structure"
+
+    def test_the_tag_word_without_a_separator_is_not_a_tag(self):
+        # "Material weakness in controls" is a real audit phrase, not a tag.
+        (mat, txt), = rr.split_swot_items("Material weakness in controls")
+        assert mat is None
+        assert txt == "Material weakness in controls"
+
+
+class TestSwotMaterialityRendering:
+    def test_tagged_items_render_as_a_list(self):
+        html = rr.build_swot(TAGGED_SWOT_MD)
+        assert 'class="swot-items"' in html
+
+    def test_material_and_minor_get_distinct_classes(self):
+        html = rr.build_swot(TAGGED_SWOT_MD)
+        assert 'class="swot-material"' in html
+        assert 'class="swot-minor"' in html
+
+    def test_the_legend_explains_material_only_when_tags_are_present(self):
+        assert "would change the verdict" in rr.build_swot(TAGGED_SWOT_MD)
+        assert "would change the verdict" not in rr.build_swot(SWOT_MD)
+
+    def test_untagged_reports_still_render_as_prose(self):
+        # 40 reports on disk predate the tags; inventing one <li> per sentence
+        # would fabricate a structure the analyst never wrote.
+        html = rr.build_swot(SWOT_MD)
+        assert html
+        assert 'class="swot-items"' not in html
+
+    def test_threats_still_lead_when_tagged(self):
+        html = rr.build_swot(TAGGED_SWOT_MD)
+        assert html.index("swot-threat") < html.index("swot-strength")
+
+    def test_numbers_inside_tagged_items_keep_their_markdown(self):
+        assert "<b>27.66%</b>" in rr.build_swot(
+            TAGGED_SWOT_MD.replace("ROIC 27.66%", "ROIC **27.66%**"))
+
+    def test_the_material_class_is_styled_by_the_template(self):
+        css = (SCRIPTS / "report_template.html").read_text(encoding="utf-8")
+        for cls in ("swot-items", "swot-material", "swot-minor"):
+            assert cls in css
