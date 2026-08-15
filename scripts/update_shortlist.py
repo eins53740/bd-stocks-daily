@@ -107,6 +107,15 @@ def safe_filename(ticker: str, date_str: str, verdict: str) -> str:
     return f"{date_str}_{ticker}_{verdict}"
 
 
+def _company(ticker: str) -> str:
+    """Company identity across dual listings; the raw ticker if unresolvable."""
+    try:
+        import listings
+        return listings.company_key(ticker)
+    except Exception:
+        return (ticker or "").strip()
+
+
 def _rank(row: dict) -> tuple[str, int]:
     """Sort key deciding which evaluation of a ticker is the current one.
 
@@ -125,13 +134,15 @@ def build_shortlist(rows: list[dict], manual_flags: dict) -> str:
     today = date.today()
     pf_meta = load_prefilter_meta()
     active = [r for r in rows if is_active(r, today)]
-    # Latest per ticker. Ranking on date alone loses the Phase 5.5 cascade: when a
+    # Latest per COMPANY. Ranking on date alone loses the Phase 5.5 cascade: when a
     # screen scores >= 7.5 it triggers a same-day deep-dive, so both rows share a
     # date, `>` is False, and the first-seen row (the screen) wins. The deep row
-    # supersedes it — it is the same evaluation carried further.
+    # supersedes it — it is the same evaluation carried further. Keying on company
+    # rather than ticker also collapses a dual listing: TSM and 2330.TW are one
+    # position to hold, so they are one shortlist line.
     latest = {}
     for r in active:
-        t = r["ticker"]
+        t = _company(r["ticker"])
         if t not in latest or _supersedes(r, latest[t]):
             latest[t] = r
 
@@ -158,6 +169,16 @@ def build_shortlist(rows: list[dict], manual_flags: dict) -> str:
         "| Ticker | Region | Size | Sector | Date | Round | Score | Verdict | Gates | Manual review | Expires | Link |",
         "|--------|--------|------|--------|------|-------|-------|---------|-------|---------------|---------|------|",
     ]
+
+    # `0175.HK` alone tells you nothing about which company you are looking at.
+    # Names come from a cache built off the analysis JSONs and report titles;
+    # an unknown ticker renders bare rather than guessed.
+    try:
+        import company_names
+        names = company_names.load()
+    except Exception as e:
+        log(f"company names unavailable (non-fatal): {e}")
+        company_names, names = None, {}
 
     region_count: dict[str, int] = defaultdict(int)
     sector_count: dict[str, int] = defaultdict(int)
@@ -199,8 +220,9 @@ def build_shortlist(rows: list[dict], manual_flags: dict) -> str:
         link_name = safe_filename(ticker, date_str, suffix)
         link = f"[[{link_name}]]"
 
+        label = company_names.label(ticker, names) if company_names else ticker
         lines.append(
-            f"| {ticker} | {region} | {size} | {sector} | {date_str} | {r.get('round','')} | {score:.1f} | {verdict} | {r.get('gates_passed','')}/7 | {mr} | {expires} | {link} |"
+            f"| {label} | {region} | {size} | {sector} | {date_str} | {r.get('round','')} | {score:.1f} | {verdict} | {r.get('gates_passed','')}/7 | {mr} | {expires} | {link} |"
         )
 
     lines.append("")
@@ -269,7 +291,7 @@ def build_catalyst_calendar(rows: list[dict]) -> str:
     # Latest per ticker
     latest: dict[str, dict] = {}
     for r in active:
-        t = r["ticker"]
+        t = _company(r["ticker"])
         if t not in latest or r["date"] > latest[t]["date"]:
             latest[t] = r
 
@@ -281,7 +303,10 @@ def build_catalyst_calendar(rows: list[dict]) -> str:
 
     events: list[dict] = []
     warnings: list[str] = []
-    for ticker, row in latest.items():
+    for row in latest.values():
+        # Fetch the calendar for the line actually evaluated, not the company key —
+        # they coincide except when an ADR was kept over a thin home listing.
+        ticker = row["ticker"]
         try:
             cal = yf.Ticker(ticker).calendar
             if cal is None:

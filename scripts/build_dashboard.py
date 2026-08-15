@@ -29,6 +29,10 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 os.environ.setdefault("PYTHONPYCACHEPREFIX", str(Path(tempfile.gettempdir()) / "stocksdaily_pyc"))
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import listings  # noqa: E402  (company identity across dual listings)
+
 ROOT = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
 TEMPLATE = ROOT / "_dashboard" / "template.html"
 TEMPLATE_BROKERS = ROOT / "_dashboard" / "template_brokers.html"
@@ -477,6 +481,43 @@ def enrich_from_tmp(ticker: str, date: str) -> dict:
     }
 
 
+def _report_rank(r: dict) -> tuple:
+    """Which of two reports is the current one: later date wins, and inside one
+    date the deep-dive beats the screen it cascaded from."""
+    return (r.get("date") or "", 1 if r.get("mode") == "deep" else 0)
+
+
+def _lens(r: dict) -> str:
+    """Which model produced this report.
+
+    The growth lens (`/bd_stocks_daily_growth`) and the quality lens
+    (`/bd-stocks-daily`) both evaluate the same tickers, on purpose, with
+    different criteria — gate-5 (net margin > 10%) is bypassed by design in the
+    growth model. They are two opinions, not two attempts, so they must never
+    supersede one another. `growth_composite` in the frontmatter is the marker.
+    """
+    return "growth" if r.get("growth_composite") is not None else "quality"
+
+
+def collapse_by_company(reports: list[dict]) -> list[dict]:
+    """One report per (company, lens) — the newest, across every listing.
+
+    `_archive/` already keeps the folder collapsed on disk, but this runs on
+    whatever is at the root right now: a manual re-run between archive passes
+    would otherwise put the same company on the dashboard twice, which is the
+    duplication the archiver exists to prevent.
+    """
+    best: dict[tuple, dict] = {}
+    for r in reports:
+        tk = r.get("ticker")
+        if not tk:
+            continue
+        key = (listings.company_key(tk), _lens(r))
+        if key not in best or _report_rank(r) > _report_rank(best[key]):
+            best[key] = r
+    return sorted(best.values(), key=lambda r: (r.get("date") or "", r.get("ticker") or ""))
+
+
 def _report_href(filename: str | None) -> str | None:
     """The Phase-F HTML report is a sibling of the .md (same base). Returns the href
     ONLY if that .html actually exists on disk — screens / v3 runs / un-rendered deeps
@@ -490,25 +531,26 @@ def _report_href(filename: str | None) -> str | None:
 
 def build_screener(reports: list[dict], universe: list[dict]) -> list[dict]:
     """Full-pool screener rows: the pre-filtered universe LEFT-JOINed with evaluated
-    reports (by ticker, latest report wins), enriched with _tmp numerics. Evaluated
+    reports (by company, latest report wins), enriched with _tmp numerics. Evaluated
     names carry verdict/score + a report link; pool-only names carry universe stats.
     Evaluated names outside the pool (e.g. portfolio adds) are appended too."""
-    # Pick the best report per ticker: latest date, and within a date the DEEP report
+    # Pick the best report per COMPANY: latest date, and within a date the DEEP report
     # beats the screen (the Phase-5.5 cascade writes both same-day; filename sort would
     # otherwise let "_screen" win alphabetically and drop fair_price/β/α/mos + link deep→screen).
-    def _rank(r: dict) -> tuple:
-        return (r.get("date") or "", 1 if r.get("mode") == "deep" else 0)
-    by_ticker: dict[str, dict] = {}
+    # Keying on company rather than ticker is what stops TSM and 2330.TW occupying two
+    # screener rows with two different scores for one business.
+    by_company: dict[str, dict] = {}
     for r in reports:
         tk = r.get("ticker")
         if not tk:
             continue
-        prev = by_ticker.get(tk)
-        if prev is None or _rank(r) >= _rank(prev):
-            by_ticker[tk] = r
+        ck = listings.company_key(tk)
+        prev = by_company.get(ck)
+        if prev is None or _report_rank(r) >= _report_rank(prev):
+            by_company[ck] = r
 
     def row_for(tk: str, u: dict | None) -> dict:
-        r = by_ticker.get(tk)
+        r = by_company.get(listings.company_key(tk))
         u = u or {}
         upside = None
         fp, px = (r or {}).get("fair_price"), (r or {}).get("price")
@@ -549,17 +591,25 @@ def build_screener(reports: list[dict], universe: list[dict]) -> list[dict]:
             row["fcf_yield"] = e.get("fcf_yield")
         return row
 
+    # `seen` holds COMPANY keys: _prefiltered.yaml can carry both sides of a dual
+    # listing, and one row per listing would put the same business on the screener
+    # twice — once evaluated, once not.
     seen, rows = set(), []
     for u in universe:
         tk = u.get("ticker")
-        if not tk or tk in seen:
+        if not tk:
             continue
-        seen.add(tk)
-        rows.append(row_for(tk, u))
-    for tk in by_ticker:
-        if tk not in seen:
-            seen.add(tk)
-            rows.append(row_for(tk, None))
+        ck = listings.company_key(tk)
+        if ck in seen:
+            continue
+        seen.add(ck)
+        # Show the line we actually analysed when there is one, so the row's
+        # ticker matches its report link and its currency.
+        rows.append(row_for((by_company.get(ck) or {}).get("ticker") or tk, u))
+    for ck, r in by_company.items():
+        if ck not in seen:
+            seen.add(ck)
+            rows.append(row_for(r.get("ticker") or ck, None))
     return rows
 
 
@@ -582,6 +632,11 @@ def main() -> int:
         slim = slim_report(p, today)
         if slim is not None:
             reports.append(slim)
+    n_raw = len(reports)
+    reports = collapse_by_company(reports)
+    if n_raw != len(reports):
+        log(f"collapsed {n_raw - len(reports)} superseded report(s) to one per company "
+            f"— run report_history.py --archive to move them off the root")
 
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     bundle = {

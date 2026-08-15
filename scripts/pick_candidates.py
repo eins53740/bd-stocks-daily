@@ -9,7 +9,9 @@ Regras:
 - Round: se ticker já foi avaliado antes (com gap >183d), round += 1
 - Identidade por EMPRESA, não por listing: um ADR e a sua cotação local
   (TSM / 2330.TW) partilham janela de dedupe, contador de rounds e antiguidade
-  (ver TICKER_ALIASES)
+  (ver listings.REGISTRY)
+- Listing analisado: sempre a linha PRIMÁRIA/home, nunca o ADR — a menos que a
+  cobertura yfinance da home seja materialmente mais fina (ver listings.py)
 - Fallback (pool esgotada): escolhe a empresa MENOS visitada, antiguidade só
   como desempate — evitar o carrossel quinzenal dos mesmos high-scorers
 
@@ -35,6 +37,11 @@ for _name in ("stdout", "stderr"):
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import listings  # noqa: E402
+import markets  # noqa: E402
+
 OUT_DIR = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
 PREFILTERED = OUT_DIR / "_prefiltered.yaml"
 LOG = OUT_DIR / "_log.csv"
@@ -58,39 +65,61 @@ N_SCREENS = 2
 # the global-coverage emphasis survives the reduction unchanged (was 2 of 4).
 N_NON_US_SCREENS = 1
 
-# Dual listings and dual share classes are ONE company. Without this, TSMC held
-# two independent slots (TSM as the US ADR, 2330.TW as the Taiwan line): two
-# dedupe windows, two round counters, twice the odds of being picked. Keys are
-# alternate listings, values the canonical name they collapse into.
-TICKER_ALIASES = {
-    "2330.TW": "TSM",        # TSMC — Taiwan line / US ADR
-    "ASML.AS": "ASML",       # ASML — Amsterdam / US ADR
-    "SAP.DE": "SAP",         # SAP — Xetra / US ADR
-    "SHELL.AS": "SHEL.L",    # Shell — Amsterdam / London
-    "SHOP.TO": "SHOP",       # Shopify — Toronto / US
-    "GOOG": "GOOGL",         # Alphabet — C shares / A shares
-    "9988.HK": "BABA",       # Alibaba — Hong Kong / US ADR
-    "SSUN.F": "005930.KS",   # Samsung Electronics — Frankfurt / Korea
-    "SFTBY": "9984.T",       # SoftBank — US ADR / Tokyo
-}
-
+# Probe both sides of a dual listing before choosing which one to analyse.
+# Costs two yfinance `.info` calls per dual-listed pick, cached 30 days by
+# listings.py — so in practice a handful of calls a month. `--no-probe` turns it
+# off and takes the home line unconditionally.
+PROBE_LISTINGS = True
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def company_key(ticker: str) -> str:
-    """Canonical company identity for a ticker — dedupe, rounds and staleness are
-    all reckoned per company, never per listing.
+# Dual listings and dual share classes are ONE company. Without that, TSMC held
+# two independent slots (TSM as the US ADR, 2330.TW as the Taiwan line): two
+# dedupe windows, two round counters, twice the odds of being picked.
+#
+# The table used to live here as TICKER_ALIASES, which made it the third and
+# mutually-contradictory copy in the repo (see listings.py's module docstring).
+# It now lives in listings.REGISTRY; `company_key` stays exported from this
+# module because update_log.py and the tests import it from here.
+company_key = listings.company_key
 
-    Coerces to str first: YAML 1.1 parses a bare `ON` (ON Semiconductor) as the
-    boolean True, exactly as it does `NO` for Norway. Quoting in the source file
-    is the real fix, but selection must never crash on one bad row.
+
+def resolve_listing(candidate: dict) -> dict:
+    """Swap a candidate onto its home listing before it is analysed.
+
+    An ADR is a wrapper: same company, same filings, a depositary bank and an FX
+    leg in between. Analysing the wrapper instead of the company is what put TSM
+    and 2330.TW in `_log.csv` two days apart. So the pick is rewritten onto the
+    home line, and `region` is re-derived from the new suffix — otherwise a
+    9988.HK pick inherited from BABA would carry `region: US` into the report
+    frontmatter and the screener would file a Hong Kong stock under the US.
+
+    Non-fatal by construction: the probe touches the network, and a rate limit
+    on yfinance must degrade the *listing choice*, never the day's run.
     """
-    if not isinstance(ticker, str):
-        ticker = "" if ticker is None else str(ticker)
-    ticker = ticker.strip()
-    return TICKER_ALIASES.get(ticker, ticker)
+    ticker = candidate.get("ticker")
+    if not listings.group_for(ticker):
+        return candidate
+    try:
+        choice = listings.preferred_listing(ticker, probe=PROBE_LISTINGS)
+    except Exception as exc:
+        log(f"WARN: listing resolution failed for {ticker} ({exc}) — keeping as picked")
+        return candidate
+    out = dict(candidate)
+    out["listing_choice"] = choice["ticker"]
+    out["listing_home"] = choice["home"]
+    out["listing_reason"] = choice["reason"]
+    out["listing_alternatives"] = [
+        t for t in listings.all_tickers(ticker) if t != choice["ticker"]
+    ]
+    if choice["ticker"] != ticker:
+        out["ticker"] = choice["ticker"]
+        out["listing_swapped_from"] = ticker
+        out["region"] = markets.market_meta(choice["ticker"])["region"]
+        log(f"LISTING: {ticker} -> {choice['ticker']} ({choice['reason']})")
+    return out
 
 
 def load_prefiltered() -> list[dict]:
@@ -140,12 +169,38 @@ def ticker_round(ticker: str, log_rows: list[dict]) -> int:
     return len(dates) + 1
 
 
+def collapse_listings(tickers: list[dict]) -> list[dict]:
+    """One entry per company in the pool, keeping the home listing's row.
+
+    `_prefiltered.yaml` is built from a ticker universe, so it can and does hold
+    both sides of a pair (BABA and 9988.HK). Two rows for one company means two
+    chances of being drawn — and, on an unlucky day, the deep slot and a screen
+    slot landing on the same business under different symbols. The dedupe window
+    cannot catch that: it reads `_log.csv`, and neither row is in it yet.
+    """
+    by_company: dict[str, dict] = {}
+    dropped = 0
+    for t in tickers:
+        key = company_key(t.get("ticker"))
+        prev = by_company.get(key)
+        if prev is None:
+            by_company[key] = t
+            continue
+        dropped += 1
+        # Home wins; between two non-home listings the first seen wins.
+        if listings.is_home(t.get("ticker")) and not listings.is_home(prev.get("ticker")):
+            by_company[key] = t
+    if dropped:
+        log(f"INFO: collapsed {dropped} duplicate listing row(s) to their home line")
+    return list(by_company.values())
+
+
 def eligible(tickers: list[dict], log_rows: list[dict], today: date) -> list[dict]:
     """Candidates whose COMPANY has not been evaluated inside the dedupe window.
     Company-level, so evaluating the Taiwan line also puts the ADR on the bench."""
     cutoff = today - timedelta(days=DEDUPE_DAYS)
     out = []
-    for t in tickers:
+    for t in collapse_listings(tickers):
         last = ticker_last_date(t["ticker"], log_rows)
         if last is None or last < cutoff:
             # Enrich with size fallback
@@ -251,6 +306,10 @@ def pick_fallback_deep(log_rows: list[dict], today: date) -> dict | None:
 
 
 def main() -> int:
+    global PROBE_LISTINGS
+    if "--no-probe" in sys.argv:
+        PROBE_LISTINGS = False
+        log("INFO: --no-probe — home listing taken unconditionally, no yfinance probe")
     random.seed(date.today().toordinal())
 
     tickers = load_prefiltered()
@@ -283,6 +342,7 @@ def main() -> int:
             log("WARN: fallback found nothing usable (log empty?). Graceful exit.")
             print(json.dumps({"error": "all_deduped", "date": today.isoformat()}))
             return 0
+        fb = resolve_listing(fb)
         result = {
             "date": today.isoformat(),
             "deep": {
@@ -356,7 +416,8 @@ def main() -> int:
             screens.append(rest.pop())
 
     def enrich(t: dict) -> dict:
-        return {
+        t = resolve_listing(t)
+        out = {
             "ticker": t["ticker"],
             "size": t.get("size", "big"),
             "region": t.get("region", "?"),
@@ -364,6 +425,12 @@ def main() -> int:
             "note": t.get("note", ""),
             "round": ticker_round(t["ticker"], log_rows),
         }
+        # Only dual-listed names carry these — a single-listed pick stays clean.
+        for k in ("listing_home", "listing_reason", "listing_alternatives",
+                  "listing_swapped_from"):
+            if k in t:
+                out[k] = t[k]
+        return out
 
     result = {
         "date": today.isoformat(),

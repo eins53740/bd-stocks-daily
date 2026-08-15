@@ -97,7 +97,15 @@ def _screenshot(html: str, out_path: Path, w: int, h: int) -> bool:
                 pg.screenshot(path=str(out_path), omit_background=True)
             finally:
                 b.close()
-        return Path(out_path).is_file() and Path(out_path).stat().st_size > 0
+        ok = Path(out_path).is_file() and Path(out_path).stat().st_size > 0
+        if ok:
+            # Same palette quantisation the matplotlib path gets. It matters MORE here: a Chromium
+            # screenshot is truecolour and these are the two largest charts in the whole report
+            # (ebitda_fcf 383 KB, relperf 286 KB — together ~20% of all PNG bytes). Measured
+            # 2026-08-03: 383 -> 66 KB and 286 -> 66 KB. Without this call they were the only
+            # charts left untouched, because they never pass through chart_theme.save().
+            th.quantize_png(out_path)
+        return ok
     except Exception as e:
         log(f"screenshot failed, falling back to matplotlib: {e}")
         return False

@@ -57,7 +57,11 @@ OUT_REL = "Personal/Finance/StocksDaily"  # inside BD_Obsidian vault
 DASHBOARD = OUT_DIR / "_dashboard.html"
 BUILD_DASHBOARD = Path(r"C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\build_dashboard.py")
 
-RECIPIENTS = ["eins.ist@gmail.com"]
+# bruno.dias@secil.pt added 2026-08-12 as a delivery CANARY: the 13:57 scheduled digest of
+# 2026-08-12 was accepted by the IST relay but never reached the Gmail inbox, while a
+# byte-identical --force resend at 17:30 arrived fine. O365 filters independently of Gmail,
+# so a day where SECIL receives and Gmail doesn't pins the loss on Gmail's side.
+RECIPIENTS = ["eins.ist@gmail.com", "bruno.dias@secil.pt"]
 
 # Send-once ledger, keyed by digest date: {"2026-07-28": {"sent_at", "message_id", "reports"}}.
 # Bruno was receiving two digests per day (sometimes the same minute, sometimes a minute apart).
@@ -97,6 +101,136 @@ def run_host() -> str:
         return platform.node() or "unknown"
     except Exception:
         return "unknown"
+
+
+_COST_MARK = "<!-- run-cost -->"
+
+
+def stamp_reports_with_cost(times: dict, rc: dict, wk: dict) -> int:
+    """Append (or refresh) a one-line cost footnote at the bottom of each report file.
+
+    Idempotent by design: the line is fenced by a marker comment and rewritten in place, so a
+    re-sent digest never stacks duplicates onto the report. Failures are logged per file and never
+    propagate -- a cost footnote is not worth corrupting a report over.
+    """
+    import token_stats as ts
+
+    n = 0
+    exact = rc.get("per_report_exact")
+    for ticker, path in ((t, p) for t, p in times.items()):
+        try:
+            f = path if hasattr(path, "read_text") else None
+        except Exception:
+            f = None
+        if f is None:
+            continue
+        try:
+            body = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        tokens = rc.get("per_report", {}).get(ticker)
+        if tokens is None:
+            continue
+        how = "measured" if exact else "run total / report count"
+        line = (_COST_MARK + "\n> **Run cost** - " + ts.fmt(tokens) + " tokens for this report ("
+                + how + "); " + ts.fmt(rc["total"]) + " for the whole run. Finance skills were "
+                + format(wk["pct"], ".1f") + "% of all Claude Code over the last "
+                + str(wk["days"]) + " days.\n")
+        cut = body.find(_COST_MARK)
+        if cut != -1:
+            body = body[:cut].rstrip() + "\n\n"
+        else:
+            body = body.rstrip() + "\n\n"
+        try:
+            f.write_text(body + line, encoding="utf-8")
+            n += 1
+        except OSError as e:
+            log("cost footnote failed for " + str(f.name) + ": " + str(e))
+    return n
+
+
+def run_cost_block(target_date: str, rows: list) -> tuple:
+    """(html, text) telling the reader what this digest cost to produce.
+
+    Reported as TOKENS, not euros, on purpose. Cache-read is ~93% of the figure and is billed at
+    10% on the API and at nothing on a subscription, so a currency number here would be fiction.
+    Tokens are an honest volume measure.
+
+    Per-report values are sliced by when each report file was written, so they are MEASURED rather
+    than divided. token_stats reports when that slicing failed to account for enough of the run and
+    falls back to an even split; the label then says so instead of implying precision.
+
+    Never fatal: a digest that ships without a cost line beats a digest that does not ship.
+    """
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        import token_stats as ts
+
+        day = _dt.strptime(target_date, "%Y-%m-%d").date()
+        times = {}
+        paths = {}
+        for r in rows:
+            try:
+                f = OUT_DIR / (report_filename(r) + ".md")
+                if f.exists():
+                    times[r.get("ticker", "?")] = _dt.fromtimestamp(f.stat().st_mtime, tz=_tz.utc)
+                    paths[r.get("ticker", "?")] = f
+            except Exception:
+                continue
+
+        # Persist the split. Stamping a report REWRITES it, which moves its mtime -- and mtime is
+        # exactly what the slicing uses. Recomputing on a re-send therefore collapses every report
+        # into whichever one now sorts first (observed: CTAS jumped 22.6M -> the full 33.4M). So the
+        # split is computed once per day and reused verbatim thereafter.
+        cache = OUT_DIR / ('_run_cost_' + target_date + '.json')
+        rc = None
+        if cache.exists():
+            try:
+                rc = json.loads(cache.read_text(encoding='utf-8'))
+            except Exception:
+                rc = None
+        if rc is None:
+            rc = ts.run_cost(day, times)
+            try:
+                cache.write_text(json.dumps(rc, indent=2), encoding='utf-8')
+            except OSError as e:
+                log('could not cache run cost: ' + str(e))
+        wk = ts.weekly_share(7)
+        if not rc["total"]:
+            return "", ""
+
+        note = ("measured per report" if rc.get("per_report_exact")
+                else "run total split evenly - per-report timing inconclusive")
+        ordered = sorted(rc["per_report"].items(), key=lambda kv: -kv[1])
+        per_html = "".join(
+            "<li><b>" + html.escape(str(k)) + "</b> - " + ts.fmt(v) + "</li>" for k, v in ordered)
+        h = (
+            '<hr><p style="font-size:12px;color:#888;">'
+            "<b>Run cost</b> - " + ts.fmt(rc["total"]) + " tokens for this run ("
+            + html.escape(note) + ")."
+            '<ul style="margin:6px 0;padding-left:18px;">' + per_html + "</ul>"
+            "Finance skills used <b>" + format(wk["pct"], ".1f") + "%</b> of all Claude Code in "
+            "the last " + str(wk["days"]) + " days (" + ts.fmt(wk["finance"]) + " of "
+            + ts.fmt(wk["total"]) + ")."
+            '<br><span style="font-size:11px;">Tokens = input + output + cache. Cache-read is '
+            "~93% of it, so this is a volume measure, not a bill.</span></p>")
+
+        # Stamp the reports themselves, so a report read on its own still carries its cost.
+        try:
+            stamp_reports_with_cost(paths, rc, wk)
+        except Exception as e:  # noqa: BLE001
+            log('report cost stamping skipped (' + type(e).__name__ + ': ' + str(e) + ')')
+
+        per_text = "\n".join("  " + str(k) + ": " + ts.fmt(v) for k, v in ordered)
+        t = ("\nRUN COST\n--------\n" + ts.fmt(rc["total"]) + " tokens for this run ("
+             + note + ").\n" + per_text + "\n"
+             + "Finance skills used " + format(wk["pct"], ".1f") + "% of all Claude Code in the "
+             "last " + str(wk["days"]) + " days (" + ts.fmt(wk["finance"]) + " of "
+             + ts.fmt(wk["total"]) + ").\n")
+        return h, t
+    except Exception as e:  # noqa: BLE001
+        log("run cost block skipped (" + type(e).__name__ + ": " + str(e) + ")")
+        return "", ""
 
 
 def attribution_text() -> str:
@@ -193,6 +327,32 @@ def extract_dashboard_bundle() -> dict | None:
         return None
 
 
+def latest_per_company(reports: list[dict]) -> list[dict]:
+    """One row per company — the newest evaluation, across every listing.
+
+    Applied once at the top of the inline dashboard so KPIs, top scores and the
+    shortlist all count the same set. Before this, "Top scores" ranked raw report
+    rows, so a name evaluated three times could take three of the five slots
+    (ADBE 8.86 / 8.66 / 8.51) and TSMC could appear as both TSM and 2330.TW.
+    """
+    def _rank(r: dict) -> tuple:
+        return (r.get("date") or "", 1 if r.get("mode") == "deep" else 0)
+
+    try:
+        import listings
+        key = listings.company_key
+    except Exception:  # a digest must go out even if identity resolution is broken
+        def key(t):  # noqa: E306
+            return t
+
+    best: dict[str, dict] = {}
+    for r in reports:
+        ck = key(r.get("ticker") or "")
+        if ck not in best or _rank(r) > _rank(best[ck]):
+            best[ck] = r
+    return list(best.values())
+
+
 def build_dashboard_inline_html(bundle: dict, target_date: str) -> str:
     """Render a static (no-JS) dashboard summary that mail clients (Gmail, Yahoo)
     will display correctly inline. Mirrors the interactive dashboard's structure
@@ -204,16 +364,10 @@ def build_dashboard_inline_html(bundle: dict, target_date: str) -> str:
     today = bundle.get("today") or target_date
 
     # KPIs
+    reports = latest_per_company(reports)
     total = len(reports)
-    raw_shortlist = [r for r in reports if (r.get("score") or 0) >= 7.5 and (r.get("days_left") or 0) > 0]
-    # Dedupe per ticker — keep the most recent analysis only (latest date wins).
-    _by_ticker: dict[str, dict] = {}
-    for r in raw_shortlist:
-        t = r.get("ticker") or ""
-        prev = _by_ticker.get(t)
-        if prev is None or (r.get("date") or "") > (prev.get("date") or ""):
-            _by_ticker[t] = r
-    shortlist = list(_by_ticker.values())
+    shortlist = [r for r in reports
+                 if (r.get("score") or 0) >= 7.5 and (r.get("days_left") or 0) > 0]
     flagged = [r for r in reports if r.get("mgmt_flag")]
     deep_count = sum(1 for r in reports if r.get("mode") == "deep")
     screen_count = sum(1 for r in reports if r.get("mode") == "screen")
@@ -1033,6 +1187,9 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     # (Gmail/Yahoo) strip <script> tags from inline HTML. The interactive copy
     # is kept as the attachment for full functionality.
     dashboard_inline_html = build_dashboard_inline_html(bundle, target_date) if bundle else ""
+    # What this run cost. Computed here so BOTH bodies can use it; returns ('','') on any
+    # failure so a cost line can never block a digest.
+    cost_html, cost_text = run_cost_block(target_date, rows)
     adviser_take_html = build_adviser_take_html(rows, bundle)
     cards_html = "\n".join(build_card_html(r, bundle_meta(bundle, r)) for r in rows)
     growth_section_html = build_growth_section_html(target_date)  # Phase 7 — "" when no growth data
@@ -1067,6 +1224,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         {growth_section_html}
         <h2 style="margin-top: 35px;">Full reports ({len(rows)})</h2>
         {reports_html}
+        {cost_html}
         <hr>
         <p style="font-size: 12px; color: #888;">
           Horizonte: 1-5 anos · Filtro: Quality Compounder + Piotroski + Altman ·
@@ -1097,6 +1255,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         f"SUMMARY\n-------\n{cards_text}\n\n"
         f"FULL REPORTS ({len(rows)})\n"
         f"{reports_text}\n"
+        f"{cost_text}"
         f"--\n"
         f"Horizon: 1-5 years. Filter: Quality Compounder + Piotroski + Altman.\n"
         f"Shortlist: BD_Obsidian/{OUT_REL}/_shortlist.md\n"

@@ -60,6 +60,20 @@ def test_roic_none_when_denominator_nonpositive():
                         total_debt=500, total_equity=200, cash=1000) is None
 
 
+def test_roic_none_when_denominator_degenerate():
+    # Net-cash balance sheet (VEEV 2026-07-30 class): debt 103 + equity 7282
+    # - cash 7313 leaves IC at 0.98% of the gross base -> no information, None.
+    assert compute_roic(ebit=1027, tax_provision=None, pretax_income=None,
+                        total_debt=103, total_equity=7282, cash=7313) is None
+
+
+def test_roic_survives_when_denominator_above_floor():
+    # IC = 1000 + 1000 - 500 = 1500 = 75% of the gross base -> still computed.
+    roic = compute_roic(ebit=1000, tax_provision=None, pretax_income=None,
+                        total_debt=1000, total_equity=1000, cash=500)
+    assert roic == round(790 / 1500, 6)
+
+
 def test_roic_none_when_ebit_missing():
     assert compute_roic(ebit=None, tax_provision=10, pretax_income=100,
                         total_debt=1000, total_equity=1000, cash=0) is None

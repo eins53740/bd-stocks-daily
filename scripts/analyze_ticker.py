@@ -55,6 +55,7 @@ warnings.filterwarnings("ignore")
 import yfinance as yf  # noqa: E402
 
 # Phase 6 — global-market metadata + free Stooq price cross-check.
+import listings  # noqa: E402
 import markets  # noqa: E402
 
 # Reuse BD_Finance's api_keys_reader for the FMP cross-validation key (Layer 1).
@@ -308,13 +309,29 @@ def score_fundamentals(fscore: int, gates_passed: int, zscore: float | None) -> 
 # ------------------------- v2.2 pure helpers (Magic Formula + Buffett + decay + bypass) -------------------------
 # These are pure (no network, no yfinance) so they unit-test cleanly. They are
 # the single source of truth for the v2.2 fundamentals fields and overlays.
+
+# Minimum invested capital, as a fraction of the gross capital base, for ROIC to
+# carry information. Below this the net-cash subtraction has hollowed out the
+# denominator (see compute_roic).
+IC_MIN_FRACTION = 0.05
+
+
 def compute_roic(ebit, tax_provision, pretax_income,
                  total_debt, total_equity, cash) -> float | None:
     """ROIC = NOPAT / Invested Capital (Magic Formula proxy).
 
     NOPAT = EBIT * (1 - effective_tax_rate); eff_rate = tax/pretax clamped to
     [0, 0.35], default 0.21 if unavailable. Invested Capital = total_debt +
-    total_equity - cash. None if EBIT/inputs missing or IC <= 0.
+    total_equity - cash. None if EBIT/inputs missing, IC <= 0, or IC is a
+    degenerate fraction of the gross capital base.
+
+    The degenerate-denominator guard matters for net-cash balance sheets, which
+    are the norm in software: subtracting all cash drives IC asymptotically to
+    zero and ROIC explodes. VEEV 2026-07-30 held cash 7.31bn against equity
+    7.28bn, leaving IC at 0.98% of the gross base and printing ROIC 13,671% —
+    which then tripped the >25% Buffett moat opt-in on a company earning ROE
+    13.9% / ROCE 12.5%. Below the floor the ratio carries no information, so it
+    degrades to None (no opt-in, no gate-5 bypass) rather than a false signal.
     """
     if ebit is None or total_debt is None or total_equity is None or cash is None:
         return None
@@ -323,6 +340,9 @@ def compute_roic(ebit, tax_provision, pretax_income,
         tax_rate = max(0.0, min(0.35, tax_provision / pretax_income))
     invested_capital = total_debt + total_equity - cash
     if invested_capital <= 0:
+        return None
+    gross_capital = total_debt + total_equity
+    if gross_capital > 0 and invested_capital / gross_capital < IC_MIN_FRACTION:
         return None
     nopat = ebit * (1 - tax_rate)
     return round(nopat / invested_capital, 6)
@@ -1052,6 +1072,29 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     if cf is None or cf.empty:
         warnings_.append("cashflow missing")
 
+    # --- Throttle gate: refuse to score a ticker we have no data for ---
+    # A rate-limited (HTTP 429) yfinance answers every call with an empty frame
+    # rather than an error. Without this gate the run continues on nothing:
+    # Piotroski scores 0, all 7 gates fail on None, peers/market default to a
+    # neutral 5.0, and the composite lands ~1.0 -> a confident "reject" verdict
+    # for a company that was never actually looked at (the 2026-07-31 PKO BP
+    # incident). Layer 0 cannot catch it either — every HARD check is guarded on
+    # non-None inputs, so a total blackout validates as "ok".
+    # Raising here is the correct outcome and is already handled downstream:
+    # main() turns it into {"error": ...} + exit 1, and run_prefilter.classify()
+    # routes "error" to the RETRY bucket instead of evicting the ticker.
+    core_missing = sum([
+        not info,
+        fs is None or getattr(fs, "empty", True),
+        bs is None or getattr(bs, "empty", True),
+        hist is None or getattr(hist, "empty", True),
+    ])
+    if core_missing >= 3:
+        raise RuntimeError(
+            f"insufficient yfinance data for {ticker} "
+            f"({core_missing}/4 core fetches empty — rate-limited?)"
+        )
+
     # --- Basics ---
     price_curr = safe(lambda: info.get("currentPrice") or info.get("regularMarketPrice") or (hist["Close"].iloc[-1] if hist is not None and not hist.empty else None))
 
@@ -1064,6 +1107,26 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         warnings_.append(
             f"currency mismatch: yfinance reports {info['currency']} but "
             f"{mkt_meta['exchange']} ({ticker}) is normally {mkt_meta['currency']}"
+        )
+
+    # An ADR whose statements are filed in the home currency gets a USD market cap
+    # divided by a home-currency revenue line, so every market-cap-over-statement
+    # ratio comes out wrong by the FX rate. Measured on TSM 2026-07-27: P/S 0.46 vs
+    # the Taiwan line's 13.72 — off by exactly 29.74x, the TWD/USD rate — and
+    # EV/EBITDA 4.49 vs 18.41. Those "cheap" multiples then flattered the peer and
+    # valuation sub-scores enough to score the ADR 8.14 against the same company's
+    # 7.80 two days earlier. Preferring the home listing (listings.py) avoids this
+    # for every mapped pair; this warning catches the ones not yet in the registry.
+    _adr_hint = listings.adr_suspicion(ticker, info)
+    if _adr_hint:
+        warnings_.append(_adr_hint)
+    if (info.get("financialCurrency") and info.get("currency")
+            and info["financialCurrency"].upper() != info["currency"].upper()):
+        warnings_.append(
+            f"reporting currency {info['financialCurrency']} != trading currency "
+            f"{info['currency']}: market-cap-derived ratios (P/S, EV/EBITDA, "
+            f"EV/Revenue) mix the two and are NOT comparable to peers — "
+            f"P/E, PEG, margins and ROE are computed within one currency and stay valid"
         )
     # GBp/GBX (LSE pence) -> GBP. London shares are quoted in pence (1/100 GBP).
     # yfinance is inconsistent: info["currency"] is sometimes the explicit "GBp"/
@@ -1289,6 +1352,7 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         pass
 
     # --- Piotroski + Altman ---
+    statements_incomplete = False
     if bs is not None and fs is not None and cf is not None and not any(x.empty for x in (bs, fs, cf)):
         fscore, fscore_components = piotroski_fscore(bs, fs, cf, info)
         zscore = altman_zscore(bs, fs, info)
@@ -1296,6 +1360,14 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         fscore, fscore_components = 0, {}
         zscore = None
         warnings_.append("piotroski/altman skipped (missing statements)")
+        # This skip is itself a data-quality verdict, and a more honest one than any fetch count:
+        # `cashflow` is NOT in the core_fetches_missing tally, yet losing it alone zeroes Piotroski
+        # and voids Altman -- up to 6 of the 10 fundamentals points -- while every other signal
+        # still looks healthy. A throttle hits sequential calls, so "info+bs+fs cached, cf+hist
+        # empty" is the realistic partial signature and it scores core_missing = 1: no raise, no
+        # suspect, `ok`. If this branch fired, the composite is already badly distorted, so the
+        # flag cannot over-fire on a name the score is treating fairly.
+        statements_incomplete = True
 
     # --- Gates ---
     gates_passed, gates_detail = evaluate_gates(fund)
@@ -1609,6 +1681,24 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         out["data_quality"] = "corrected"
     else:
         out["data_quality"] = "ok"
+
+    # A PARTIAL blackout survives the throttle gate above but still means we
+    # scored on holes: Layer 0's HARD checks all no-op on None inputs, so
+    # nothing else downstream would ever mark it. Publish the count so the
+    # prefilter and the SKILL.md downshift rule can see it.
+    out["core_fetches_missing"] = core_missing
+    if core_missing >= 2 and out["data_quality"] != "suspect":
+        out["data_quality"] = "suspect"
+        warnings_.append(
+            f"consistency: {core_missing}/4 core yfinance fetches empty "
+            f"— scored on partial data"
+        )
+    if statements_incomplete and out["data_quality"] != "suspect":
+        out["data_quality"] = "suspect"
+        warnings_.append(
+            "consistency: Piotroski/Altman skipped for missing statements "
+            "— up to 6 of 10 fundamentals points are absent, not earned"
+        )
 
     # --- Layer 1: external cross-validation — FMP (US) → Twelve Data (EU) ---
     if use_fmp:

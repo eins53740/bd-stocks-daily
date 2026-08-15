@@ -24,9 +24,15 @@ import send_email as se  # noqa: E402
 
 
 class _FakeSMTP:
-    """Stands in for smtplib.SMTP_SSL, recording the one transaction it is given."""
+    """Stands in for smtplib.SMTP_SSL, recording the one transaction it is given.
+
+    `sendmail_calls` counts transactions rather than recipients: one sendmail() carrying
+    several RCPT TO is still ONE delivery, so counting addresses cannot tell a duplicate
+    send from a multi-recipient digest.
+    """
 
     captured: dict = {}
+    sendmail_calls: int = 0
 
     def __init__(self, host, port, timeout=None):
         _FakeSMTP.captured = {"host": host, "port": port}
@@ -41,6 +47,7 @@ class _FakeSMTP:
         _FakeSMTP.captured["login"] = user
 
     def sendmail(self, sender, recipients, body):
+        _FakeSMTP.sendmail_calls += 1
         _FakeSMTP.captured.update(sender=sender, recipients=list(recipients), body=body)
 
 
@@ -48,6 +55,7 @@ class _FakeSMTP:
 def sending(tmp_path, monkeypatch):
     """Wire main() to send nowhere: fake SMTP, fake keys, temp ledger, no dashboard, no rows."""
     _FakeSMTP.captured = {}
+    _FakeSMTP.sendmail_calls = 0
 
     fake_smtplib = types.ModuleType("smtplib")
     fake_smtplib.SMTP_SSL = _FakeSMTP
@@ -86,7 +94,10 @@ def test_transmitted_message_id_matches_the_helper(sending):
 def test_exactly_one_smtp_transaction(sending):
     se.main()
     assert sending.captured["recipients"] == se.RECIPIENTS
-    assert len(sending.captured["recipients"]) == 1, "one RCPT TO -- one delivery"
+    # ONE transaction, however many recipients it addresses. Asserting on the number of
+    # addresses instead broke the moment a second recipient was added legitimately, while
+    # never catching the failure that actually matters -- main() sending twice.
+    assert sending.sendmail_calls == 1, "one sendmail() -- one delivery"
 
 
 def test_a_successful_send_is_recorded_in_the_ledger(sending):

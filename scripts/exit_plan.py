@@ -108,12 +108,23 @@ def cost_scale_factor(holding_ccy, analysis_ccy) -> float | None:
 
 
 def find_holding(ticker: str, holdings: list, aliases: dict = ALIASES) -> tuple[dict | None, list]:
-    """The holdings-yaml entry for `ticker` (exact match, then alias map).
-    Duplicate tickers: first wins + warning. Returns (entry|None, warnings)."""
+    """The holdings-yaml entry for `ticker` (exact match, then alias map, then
+    any other listing of the same company).
+
+    The cross-listing fallback exists because the analysis now runs on the home
+    line (listings.py): a user holding the TSM ADR would otherwise get
+    "n/a (not held)" on a 2330.TW report — the position is the same, only the
+    symbol we chose to analyse changed. Duplicate tickers: first wins + warning.
+    Returns (entry|None, warnings)."""
     warnings: list = []
     targets = [ticker]
     if aliases.get(ticker):
         targets.append(aliases[ticker])
+    try:
+        import listings
+        targets += [t for t in listings.all_tickers(ticker) if t not in targets]
+    except Exception:  # identity is a nicety here; never break the exit card over it
+        pass
     for target in targets:
         matches = [h for h in holdings
                    if isinstance(h, dict) and h.get("ticker") == target]

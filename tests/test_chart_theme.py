@@ -461,8 +461,44 @@ def test_saved_png_carries_an_alpha_channel(tmp_path):
     out = tmp_path / "alpha.png"
     th.save(fig, out)
     im = Image.open(out)
-    assert im.mode == "RGBA"
+    # The guarantee is TRANSPARENCY, not a particular storage mode. Since 2026-08-03 save() also
+    # palette-quantises, so the file is legitimately "P" with a tRNS array instead of "RGBA".
+    # Asserting the mode string would test the encoder; asserting clear pixels tests the promise.
+    assert im.mode == "RGBA" or (im.mode == "P" and "transparency" in im.info), \
+        f"PNG must be able to carry alpha, got mode={im.mode} info={sorted(im.info)}"
     assert im.convert("RGBA").getpixel((0, 0))[3] == 0, "corner pixel must be clear"
+
+
+def test_quantised_png_is_smaller_but_keeps_its_transparency(tmp_path):
+    """Palette quantisation must never be paid for with a solid background.
+
+    17% of a real chart's pixels are partially transparent (antialiased strokes over nothing), so a
+    quantiser that drops alpha -- which is what every Pillow method except FASTOCTREE does -- would
+    put a box behind every chart while still looking fine in a thumbnail.
+    """
+    from PIL import Image
+    fig, ax = plt.subplots()
+    ax.plot([0, 1], [0, 1])
+    ax.set_title("a title with text to antialias")
+    out = tmp_path / "q.png"
+    th.save(fig, out)
+
+    rgba = Image.open(out).convert("RGBA")
+    alpha = rgba.split()[-1].histogram()
+    assert alpha[0] > 0, "quantised chart lost its transparent background entirely"
+    assert sum(alpha[1:255]) > 0, "quantised chart lost every partially-transparent (AA) pixel"
+
+
+def test_quantisation_can_be_disabled(tmp_path, monkeypatch):
+    """The escape hatch must actually produce a truecolour PNG, so a visual regression can be
+    ruled out in one line rather than by reverting the module."""
+    from PIL import Image
+    monkeypatch.setattr(th, "QUANTIZE_COLORS", 0)
+    fig, ax = plt.subplots()
+    ax.plot([0, 1], [0, 1])
+    out = tmp_path / "noq.png"
+    th.save(fig, out)
+    assert Image.open(out).mode == "RGBA"
 
 
 def test_figure_title_reserves_the_top_margin():

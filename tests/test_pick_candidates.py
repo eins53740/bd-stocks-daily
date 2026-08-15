@@ -24,7 +24,8 @@ def row(ticker, d, score=8.0, size="big", mode="deep", region="US", sector="Tech
 # --- company identity -------------------------------------------------------
 
 def test_adr_and_local_line_share_one_company_key():
-    assert pc.company_key("2330.TW") == pc.company_key("TSM") == "TSM"
+    # Canonical identity is the HOME line, not the ADR (policy change 2026-08-05).
+    assert pc.company_key("2330.TW") == pc.company_key("TSM") == "2330.TW"
 
 
 def test_dual_share_classes_share_one_company_key():
@@ -36,13 +37,8 @@ def test_unaliased_ticker_is_its_own_company():
 
 
 def test_company_key_tolerates_whitespace_and_none():
-    assert pc.company_key("  TSM  ") == "TSM"
+    assert pc.company_key("  TSM  ") == "2330.TW"
     assert pc.company_key(None) == ""  # type: ignore[arg-type]
-
-
-def test_alias_map_has_no_chains():
-    # A value that is itself a key would make identity depend on lookup order.
-    assert not set(pc.TICKER_ALIASES.values()) & set(pc.TICKER_ALIASES)
 
 
 # --- company-level staleness & rounds ---------------------------------------

@@ -134,6 +134,7 @@ Source-framework lineage (the two reference docs at `OneDrive/Ambiente de Trabal
 | `04_risk_audit.md`               | `5_step_system.md` Step 4                                      | 3 layers + leading indicators                                                | §2.14                    |
 | `05_bear_case.md`                | `5_step_system.md` Step 5                                      | "If X happens, thesis is broken."                                            | §2.16                    |
 | `06_swot.md`                     | v4 Phase C (idea #3)                                           | SWOT 2×2, Threats/Risks-weighted; cites `red_flags` + numbers JSON           | SWOT card (§2.18a)       |
+| `07_thesis_duel.md`              | v4.2 (2026-08-05)                                              | Moat mechanism · bull vs bear side-by-side · **LEAN** (BULL/BEAR/BALANCED, never a %) · sector structural forces | **Cartão §0** (topo do report) |
 | `industry_macro.md`              | `ai_industry_analysis_framework.md` Step 1                     | Market, value chain, players, disruption                                     | `_industry/<slug>.md` §1 |
 | `industry_customer.md`           | `ai_industry_analysis_framework.md` Step 2                     | Buyer journey, switching costs                                               | `_industry/<slug>.md` §2 |
 | `industry_architecture.md`       | `ai_industry_analysis_framework.md` Step 3                     | Winning models, moats, top-15 KPIs                                           | `_industry/<slug>.md` §3 |
@@ -214,7 +215,25 @@ Os screens são 4: 1 big + 1 small_growth (qualquer região) + **2 garantidament
 
 **Nomes `size: hyper_growth` são excluídos deste run** (desde 2026-07-28) — pertencem ao `/bd_stocks_daily_growth`, que desde 2026-07-31 corre **antes** deste, na sua própria task (`StocksGrowth`, 12:45), e os avalia com critérios de crescimento. O gate-5 (net margin > 10%) deste modelo rejeitá-los-ia por construção. Os slots deep/big/small já filtravam por size, mas o slot non-US e o shuffle de extras aceitavam qualquer size — daí a exclusão explícita. `pool_stats.hyper_growth_reserved` conta quantos foram reservados.
 
-If any ticker has `round > 1`, the report gets a `🔁 Reavaliação #N` badge at the top and a link back to the prior evaluation.
+If any ticker has `round > 1`, the report gets a `🔁 Reavaliação #N` badge at the top and a link back to the prior evaluation, **e o report ganha a secção §5 Histórico** (ver Phase 5).
+
+#### Listing primário vs ADR (2026-08-05)
+
+`pick_candidates.py` reescreve cada pick para a **linha primária/home** da empresa antes de a analisar. Um ADR é um invólucro: mesma empresa, mesmos filings, com um banco depositário e uma perna cambial pelo meio. A identidade de empresa vive em **`listings.py` → `REGISTRY`** (13 empresas), que substituiu as três tabelas de aliases contraditórias que existiam antes (`pick_candidates.TICKER_ALIASES`, `portfolio_deepdive_gap.EQUIV_GROUPS`, `exit_plan.ALIASES`).
+
+**Porque isto importa — não é arrumação, é correcção.** Quando `financialCurrency != currency` (o caso normal de um ADR), o yfinance devolve **market cap em USD e demonstrações na moeda de casa**. Todos os rácios que dividem um pelo outro saem errados pelo factor cambial. Medido em TSM, 2026-07-27:
+
+| Métrica | 2330.TW (home) | TSM (ADR) | Erro |
+|---------|----------------|-----------|------|
+| P/S | 13.72 | **0.46** | ÷29.74 = taxa TWD/USD |
+| EV/EBITDA | 18.41 | **4.49** | mistura EV USD com EBITDA TWD |
+| P/E, PEG, ROE, margens | iguais | iguais | ✅ calculados dentro de uma só moeda |
+
+Esses múltiplos falsamente baratos inflaram os sub-scores **peer (6.67 → 8.92)** e **valuation (3.5 → 4.5)**, e o ADR pontuou **8.14** contra os **7.80** da mesma empresa dois dias antes. Analisar a linha home elimina isto à nascença.
+
+**Excepção — data thinness.** `listings.preferred_listing()` sonda ambas as linhas (`.info`, 17 campos que o modelo consome, cache 30 dias em `_tmp/_listing_probe.json`) e só mantém o ADR se a home cobrir **< 80%** do que o ADR cobre. Em 2026-08-05 as 13 empresas resolveram todas para home (a mais apertada foi a Samsung: 005930.KS 88% vs SSUN.F 100%). Se **nenhuma** linha for legível a escolha é a home — uma sonda vazia é sinal de rate-limit no yfinance, não de uma home fina, e cair para o ADR nesse sinal desfaria a política exactamente nos dias maus.
+
+O JSON do pick ganha `listing_home`, `listing_reason`, `listing_alternatives` e (quando houve troca) `listing_swapped_from`; `region` é re-derivada do novo sufixo. `--no-probe` desliga a sonda e usa a home sem rede. ADRs ainda não mapeados são apanhados em `analyze_ticker.py` por `listings.adr_suspicion()`, que **avisa mas nunca adivinha** o símbolo home — inventar um par fundiria o histórico de duas empresas.
 
 **Pool-exhausted fallback**: when the regular pool is empty (every prefiltered ticker is within the 183-day dedupe window), `pick_candidates.py` falls back to re-evaluating the stalest ticker from `_log.csv` instead of exiting empty. The user wants a deep-dive in the inbox every day, so the cascade is:
 
@@ -380,6 +399,8 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
 7c. **SWOT (v4 Phase C)** — run `06_swot.md` with `{RED_FLAGS_JSON}` = the `red_flags` block from Phase 2.4 and `{BULL_THESIS}` (same as step 7). Output → the SWOT card (§2.18a). The **Threats/Risks quadrant leads and gets double depth**, and must reconcile every `bad`/`warn` scanner flag + the Beneish verdict. Overlay-only narrative — no number enters the composite.
 
 7d. **Statement commentary (v4 Phase C)** — for each of the three statement sub-sections (Income / Balance / Cash-Flow, §2.6a–c), write a 2–3 sentence anomaly note. **The 0-10 sub-score is the deterministic number from `red_flags.py` (Phase 2.4) — do NOT recompute it in the LLM**; the LLM only names the anomalies behind the flagged checks (ground-truth rule). Skip a statement's commentary if its sub-score is `null` (all checks n/a).
+
+7e. **Thesis duel (v4.2)** — run `07_thesis_duel.md` **last of the qualitative calls**, with `{BULL_THESIS}` (step 7), `{BEAR_CASE}` (the `05_bear_case.md` output), `{MOAT_JSON}` (`scores.moat` + `score_details.moat`), `{SECTOR}` and `{INDUSTRY_CACHE}` (the `_industry/<slug>.md` body). It **judges** the two cases already written — it must not re-derive them. Output → the **cartão §0** at the top of the report (moat band, bull-vs-bear table, LEAN, sector context). Overlay-only: the LEAN never touches the composite or the verdict, and is never rendered as a percentage.
 
 8. **Finalise composite**:
    
@@ -620,6 +641,15 @@ fin_history_quarters: 38          # profundidade real da série; omit se falhou
 segments_available: true          # false quando não há _segments/{TICKER}.json válido
 broker_reco: "XTB — €3.80 round-trip"  # só quando composite ≥ 7.0 E mercado coberto; omit caso contrário
 macro_cache_date: 2026-07-15      # data do _macro embed usado na §4
+listing_home: 2330.TW             # linha primária da empresa; omit se cotação única
+listing_alternatives: [TSM]       # outras cotações da MESMA empresa; omit se cotação única
+listing_reason: "home listing preferred — coverage 100% vs TSM 100%"  # porquê esta linha
+prior_evaluations: 7              # nº de avaliações anteriores da empresa (§5); omit se 0
+company_name: "Taiwan Semiconductor Manufacturing Company Limited"  # alimenta _company_names.json
+thesis_lean: bull                 # bull | bear | balanced — narrativa; NUNCA entra no composite
+moat_label: wide                  # wide (≥8) | narrow (5–7.9) | none (<5) — derivado de scores.moat
+insider_pct: 0.041                # heldPercentInsiders — INSIDERS, não gestão executiva
+institutional_pct: 0.168          # heldPercentInstitutions
 schema_version: "2.2"
 ---
 ```
@@ -652,11 +682,34 @@ schema_version: "2.2"
 
 **Position-size guideline (deterministic — apply, don't improvise):** start from the verdict band — `great` ≥9.0 → core 4–6%; `invest` 7.5–8.9 → starter 1.5–3%, build to 4%; `review` 6.0–7.4 → watchlist only (0%, define a trigger); `fair`/`reject` → no position. Then shift **one band down** (core→starter, starter→watchlist) for each of: `management_flag: true`, `tech_risk_level: High`, `go_no_go: NO-GO`, `data_quality: suspect` — applied at most once in total, not cumulatively below watchlist. Conviction line: High = no downshift triggered and ≥6 gates; Low = any downshift triggered; Medium otherwise.
 
+### 🏰 MOAT — {moat_score}/10 · {WIDE se ≥8 · NARROW se 5–7.9 · NONE se <5}
+
+> ## **{mecanismo do moat numa linha — switching costs / escala / rede / licença / marca / curva de custo}**
+
+{2–3 frases do bloco MOAT do prompt `07_thesis_duel.md`: o que sustenta o moat, o que o erode e em que horizonte. Ancorar em ROIC {roic_ttm}% e no score computado — nunca inventar um score diferente. Se os números não suportam um mecanismo identificável, dizê-lo: ROIC alto sem mecanismo é um windfall, não um moat.}
+
+### ⚔️ Bull vs Bear
+
+| | 🐂 **BULL** | 🐻 **BEAR** |
+|---|---|---|
+| **Claim** | {1 frase} | {1 frase} |
+| **Se acontecer (3–5 anos)** | {1 frase} | {1 frase} |
+| **Depende de / Gatilho** | {NEEDS} | {TRIGGER} |
+
 > [!success] 💚 **Thesis**: **{bull case em 1-2 frases, bold — versão expandida da linha do TL;DR}**
 
 > [!danger] 🔴 **Risks**: **{risco #1 + bear trigger, bold — versão expandida da linha do TL;DR}**
 
-*(Estes dois callouts PROMOVEM a tese/risco visualmente. CRÍTICO: mantêm os labels literais `**Thesis**:` e `**Risks**:` — `build_dashboard.py`/`send_email.py`/`thesis_dashboard.py` fazem regex-match desses labels; as linhas do TL;DR ficam também intactas.)*
+> [!abstract] ⚖️ **MAIS PROVÁVEL: {🐂 BULL · 🐻 BEAR · ⚖️ EQUILIBRADO}**
+> {1 frase, ≤40 palavras, a citar o número que decidiu — output LEAN do prompt 07.}
+> *Leitura narrativa. **Não entra no composite, não altera o veredicto, e nunca é expressa em percentagem** — não há dados de calibração que sustentem um "70% bull", e um número desses parece evidência sem a ser. `EQUILIBRADO` é uma resposta legítima e esperada com frequência.*
+
+> [!info] 🧾 **Skin in the game · Sector**
+> **Insiders**: {insider_pct}% · **Instituições**: {institutional_pct}% {se recent_insider_transactions: "· últimas transacções: {posição} {compra/venda} {shares}"}
+> ⚠️ `heldPercentInsiders` conta **insiders** — fundadores, administradores, trusts familiares e participações cruzadas — **não é a participação da gestão executiva**. Rotular como "management ownership" seria enganador; para o sinal de gestão usar as transacções por `position` (CEO/CFO) e §2.3/§2.4.
+> **Sector — {sector}**: {2–3 frases do bloco SECTOR CONTEXT do prompt 07 — força estrutural, direcção, e o que a inverteria. Nunca um y/n.}
+
+*(Este é o **cartão §0**, imediatamente abaixo do TL;DR e acima do chart de preço — moat, os dois lados da tese e o lean ficam todos above the fold. CRÍTICO: os callouts mantêm os labels literais `**Thesis**:` e `**Risks**:` — `build_dashboard.extract_field()` faz regex-match desses labels e apanha a PRIMEIRA ocorrência, que é a linha do TL;DR; as linhas do TL;DR ficam intactas.)*
 
 ### 📊 Metrics strip
 
@@ -689,6 +742,18 @@ schema_version: "2.2"
 | Management Quality | 8% | {X}/10 | ... |
 | Market Context | 5% | ... | ... |
 | **Total**    | 100% | — | **{composite_score}/10** |
+
+### Onde comprar (só quando a empresa tem >1 cotação)
+
+Bloco determinístico — **gerado por script, nunca escrito pelo LLM**:
+
+```bash
+python "%SCRIPTS%\listings.py" {TICKER} --table
+```
+
+Devolve `''` para nomes com uma só cotação (não renderizes nada nesse caso). Para nomes dual-listed devolve a tabela `Ticker | Mercado | Moeda | Tipo | Rácio | Broker mais barato (€1500)` com a linha home a **negrito**, mais um callout a lembrar que o rácio ADR↔ordinária tem de ser aplicado antes de comparar preços cotados. Se já correste `broker_compare.py` neste run, passa os custos para preencher a última coluna; mercados fora de `brokers.yaml` ficam `—` (nunca um número inventado).
+
+Frontmatter que acompanha: `listing_home`, `listing_alternatives`, `listing_reason` (vindos do JSON do pick).
 
 ### Quality Compounder 7-Gate checklist
 - {✅/❌/⚠️} Gate 1 — Revenue growth 5y CAGR ≥ 8%: **{value}%**
@@ -1067,6 +1132,21 @@ Renderiza do bloco `opinion_panel` (Phase 2.58). Modelo **independente** (Groq�
 
 {Se o snapshot de hoje falhou: embed do mais recente disponível + `⚠️ macro snapshot stale ({N} days)` — nunca omitir a secção silenciosamente.}
 
+## 5. Histórico de avaliações
+
+(Bloco **determinístico, gerado por script** — o LLM não escreve nem resume nada aqui. Omitido por completo quando é a primeira avaliação da empresa.)
+
+```bash
+python "%SCRIPTS%\report_history.py" --ticker {TICKER} --date {date} \
+  --score {composite} --verdict {verdict} --price {price_at_eval} --currency {currency} --block
+```
+
+Cola a saída tal e qual. Contém: um callout a dizer que este report substitui os anteriores, uma frase de tendência calculada (Δ score vs a avaliação anterior, amplitude histórica, veredicto estável ou a cadeia de mudanças, variação de preço) e uma tabela de todas as avaliações anteriores — **da empresa, não do ticker**, portanto as 7 avaliações de TSMC espalhadas por `TSM` e `2330.TW` aparecem como um só histórico.
+
+O "resumo" de cada linha é extraído **verbatim** do report antigo (a linha `> **Thesis**:` do TL;DR, ou o one-liner do callout `[!info] Screen rápido`) — 343 de 355 reports em 2026-08-05. Sem âncora, cai para `notes` do `_log.csv` e depois para `—`. Custo em tokens: zero.
+
+⚠️ Variações de preço só são calculadas **entre avaliações na mesma moeda** — a linha TWD e o ADR em USD cotam a mesma empresa com 30× de diferença, e subtrair uma da outra fabricaria um "movimento" de 3000%.
+
 ---
 *Analysis written by {model name} · bsdias©2026 · host: {hostname}*
 ```
@@ -1130,9 +1210,25 @@ Implementation:
 
 Example: today's flow finds `screen` verdict `invest` for RYA.IR → orchestrator triggers `--ticker RYA.IR --mode deep` → both reports written → email digest covers both.
 
+### Phase 5.6 — Chart gate (OBRIGATÓRIO, antes do render HTML)
+
+```bash
+python "%SCRIPTS%\check_report_charts.py" --report "%OUT_DIR%\{date}_{ticker}_{verdict}.md"
+```
+
+**Se sair non-zero, cola as linhas que ele imprime no sítio certo do report e volta a correr até passar.** Não avances para 5.7 com o gate vermelho.
+
+Porquê um gate e não uma instrução: as linhas `![...](IMG/...)` já estão no template desde sempre e mesmo assim **32 de 169 deep reports** tinham charts renderizados que o `.md` nunca referenciou — o `dcf` 25 vezes, e em 2026-08-05 os três reports do dia (KLAC, WKL.AS, ZTS) omitiram o **conjunto completo** (5 a 7 charts cada). Uma instrução que falha 19% das vezes não é uma instrução, é uma sugestão; o gate é determinístico (filesystem + regex, zero API).
+
+⚠️ **Âmbito real do estrago — o HTML nunca foi afectado.** `render_report.py` monta o caminho `IMG/{date}_{ticker}_{kind}.png` **directamente** (linha ~709), não lê os links do markdown. Verificado: os HTML de KLAC e ZTS já tinham os 7 charts embebidos em base64, e re-renderizá-los não mudou o tamanho. O que estava partido era o **`.md` que se lê no Obsidian** — que é a fonte contratual e o que se abre no dia-a-dia. Portanto: bug real, mas os charts nunca se perderam.
+
+Apanha as duas direcções: **órfãos** (PNG em disco que o report não referencia) e **links partidos** (o report referencia um PNG que não existe — 5 reports linkavam um `_segments.png` que nunca foi produzido, e o VST linkava os 4 charts sem nenhum ter sido renderizado). Screens são ignorados por construção (só levam a metrics strip). `--audit` varre tudo o que está em disco.
+
+**Backfill** — `--fix` insere os órfãos na âncora do template (radar sob *Score breakdown*, peers sob *Peer ranking snapshot*, dcf em §2.11, ni_pe em §2.12, o trio da metrics strip acima de `## 1.`) e remove os links mortos, deixando a prosa por baixo intacta (nos casos `segments` é precisamente o parágrafo que explica a ausência). **Não re-renderiza** um chart em falta: o analysis JSON de um report antigo já saiu do `_tmp`, e correr o pipeline hoje traria os preços de hoje para um report datado de há meses — um chart em falta é uma lacuna, um chart do período errado é uma mentira. `--dry-run` mostra o plano. Idempotente. Backlog histórico corrigido em 2026-08-06 (+48 imagens, −9 links mortos, 32 reports; gate a 170/170).
+
 ### Phase 5.7 — Render HTML report (v4 Phase F, primary artifact)
 
-Corre DEPOIS de o `.md` estar escrito (Phase 5) e de os charts existirem (Phase 3). **Sob Python312 ambiente** (na verdade puro stdlib — corre em qualquer runtime):
+Corre DEPOIS de o `.md` estar escrito (Phase 5), dos charts existirem (Phase 3) e do **gate 5.6 passar**. **Sob Python312 ambiente** (na verdade puro stdlib — corre em qualquer runtime):
 
 ```bash
 python "%SCRIPTS%\render_report.py" --md "%OUT_DIR%\{date}_{ticker}_{verdict}.md" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --out-dir "%OUT_DIR%"
@@ -1151,10 +1247,14 @@ python "%SCRIPTS%\render_report.py" --index {date} --out-dir "%OUT_DIR%"
 ```bash
 python "%SCRIPTS%\update_log.py" --entries-json '<JSON>'
 python "%SCRIPTS%\update_shortlist.py"
+python "%SCRIPTS%\report_history.py" --archive
 ```
 
 - `update_log.py` v2 appends entries to `_log.csv`. Columns include `management_score, management_flag, bear_case_trigger`. First run against a v1 CSV migrates once in-place (non-destructive: old rows gain blank v2 fields).
-- `update_shortlist.py` relê `_log.csv` inteiro, filtra score≥7.5 e NOT expired (90 dias), regenera `_shortlist.md`. Move entradas expiradas para `_shortlist_expired.md`.
+- `update_shortlist.py` relê `_log.csv` inteiro, filtra score≥7.5 e NOT expired (90 dias), regenera `_shortlist.md`. Move entradas expiradas para `_shortlist_expired.md`. Desde 2026-08-05 deduplica **por empresa** (`listings.company_key`), não por string de ticker — `TSM` e `2330.TW` são uma posição, logo uma linha.
+- `report_history.py --archive` move os reports **superados** (`.md` + o `.html` irmão) para `_archive/`, deixando **um report por empresa** na raiz. Regra: data mais recente ganha; dentro da mesma data o `deep` ganha ao `screen` que lhe deu origem. `_log.csv` **mantém todas as linhas** — o histórico e o backtesting precisam delas; só os ficheiros renderizados são colapsados. Os caminhos `](IMG/...)` são reescritos para `](../IMG/...)` na cópia arquivada para os charts continuarem a abrir; o HTML embute os charts em base64 e não precisa. `--dry-run` mostra o plano sem mexer em nada.
+
+  Isto é o que faz desaparecer as duplicações no digest e no dashboard: `build_dashboard.py` faz glob só à raiz, portanto o que está em `_archive/` deixa de entrar no bundle. Em cima disso, `build_dashboard.collapse_by_company()` e `send_email.latest_per_company()` voltam a colapsar em memória — um re-run manual entre passagens do arquivador não pode repor a duplicação.
 - `update_shortlist.py` v2.1 also emits `_catalyst_calendar.md` alongside `_shortlist.md` — a rolling 30/60/90-day events table for every active shortlist ticker (earnings dates from latest `_log.csv` `earnings_date_next`, ex-div dates from yfinance). The earnings-preview cron (`bd-stocks-earnings-preview` skill) reads this file to auto-trigger 2 business days before any shortlist earnings event.
 - `watchlist.py` (v4 Phase E, Phase 2.57) mantém `_watchlist.csv` — nomes composite≥7 travados só pelo preço (`mos_class == "rich"`, não-held); target = `intrinsic_value.fair_value_range.low`. Regra idempotente (upsert preserva `added_date`; remove em compra/perda-de-qualidade/graduação). Lido por `send_email.py` para o bloco triggered. `alpha_beta.py` (Phase 2.56) mantém o cache diário `_portfolio_riskprofile.json` (α/β da carteira vs URTH, EUR) — recomputado 1×/dia, reutilizado por todos os deeps.
 

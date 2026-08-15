@@ -43,6 +43,18 @@ def main():
     safe = args.ticker.replace("/", "_").replace("\\", "_")
     out_path = out_dir / f"{args.date}_{safe}.json"
     out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # analyze_ticker exits 1 and prints {"error": ...} when it refuses to score -- notably the
+    # throttle gate that stops a rate-limited (429) fetch being scored as a real "reject". That
+    # JSON parses perfectly, so without this check the artifact was written, "OK wrote ..." was
+    # printed with composite=None, and this process exited 0: the gate was fully neutralised on
+    # the daily path while still working for the prefilter and growth ones. The blob is kept on
+    # disk for diagnosis, but the exit code must say the analysis did NOT happen.
+    if proc.returncode != 0 or "error" in data:
+        print(f"FAIL analyze_ticker rc={proc.returncode} ticker={args.ticker} "
+              f"error={data.get('error')}", file=sys.stderr)
+        sys.exit(2)
+
     print(f"OK wrote {out_path}")
     print(f"   composite={data.get('scores',{}).get('composite')} verdict={data.get('verdict')} gates={data.get('gates_passed')}/7")
 

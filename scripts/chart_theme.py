@@ -28,6 +28,10 @@ labels its latest-year bars.
 """
 from __future__ import annotations
 
+import io
+import sys
+from pathlib import Path
+
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 
@@ -352,6 +356,50 @@ def percent_axis(ax, axis: str = "x", decimals: int = 0) -> None:
     target.set_major_formatter(PercentFormatter(xmax=1.0, decimals=decimals))
 
 
+# PNG palette quantisation: 256 colours, adaptive, alpha preserved. Set 0 to disable.
+# Measured 2026-08-03 on a real radar chart: 162 KB -> 38 KB (-77%), and composited against white,
+# dark and a saturated orange the RMS difference is 0.86 / 0.88 / 0.76 out of 255 -- imperceptible.
+# Charts are flat fills and text, which is exactly what a palette encodes losslessly in practice.
+QUANTIZE_COLORS = 256
+
+
+def quantize_png(path) -> None:
+    """Shrink a just-written chart in place, or leave it exactly as it was.
+
+    FASTOCTREE is mandatory here, not a preference: it is the only Pillow method that carries the
+    ALPHA channel into the palette (as a PNG tRNS array). These PNGs are transparent by design and
+    17% of their pixels are partially transparent -- antialiased text and lines over nothing -- so a
+    method that drops alpha would paint a solid box behind every chart. MEDIANCUT refuses RGBA
+    outright; verified after a round-trip to disk that FASTOCTREE keeps 81.8% fully-clear pixels.
+
+    Only overwrites when the result is genuinely smaller. Matplotlib's own encoder is already good:
+    a plain lossless re-save makes some charts BIGGER (price: 84 -> 96 KB), so "optimising"
+    unconditionally would cost disk rather than save it.
+    """
+    if not QUANTIZE_COLORS:
+        return
+    p = Path(path)
+    try:
+        from PIL import Image
+    except ImportError:
+        print(f"chart_theme: Pillow unavailable, leaving {p.name} unquantised", file=sys.stderr)
+        return
+    try:
+        before = p.stat().st_size
+        with Image.open(p) as im:
+            q = im.convert("RGBA").quantize(colors=QUANTIZE_COLORS, method=Image.FASTOCTREE)
+            buf = io.BytesIO()
+            q.save(buf, "PNG", optimize=True)
+        data = buf.getvalue()
+        if len(data) < before:
+            p.write_bytes(data)
+    except Exception as e:  # noqa: BLE001
+        # A chart that exists beats a chart that is small. Report it -- never swallow silently,
+        # or a permanently broken optimisation would look like it was working for months.
+        print(f"chart_theme: quantise failed for {p.name} ({type(e).__name__}: {e}) — "
+              f"keeping the original", file=sys.stderr)
+
+
 def save(fig, path, pad: float = 0.35) -> None:
     """Single save path so every PNG lands at the same dpi, padding and (lack of)
     background. `transparent=True` is the whole point: see the surfaces note at the
@@ -359,3 +407,4 @@ def save(fig, path, pad: float = 0.35) -> None:
     fig.savefig(path, dpi=DPI, bbox_inches="tight", pad_inches=pad,
                 transparent=True)
     plt.close(fig)
+    quantize_png(path)

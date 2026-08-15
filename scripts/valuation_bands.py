@@ -128,6 +128,22 @@ def pe_series_records(eps_records: list, pe_series: list) -> list:
     ]
 
 
+def drop_offcycle_records(records: list) -> list:
+    """Keep only records whose fiscal month matches the series' dominant month.
+
+    Alpha Vantage's `annualEarnings` sometimes trails a partial-year stub — one
+    quarter's EPS dated off the fiscal year-end (VEEV 2026-07-30: 2026-04-30
+    EPS 2.24 beside thirteen 01-31 annuals). That stub becomes the band's latest
+    year, its ratio lands >3x the current P/E, and `unit_consistency` discards
+    an otherwise sound multi-year band. Filtering here heals the cached records
+    too, so no extra AV call is needed."""
+    months = [r["date"][5:7] for r in records if r.get("date")]
+    if len(months) < 3:
+        return records
+    dominant = max(set(months), key=months.count)
+    return [r for r in records if r.get("date", "")[5:7] == dominant]
+
+
 def justified_exit_pe(pe_band: dict | None) -> float | None:
     """The justified exit multiple for forward targets: the band MEDIAN capped
     at the band max. The median, not the mean — transition years with near-zero
@@ -428,7 +444,8 @@ def build_eps_series(ticker: str, tk, out_dir: Path, force: bool) -> tuple[list,
         if (isinstance(cached, dict) and cached.get("eps_records")
                 and fh.cache_is_fresh(cached.get("fetched_at", ""), now_iso, TTL_DAYS)):
             log(f"EPS cache hit for {ticker} (fresh, no network)")
-            return cached["eps_records"], cached.get("eps_source", "cache")
+            return (drop_offcycle_records(cached["eps_records"]),
+                    cached.get("eps_source", "cache"))
 
     suffix = markets.suffix_of(ticker)
     key = fh.read_alphavantage_key() if suffix == "" else None
@@ -454,7 +471,7 @@ def build_eps_series(ticker: str, tk, out_dir: Path, force: bool) -> tuple[list,
     if records:
         fh.write_cache(cache_path, {"ticker": ticker, "fetched_at": now_iso,
                                     "eps_source": source, "eps_records": records})
-    return records, source
+    return drop_offcycle_records(records), source
 
 
 def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> dict:
