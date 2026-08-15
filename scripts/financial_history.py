@@ -54,9 +54,20 @@ BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
 API_KEYS_PATH = BD_FINANCE / "config" / "api_keys.txt"
 
 TTL_DAYS = 80
-AV_DAILY_LIMIT = 20        # stay well under Alpha Vantage's free 25/day
-AV_THROTTLE_RETRIES = 2    # attempts per endpoint when AV answers with a throttle note
-AV_THROTTLE_DELAY_S = 20.0  # free tier is 5 req/min — space the retry past the window
+# MEASURED 2026-08-15, not assumed: Alpha Vantage enforces the free 25/day cap
+# against the SOURCE IP, not the key. Burning one key to its limit and immediately
+# probing four other, previously-working keys got all four refused by name. So the
+# six entries in api_keys.txt (five distinct — `api_key_alphavantage` and `…1` are
+# the same string) share ONE machine-wide allowance of 25 calls per day. Key
+# rotation cannot raise it; do not add a key pool.
+AV_DAILY_LIMIT = 20        # stay well under the per-IP free 25/day
+AV_THROTTLE_RETRIES = 2    # attempts per endpoint when AV answers with a rate note
+# The same test fired 24 calls at ~1/second with none refused, so the old 5-req/min
+# free-tier window this delay was sized for no longer exists. The delay is kept only
+# for a genuine per-minute note, which AV may still return on other plans; a
+# DAILY-cap refusal is never retried (see _av_get_with_retry) because no amount of
+# waiting clears it before midnight.
+AV_THROTTLE_DELAY_S = 20.0
 MAX_QUARTERS = 40
 # Annual-history depth. Lifted from 6 in v4 Phase E so the 10/15-yr revenue-CAGR
 # rungs (valuation_bands.cagr_ladder_from_annual) can populate whenever a source
@@ -397,24 +408,59 @@ def read_alphavantage_key() -> str | None:
     return None
 
 
+def _av_refusal_kind(payload) -> str | None:
+    """Classify an Alpha Vantage refusal: None | 'daily' | 'rate'.
+
+    The distinction is what decides whether retrying is worth anything. AV signals
+    both a per-minute throttle and the 25/day cap the same way — HTTP 200 with a
+    Note/Information key instead of data — but they need opposite handling:
+
+      'rate'  — clears within a minute, so spacing the retry works.
+      'daily' — clears at midnight. Retrying burns a second counted call against an
+                allowance that is already gone, waits 20 s, and fails identically.
+
+    Anything unrecognised is treated as 'rate', which keeps the old retry behaviour
+    for messages this classifier has not seen. The conservative direction: a wasted
+    retry is cheaper than mistaking a transient throttle for an exhausted day.
+
+    ORDER MATTERS, and testing it is what caught the bug. The classic per-minute note
+    reads "...call frequency is 5 calls per minute and 500 calls per day", so keying
+    on "per day" alone classifies a *transient* throttle as an exhausted day and
+    silently disables the retry that fixed the all-None FCF column. "per minute" is
+    checked first because the daily-cap refusal never mentions it.
+    """
+    if not isinstance(payload, dict):
+        return None
+    msg = payload.get("Note") or payload.get("Information")
+    if not msg:
+        return None
+    text = str(msg).lower()
+    if "per minute" in text:
+        return "rate"
+    return "daily" if "per day" in text else "rate"
+
+
 def _av_is_throttled(payload) -> bool:
     """Alpha Vantage signals a rate limit with HTTP 200 and a Note/Information
     key instead of data — so it looks like a successful, empty response."""
-    return isinstance(payload, dict) and bool(
-        payload.get("Note") or payload.get("Information"))
+    return _av_refusal_kind(payload) is not None
 
 
 def _av_get_with_retry(url: str, label: str, attempts: int = AV_THROTTLE_RETRIES,
                        delay_s: float = AV_THROTTLE_DELAY_S, sleep=None) -> tuple:
-    """GET an AV endpoint, retrying only when the response is a throttle note.
+    """GET an AV endpoint, retrying only when the response is a per-minute note.
     Returns (payload, calls_made) so the daily budget counts every request.
 
-    The free tier allows 5 requests/minute. fetch_alphavantage fires
-    INCOME_STATEMENT and CASH_FLOW back-to-back and valuation_bands adds an
-    EARNINGS call in the same run, so the second or third request in that burst
-    is routinely throttled — which used to silently produce an all-None FCF
-    column (see cache_has_fcf). Spacing the retry is what actually fixes it;
-    everything else only made the failure visible."""
+    fetch_alphavantage fires INCOME_STATEMENT and CASH_FLOW back-to-back and
+    valuation_bands adds an EARNINGS call in the same run. When AV throttled that
+    burst it used to silently produce an all-None FCF column (see cache_has_fcf);
+    spacing the retry is what actually fixed it.
+
+    A DAILY-cap refusal returns immediately instead. Retrying one cannot succeed
+    before midnight, so the old unconditional retry spent 20 s of a 30-minute job
+    budget and a second counted call per endpoint to obtain the identical refusal —
+    ~40 s and 2 wasted calls per capped US name, on an allowance that is per-IP and
+    therefore already spent machine-wide."""
     sleeper = sleep if sleep is not None else _default_sleep
     payload, calls = None, 0
     for attempt in range(1, max(1, attempts) + 1):
@@ -424,7 +470,11 @@ def _av_get_with_retry(url: str, label: str, attempts: int = AV_THROTTLE_RETRIES
         except Exception as e:
             log(f"AV {label} failed: {type(e).__name__}: {e}")
             payload = None
-        if not _av_is_throttled(payload):
+        kind = _av_refusal_kind(payload)
+        if kind is None:
+            return payload, calls
+        if kind == "daily":
+            log(f"AV {label} refused: daily cap reached (per-IP) — not retrying")
             return payload, calls
         if attempt < attempts:
             log(f"AV {label} throttled — retrying in {delay_s:.0f}s "
@@ -535,27 +585,38 @@ def _av_annual_records(annual_income: list, acf_by_date: dict) -> list:
     return records[-MAX_ANNUAL_YEARS:]
 
 
-def fetch_alphavantage(ticker: str, key: str) -> tuple[dict | None, int]:
-    """Fetch quarterly+annual series from Alpha Vantage. Returns (hist|None, calls_made).
+def fetch_alphavantage(ticker: str, key: str) -> tuple[dict | None, int, bool]:
+    """Fetch quarterly+annual series from Alpha Vantage.
 
-    calls_made counts the HTTP requests issued (for the daily-budget counter) even
-    when the response is empty or throttled."""
+    Returns (hist|None, calls_made, daily_capped). calls_made counts the HTTP
+    requests issued (for the daily-budget counter) even when the response is empty
+    or throttled. daily_capped says the 25/day per-IP allowance is spent, which the
+    caller turns into a durable signal so the rest of the run stops asking.
+    """
     calls = 0
     income, n = _av_get_with_retry(
         f"{AV_BASE}?function=INCOME_STATEMENT&symbol={ticker}&apikey={key}",
         "INCOME_STATEMENT")
     calls += n
+
+    # Short-circuit: if the day's allowance is gone, CASH_FLOW cannot possibly
+    # answer either. Firing it anyway is a guaranteed-useless request.
+    if _av_refusal_kind(income) == "daily":
+        log("AV daily cap reached — skipping CASH_FLOW for this ticker")
+        return None, calls, True
+
     cashflow, n = _av_get_with_retry(
         f"{AV_BASE}?function=CASH_FLOW&symbol={ticker}&apikey={key}", "CASH_FLOW")
     calls += n
+    capped = _av_refusal_kind(cashflow) == "daily"
 
     if not isinstance(income, dict) or "quarterlyReports" not in income:
         # Throttle/limit responses carry a 'Note'/'Information' key instead of data.
-        if isinstance(income, dict) and (income.get("Note") or income.get("Information")):
+        if _av_is_throttled(income):
             log("AV rate-limited (Note/Information response)")
         else:
             log("AV income statement empty or malformed")
-        return None, calls
+        return None, calls, capped
 
     quarterly_income = income.get("quarterlyReports", []) or []
     annual_income = income.get("annualReports", []) or []
@@ -581,7 +642,7 @@ def fetch_alphavantage(ticker: str, key: str) -> tuple[dict | None, int]:
     records = _av_records(quarterly_income, cf_by_date)
     if not records:
         log("AV returned no usable quarterly rows")
-        return None, calls
+        return None, calls, capped
     annual_records = _av_annual_records(annual_income, acf_by_date)
 
     # AV sends absent strings as the literal "None", which is truthy — so this
@@ -597,8 +658,8 @@ def fetch_alphavantage(ticker: str, key: str) -> tuple[dict | None, int]:
     n_fcf = sum(1 for r in records if r.get("fcf") is not None)
     log(f"AV ok: {len(records)} quarters ({n_fcf} with FCF), "
         f"{len(annual_records)} years, currency={currency}")
-    return assemble_hist("alphavantage", currency, records, annual_records,
-                         fy_end_month, av_warnings), calls
+    return (assemble_hist("alphavantage", currency, records, annual_records,
+                          fy_end_month, av_warnings), calls, capped)
 
 
 # ===================================================================
@@ -859,8 +920,18 @@ def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> d
             if not av_budget_allows(budget, today_iso, AV_DAILY_LIMIT):
                 log(f"AV daily budget exhausted ({budget['calls']}/{AV_DAILY_LIMIT}); skipping AV")
             else:
-                av_hist, calls = fetch_alphavantage(ticker, key)
+                av_hist, calls, daily_capped = fetch_alphavantage(ticker, key)
                 budget["calls"] += calls
+                if daily_capped:
+                    # The 25/day allowance is per-IP, so it is spent for every key
+                    # and every sibling node on this machine until midnight.
+                    # Saturating the counter is what carries that fact across
+                    # process boundaries: valuation_bands runs as its own process
+                    # and would otherwise re-discover the cap one wasted call at a
+                    # time. The file is the only channel the nodes share.
+                    budget["calls"] = max(budget["calls"], AV_DAILY_LIMIT)
+                    log(f"AV daily cap hit — budget saturated at {budget['calls']}; "
+                        f"remaining nodes will skip AV until tomorrow")
                 save_budget(fh_dir / "_av_budget.json", budget)
                 if av_hist:
                     hist = av_hist

@@ -74,17 +74,6 @@ data being checked.**
   `402 Grow/Venture`, TW/HK/KR `402 Pro/Venture`. Restricting TD to US cross-checks is the
   honest alternative.
 
-### R5. Rotate the six Alpha Vantage keys instead of retrying one — **S**
-
-`config/api_keys.txt` holds **six** AV keys (`api_key_alphavantage` + `…1`–`…5`). The free
-limit is 5 requests/**minute** per key, and a throttled `CASH_FLOW` call silently produced
-FCF-less caches for 10 of 33 names over three months (fixed 2026-07-30 with a 20 s spaced
-retry — which treats the symptom).
-
-- **Plan**: round-robin the pool in `financial_history.py` / `valuation_bands.py`, raising the
-  ceiling to ~30 req/min and removing the burst throttle at its cause.
-- **Keep** the spaced retry as the backstop; the pool reduces how often it fires.
-
 ---
 
 ## Next — AGREED-DEFERRED
@@ -221,6 +210,22 @@ without a backtest is an educated guess on top of an educated guess
 - **ATR trailing stops in the exit plan** — `atr_context.enabled` stays `false` by
   design: a compounder tolerates normal 20–30% drawdowns, and exit discipline is
   the P/E band plus the thesis. Trailing stops belong to the growth skill.
+- **R5 — rotating the Alpha Vantage key pool** *(closed 2026-08-15, measured not assumed)*.
+  The entry assumed "six keys ⇒ ~6× the throughput". Both halves were false:
+  - `config/api_keys.txt` holds six entries but **five distinct keys** —
+    `api_key_alphavantage` and `api_key_alphavantage1` are the same string.
+  - **The free 25/day cap is enforced per SOURCE IP, not per key.** One key was burned
+    to its limit (25 calls succeeded, the 26th refused); the four other keys, one of
+    which had answered normally seconds earlier, were then **all refused by name** from
+    this machine. Rotation cannot raise a ceiling that is not per-key.
+
+  So this laptop has **one machine-wide allowance of 25 AV calls/day**, shared by
+  `financial_history.py` and `valuation_bands.py` — which is exactly what the existing
+  shared `_fin_history/_av_budget.json` counter already models. Nothing to build.
+
+  Do **not** re-open this by adding more keys; the constraint is the IP. Raising AV
+  throughput requires a paid plan, and raising **non-US** depth requires a different
+  provider entirely — see **N0** (AV fundamentals are US-listed only regardless of tier).
 
 ---
 

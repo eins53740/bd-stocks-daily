@@ -68,6 +68,63 @@ Wave-based upgrade. See `~/.claude/plans/` for the master plan. Waves land one a
 
 **864 passed, 1 skipped.**
 
+### Wave 1 — data foundation (2026-08-15, in progress)
+
+**1.0 entry gate — the Alpha Vantage key pool was a dead end, and it was worth 30 minutes
+to find out before writing the rotation code.** The gate asked one question: is the free
+25/day cap enforced per key or per IP? Measured, not reasoned about:
+
+- Burned `api_key_alphavantage5` with `GLOBAL_QUOTE` calls — **25 succeeded, the 26th was
+  refused**.
+- Immediately probed `api_key_alphavantage4`, which had answered normally **seconds
+  earlier** — refused. Then keys 3, 2 and the production key — **all refused, each named in
+  its own refusal message**.
+- Four independent keys cannot coincidentally exhaust at the same instant, so the cap is
+  **per source IP**. Key rotation buys nothing.
+- Second finding along the way: the "six-key pool" is **five distinct keys** —
+  `api_key_alphavantage` and `…1` are byte-identical.
+
+**Roadmap R5 closed as WON'T DO** with the evidence recorded, so nobody re-opens it by
+adding a seventh key. This machine has **one allowance of 25 AV calls/day**, shared across
+every skill — which the existing `_fin_history/_av_budget.json` counter already models
+correctly. Nothing to build.
+
+**Plan item 1.1 (rotation) is dead. Plan item 1.2 (financial history for the two screen
+tickers) survives** — the plan had coupled them, but the measurement shows 1.2 never needed
+the pool. The real daily draw is **~4 calls** (ledger, 2026-08-14) against a guard of 20,
+because with a 80-day TTL and no US cache older than **31 days**, TTL refreshes essentially
+never fire; the draw is new, cache-cold US names only. Three picks all US and all cold is
+~9 calls — comfortably inside the guard.
+
+**Two defects the test exposed, both fixed:**
+
+- **The 20 s retry was sized for a limit that no longer exists.** `AV_THROTTLE_DELAY_S`
+  carried the comment *"free tier is 5 req/min — space the retry past the window"*, but the
+  gate fired **24 calls at ~1/second with none refused**: there is no per-minute window on
+  this tier any more, only the daily cap. Worse, the retry was unconditional, so a
+  **daily-cap** refusal slept 20 s and spent a second counted call to receive the identical
+  refusal — ~40 s of a 30-minute job budget and 2 wasted calls per capped US name, against
+  an allowance already spent machine-wide. Refusals are now classified (`_av_refusal_kind`):
+  a per-minute note still retries, a daily cap returns immediately. `fetch_alphavantage`
+  also short-circuits `CASH_FLOW` when `INCOME_STATEMENT` came back capped.
+- **A daily cap now saturates the budget file.** Each pipeline node is a separate process,
+  so an in-memory flag cannot travel from `financial_history` to `valuation_bands`; the
+  budget file is the only shared channel. One node discovering the cap now stops the others
+  re-discovering it one wasted call at a time. It still clears at the date rollover — tested,
+  because the failure mode of getting that wrong is being wedged off AV permanently.
+
+**A bug in the fix, caught by its own test before it shipped**: the first classifier keyed on
+the substring `"per day"` — but AV's *per-minute* note reads *"5 calls per minute and 500
+calls per day"*, so it would have classified a transient throttle as an exhausted day and
+**silently disabled the retry that fixed the all-None FCF column** on 10 of 33 names. The
+classifier now checks `"per minute"` first, and the ordering is asserted.
+
+**878 passed, 1 skipped** (+14).
+
+*Operational note: the gate consumed the machine's AV allowance for 2026-08-15. No
+scheduled job was affected — the ledger shows the pipeline made **zero** AV calls today (its
+run had already timed out before that node) — and the allowance resets daily.*
+
 **Known incident, 2026-08-15** — worth recording because it shaped the plan. `StocksGrowth`
 and `StocksDaily` both fired at **13:36** as Task Scheduler missed-task catch-up (the machine
 was asleep at their 12:45 / 13:30 triggers). They contended and **both hit their timeouts**
