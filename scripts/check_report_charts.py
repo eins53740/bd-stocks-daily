@@ -95,6 +95,16 @@ ANCHORS: dict[str, list[tuple[str, str]]] = {
 CHART_ORDER = ["ebitda_fcf", "price", "relperf", "radar", "peers", "peers5y",
                "segments", "dcf", "ni_pe", "evolution"]
 
+# PNGs that live in IMG/ but are NOT charts the markdown should reference.
+# `sankey` is rendered by `mermaid_render.py` FROM the report's own ```mermaid
+# fence at HTML-render time — the diagram is already in the markdown as live
+# source. Treating it as an unembedded chart made the gate demand a
+# `![Sankey](...)` line, which would print the same diagram twice in Obsidian and
+# leave a dead link the day the fence is edited. Excluded from the orphan set, not
+# from the directory listing: if one ever stops being generated, that is still
+# visible as a broken link.
+NON_REPORT_IMAGES = {"sankey", "swot"}
+
 # Last resort: insert BEFORE the first of these, i.e. at the end of the analysis
 # body but above the closing sections. Never append after the signature.
 TAIL_MARKERS = [r"^## 3\. Links", r"^## 4\. Macro", r"^## 5\. ",
@@ -146,7 +156,7 @@ def audit_report(report: Path) -> dict:
     is_screen = bool(m) and m.group(4) == SCREEN_SUFFIX
     on_disk = charts_on_disk(report)
     referenced = charts_referenced(report)
-    orphans = sorted(set(on_disk) - referenced)
+    orphans = sorted(set(on_disk) - referenced - NON_REPORT_IMAGES)
     # A reference with no file is a broken image in Obsidian — the opposite bug,
     # worth the same alarm.
     broken = sorted(referenced - set(on_disk))

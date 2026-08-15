@@ -496,3 +496,29 @@ def test_the_new_v43_charts_are_registered_everywhere():
         assert key in crc.CHART_ORDER
         assert key in crc.CHART_CAPTIONS
         assert key in crc.ANCHORS
+
+
+# --- build artefacts are not unembedded charts ------------------------------
+
+def test_the_sankey_is_not_treated_as_an_unembedded_chart(tmp_path):
+    """The Sankey PNG is rendered FROM the report's own mermaid fence at
+    HTML-render time. Counting it as an orphan made the gate demand a
+    ![Sankey](...) line, which prints the diagram twice in Obsidian and leaves a
+    dead link the moment the fence is edited."""
+    import check_report_charts as crc
+    (tmp_path / "IMG").mkdir()
+    md = tmp_path / "2026-08-14_MPWR_review.md"
+    md.write_text("# r\n\n```mermaid\nsankey-beta\nA,B,1\n```\n", encoding="utf-8")
+    for kind in ("sankey", "price"):
+        (tmp_path / "IMG" / f"2026-08-14_MPWR_{kind}.png").write_bytes(b"x")
+    audit = crc.audit_report(md)
+    assert "sankey" not in audit["orphans"]
+    assert "price" in audit["orphans"]
+
+
+def test_the_excluded_set_is_declared_not_inferred():
+    import check_report_charts as crc
+    assert "sankey" in crc.NON_REPORT_IMAGES
+    # An excluded artefact must never also be a gated chart — it would be both
+    # demanded and exempted.
+    assert not (crc.NON_REPORT_IMAGES & set(crc.CHART_ORDER))
