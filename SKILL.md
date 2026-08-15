@@ -829,6 +829,9 @@ Frontmatter que acompanha: `listing_home`, `listing_alternatives`, `listing_reas
 ### Peer ranking snapshot
 ![Peers](IMG/{date}_{ticker}_peers.png)
 
+![Peers 5y total return](IMG/{date}_{ticker}_peers5y.png)
+*5 anos de retorno TOTAL (dividendos reinvestidos) convertido a EUR e indexado a 100, contra os MESMOS peers do bar chart acima. A caption do PNG diz de que tier veio o peer set — `by_ticker` é curado, `by_industry`/`by_sector` são proxies e vêm marcados a amarelo. Omitir imagem + caption se o chart foi skipped.*
+
 ## 2. Deep dive (30 min)
 
 ### 2.1 Business model — money engine
@@ -1014,6 +1017,9 @@ DCF intrínseco: **{dcf_intrinsic} {currency}** vs preço {price} {currency} →
 
 ![Net income vs P/E](IMG/{date}_{ticker}_ni_pe.png)
 *Net income anual vs P/E da própria história — earnings a subir com multiple a descer = re-rating pendente; o inverso = multiple expansion sem earnings. Omitir imagem + caption se o chart foi skipped.*
+
+![Long-horizon evolution](IMG/{date}_{ticker}_evolution.png)
+*Painel de longo prazo (ANUAL): preço · P/E + price/EBITDA · EBITDA + EPS, no mesmo eixo de anos. Só é desenhado com ≥8 anos de história anual — abaixo disso não existe (ver `EVOLUTION_MIN_YEARS`), o que na prática significa que só nomes US (Alpha Vantage) o têm; os não-US caem para ~4 anos de yfinance e o chart não é gerado. A linha price/EBITDA é um múltiplo de EQUITY, **não** EV/EBITDA — não há histórico de net debt persistido. Omitir imagem + caption se o chart foi skipped.*
 
 {yield_on_cost.reason quando não computável: mostrar a razão verbatim (e.g. "n/a (not held)") em vez das linhas held.}
 {Se o bloco `exit_plan` falhou/ausente: "⚠️ exit plan unavailable" e nada mais.}

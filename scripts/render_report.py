@@ -64,7 +64,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATE = SCRIPT_DIR / "report_template.html"
 ICON = SCRIPT_DIR.parent / "docs" / "v4_design" / "assets" / "bdfinance_icon.png"
 OUT_DIR_DEFAULT = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
-IMG_BUDGET_BYTES = 1_500_000  # ≤~1.5 MB of embedded PNGs per report (spec §11)
+# ≤~1.5 MB of embedded PNGs per report (spec §11). Re-measured for v4.3 before
+# adding to it, not after: a full MPWR deep dive spends 459 KB — 8 charts plus a
+# Sankey at 358 KB, the two new v4.3 charts at 101 KB — so 31% of the cap. The
+# cap stands unchanged; there was no need to raise it or downscale anything.
+IMG_BUDGET_BYTES = 1_500_000
 # Cover prose (thesis + risk + bear trigger + exit trigger) that still fits on one printed
 # A4 page. Derived from four measured covers — see build_cover for the working. Advisory:
 # exceeding it logs, never truncates.
@@ -74,7 +78,8 @@ VERDICT_LABELS = {"great": "GREAT", "invest": "INVEST", "review": "REVIEW",
                   "fair": "FAIR", "reject": "REJECT"}
 VERDICT_EMOJI = {"great": "🟢", "invest": "🟢", "review": "🟡", "fair": "🟠", "reject": "🔴"}
 # PNG embedding priority (highest first) — lowest are dropped when over budget.
-CHART_ORDER = ["price", "ni_pe", "ebitda_fcf", "relperf", "dcf", "peers", "radar", "segments"]
+CHART_ORDER = ["price", "ni_pe", "ebitda_fcf", "evolution", "relperf", "peers5y",
+               "dcf", "peers", "radar", "segments"]
 
 
 def log(msg: str) -> None:
@@ -1357,7 +1362,7 @@ def build_sankey(body: str, out_dir: Path, ticker: str, fm: dict):
     except OSError:
         return "", 0
     if not raw or len(raw) > IMG_BUDGET_BYTES:
-        # A single image must never eat the whole budget and starve all 8 charts.
+        # A single image must never eat the whole budget and starve the charts.
         log(f"sankey PNG {len(raw)} B exceeds the image budget — dropped")
         return "", 0
     b64 = base64.b64encode(raw).decode("ascii")
@@ -1383,7 +1388,8 @@ def build_charts(md_path: Path, out_dir: Path, ticker: str, fm: dict, used: int 
     labels = {"price": "Price & moving averages", "ni_pe": "Net income vs P/E",
               "ebitda_fcf": "EBITDA & FCF history", "relperf": "Relative performance 30m",
               "dcf": "DCF fan", "peers": "Peer comparison", "radar": "Score radar",
-              "segments": "Revenue segments"}
+              "peers5y": "5y total return vs competitors (EUR)",
+              "evolution": "Long-horizon evolution", "segments": "Revenue segments"}
     for key in CHART_ORDER:
         p = img_dir / f"{date}_{safe}_{key}.png"
         if not p.exists():

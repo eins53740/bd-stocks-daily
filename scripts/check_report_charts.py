@@ -47,6 +47,8 @@ CHART_CAPTIONS = {
     "ebitda_fcf": "EBITDA & FCF",
     "ni_pe": "Net income vs P/E",
     "relperf": "Relative 2.5y",
+    "peers5y": "Peers 5y total return",
+    "evolution": "Long-horizon evolution",
     "segments": "Revenue sources",
 }
 
@@ -74,16 +76,24 @@ ANCHORS: dict[str, list[tuple[str, str]]] = {
                    (r"^## 1\. Sum[áa]rio", "before")],
     "radar":      [(r"^### Score breakdown\s*$", "after")],
     "peers":      [(r"^### Peer ranking snapshot\s*$", "after")],
+    # The 5y return chart belongs beside the peer bars — same competitors, the
+    # other half of the comparison (what the market paid, not what they earn).
+    "peers5y":    [(r"^!\[Peers\]\(IMG/", "after"),
+                   (r"^### Peer ranking snapshot\s*$", "after")],
     "segments":   [(r"^### 2\.1[\s.]", "after"), (r"^## 2\. Deep dive", "after")],
     "dcf":        [(r"^\*\*e\) DCF", "after"), (r"^### 2\.11[\s.]", "after")],
     "ni_pe":      [(r"^\*\*Tese quebrada se\*\*", "after"),
+                   (r"^### 2\.12[\s.]", "after")],
+    # Long-horizon panel sits with the other history chart, after the P/E view.
+    "evolution":  [(r"^!\[Net income vs P/E\]\(IMG/", "after"),
+                   (r"^\*\*Tese quebrada se\*\*", "after"),
                    (r"^### 2\.12[\s.]", "after")],
 }
 
 # Template order, so several images resolving to the same anchor line come out
 # in the sequence a hand-written report would have used.
-CHART_ORDER = ["ebitda_fcf", "price", "relperf", "radar", "peers",
-               "segments", "dcf", "ni_pe"]
+CHART_ORDER = ["ebitda_fcf", "price", "relperf", "radar", "peers", "peers5y",
+               "segments", "dcf", "ni_pe", "evolution"]
 
 # Last resort: insert BEFORE the first of these, i.e. at the end of the analysis
 # body but above the closing sections. Never append after the signature.

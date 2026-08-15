@@ -9,10 +9,13 @@ Produces PNGs in C:\BD_Obsidian\Personal\Finance\StocksDaily\IMG\:
  - {date}_{ticker}_ebitda_fcf.png : EBITDA bars + FCF line with forecast tail (from _fin_history/)
  - {date}_{ticker}_ni_pe.png      : annual net income bars vs own-history P/E line (v4 Phase A)
  - {date}_{ticker}_relperf.png    : 2.5y relative performance vs region index + sector ETF
+ - {date}_{ticker}_peers5y.png    : 5y total return in EUR vs the named competitors (v4.3)
+ - {date}_{ticker}_evolution.png  : long-horizon price / multiples / EBITDA+EPS (v4.3)
  - {date}_{ticker}_segments.png   : revenue-by-segment grouped bars (from _segments/)
 
 Input: --ticker, optional --analysis-json (stdin fallback) with composite breakdown.
-The _fin_history/ and _segments/ input dirs sit beside IMG under the StocksDaily root.
+The _fin_history/, _valuation/ and _segments/ input dirs sit beside IMG under the
+StocksDaily root.
 """
 from __future__ import annotations
 
@@ -57,6 +60,10 @@ except Exception as _e:  # pragma: no cover - exercised only on a broken install
 # scripts dir). Importing it is network-free — it only defines constants/fns.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from technical_score import BENCH_BY_SUFFIX, DEFAULT_BENCH  # noqa: E402
+# Same filter valuation_bands applies to its own EPS records, imported rather than
+# re-implemented: AV's annualEarnings trails a partial-year stub (VEEV 2026-04-30,
+# MPWR 2026-06-30) that would plot as a collapsed final year.
+from valuation_bands import drop_offcycle_records  # noqa: E402
 import chart_theme as th  # noqa: E402
 
 th.apply_theme()
@@ -801,6 +808,559 @@ def chart_relperf(ticker: str, region_suffix_bench: str, sector: str | None, out
         return False
 
 
+# ---------------------------------------------------------------- peers 5y --
+# Cap on the competitor set. peers.json ships 5; more than that and the lines
+# stop being separable at report scale, which defeats the chart.
+PEERS5Y_MAX = 5
+# A peer with a stub of history would be indexed to 100 at a much later date and
+# then read as the winner purely because it had less time to fall. Anything under
+# this many trading days from the common start is dropped and named.
+PEERS5Y_MIN_POINTS = 120
+
+
+def peers5y_note(peers_source: str, industry: str | None,
+                 sector: str | None) -> tuple[str, bool]:
+    """The provenance line for the peer set, and whether it is a *proxy*.
+
+    Returns (note, is_proxy). Roadmap N5 is the reason this exists: adidas was
+    once ranked against Amazon/McDonald's/Home Depot/Starbucks because the sector
+    bucket is all that resolved. An unlabelled fallback repeats that failure, so
+    the tier is always printed and the two loose tiers are flagged.
+    """
+    src = peers_source or "none"
+    if src == "by_ticker":
+        return "curated peer set (peers.json by_ticker)", False
+    if src == "by_industry":
+        return (f"industry bucket “{industry or '?'}” — not a curated peer set",
+                True)
+    if src == "by_sector":
+        return (f"SECTOR PROXY, not true peers — sector “{sector or '?'}”",
+                True)
+    return "peer set unresolved", True
+
+
+def _to_naive_daily(s):
+    """Strip tz and time-of-day from a price index so series from exchanges in
+    different timezones align on the calendar date instead of missing each other
+    by a few hours."""
+    idx = pd.DatetimeIndex(s.index)
+    try:
+        if idx.tz is not None:
+            idx = idx.tz_convert("UTC").tz_localize(None)
+    except (AttributeError, TypeError):
+        pass
+    out = s.copy()
+    out.index = idx.normalize()
+    return out[~out.index.duplicated(keep="last")]
+
+
+def index_to_100(frame, start=None):
+    """Index every column of `frame` to 100 at the common start date.
+
+    The common start is the latest first-valid date across the columns, so no
+    series gets a head start. Columns whose base is missing or non-positive are
+    dropped — indexing off a zero would print an infinity.
+    """
+    if frame is None or frame.empty:
+        return None
+    firsts = [frame[c].first_valid_index() for c in frame.columns]
+    firsts = [f for f in firsts if f is not None]
+    if not firsts:
+        return None
+    start = start or max(firsts)
+    cut = frame[frame.index >= start].ffill()
+    keep = {}
+    for c in cut.columns:
+        col = cut[c].dropna()
+        if col.empty:
+            continue
+        base = float(col.iloc[0])
+        if base <= 0:
+            continue
+        keep[c] = cut[c] / base * 100.0
+    if not keep:
+        return None
+    return pd.DataFrame(keep)
+
+
+def _yf_closes(sym: str, period: str = "5y", interval: str = "1d"):
+    """Adjusted closes for `sym` — auto_adjust makes these TOTAL return (dividends
+    reinvested), which is what the chart claims to plot."""
+    try:
+        df = yf.Ticker(sym).history(period=period, interval=interval,
+                                    auto_adjust=True)
+        if df is None or df.empty or "Close" not in df:
+            return None
+        s = df["Close"].dropna()
+        return _to_naive_daily(s) if not s.empty else None
+    except Exception as e:
+        log(f"peers5y fetch {sym}: {e}")
+        return None
+
+
+def chart_peers5y(ticker: str, peer_info: dict, out_path: Path,
+                  *, _fetcher=None) -> bool:
+    """5-year TOTAL return, the subject vs its 3-5 named competitors, every series
+    converted to EUR first and then indexed to 100 at the common start.
+
+    Peers come from `score_details.peer_info.peer_tickers` — the SAME set the peer
+    sub-score ranked — so this chart and the peer bar chart can never disagree
+    about who the competitors are. The resolution tier is printed, and the two
+    loose tiers are flagged as proxies (see peers5y_note).
+
+    FX: series are divided by their own EUR cross (markets.eur_fx_pair) before
+    indexing, so a peer listed in a falling currency stops looking like a winner.
+    GBp/pence quoting needs no special case — a constant factor cancels in the
+    indexing. A peer whose FX cross fails to fetch is DROPPED and named, never
+    compared unconverted.
+    """
+    try:
+        import markets
+
+        fetch = _fetcher or _yf_closes
+        peers = [p for p in (peer_info.get("peer_tickers") or [])
+                 if p and p.upper() != (ticker or "").upper()][:PEERS5Y_MAX]
+        if not peers:
+            log("peers5y: no peer tickers resolved")
+            return False
+
+        wanted = [ticker] + peers
+        raw, failed = {}, []
+        for sym in wanted:
+            s = fetch(sym)
+            if s is None or s.empty:
+                failed.append(sym)
+                continue
+            raw[sym] = s
+        if ticker not in raw:
+            log(f"peers5y: subject {ticker} failed to fetch")
+            return False
+        if len(raw) < 2:
+            log("peers5y: no peer survived the fetch")
+            return False
+
+        # One FX cross per distinct currency, not per ticker.
+        ccy = {sym: (markets.currency_of(sym) or "EUR").upper() for sym in raw}
+        fx = {}
+        for cur in sorted(set(ccy.values())):
+            pair = markets.eur_fx_pair(cur)
+            if pair is None:          # EUR itself
+                fx[cur] = None
+                continue
+            r = fetch(pair)
+            if r is None or r.empty:
+                log(f"peers5y: FX {pair} unavailable")
+                continue
+            fx[cur] = r
+
+        eur, fx_failed = {}, []
+        for sym, s in raw.items():
+            cur = ccy[sym]
+            if cur not in fx:
+                fx_failed.append(sym)
+                continue
+            rate = fx[cur]
+            if rate is None:
+                eur[sym] = s
+                continue
+            aligned = rate.reindex(s.index.union(rate.index)).ffill().reindex(s.index)
+            conv = s / aligned
+            conv = conv.replace([np.inf, -np.inf], np.nan).dropna()
+            if conv.empty:
+                fx_failed.append(sym)
+                continue
+            eur[sym] = conv
+        if ticker not in eur:
+            log(f"peers5y: subject {ticker} lost to FX conversion")
+            return False
+
+        frame = pd.DataFrame(eur).sort_index()
+        # Common start is driven by the SUBJECT: a peer that only listed two years
+        # ago must not truncate the subject's five-year window for everyone else.
+        start = frame[ticker].first_valid_index()
+        thin = [c for c in frame.columns
+                if c != ticker
+                and frame.loc[frame.index >= start, c].dropna().shape[0] < PEERS5Y_MIN_POINTS]
+        frame = frame.drop(columns=thin)
+        norm = index_to_100(frame, start=start)
+        if norm is None or norm.shape[1] < 2:
+            log("peers5y: nothing survived indexing")
+            return False
+
+        fig, ax = plt.subplots(figsize=(11, 5.5))
+        ends = []
+        others = [c for c in norm.columns if c != ticker]
+        for i, sym in enumerate(others):
+            colour = th.SERIES[(i + 1) % len(th.SERIES)]
+            ax.plot(norm.index, norm[sym].values, color=colour, linewidth=1.5,
+                    zorder=3, label=sym, alpha=0.9)
+            last = norm[sym].dropna()
+            if not last.empty:
+                ends.append((last.index[-1], float(last.iloc[-1]), sym, colour))
+        # Subject drawn last and heaviest — it is the reason the chart exists.
+        ax.plot(norm.index, norm[ticker].values, color=th.PRIMARY, linewidth=2.6,
+                zorder=6, label=ticker)
+        sub_last = norm[ticker].dropna()
+        if not sub_last.empty:
+            ends.append((sub_last.index[-1], float(sub_last.iloc[-1]), ticker,
+                         th.PRIMARY))
+
+        ax.axhline(100, color=th.AXIS, linewidth=1.0, linestyle="--", zorder=1)
+
+        subject_end = next((e for e in ends if e[2] == ticker), None)
+        years = (norm.index[-1] - norm.index[0]).days / 365.25
+        sub = f"total return in EUR, indexed to 100 at {norm.index[0]:%Y-%m-%d}"
+        if subject_end:
+            sub = (f"{ticker} at {subject_end[1]:,.0f} vs base 100 · " + sub)
+        th.style_axes(ax, ylabel="Indexed to 100 (EUR, total return)",
+                      legend_row=True)
+        for x, y, sym, colour in ends:
+            th.label_line_end(ax, x, y, sym, colour)
+        ax.margins(x=0.08)
+        th.legend_above(ax, ncol=min(6, norm.shape[1]))
+
+        note, is_proxy = peers5y_note(peer_info.get("peers_source"),
+                                      peer_info.get("industry"),
+                                      peer_info.get("sector"))
+        notes = [note]
+        for sym in thin:
+            notes.append(f"{sym} dropped (history shorter than the window)")
+        for sym in failed + fx_failed:
+            if sym != ticker:
+                notes.append(f"{sym} dropped (price or FX unavailable)")
+        th.caption(ax, "  ·  ".join(notes),
+                   color=th.WARNING if is_proxy else None)
+
+        fig.tight_layout()
+        th.figure_title(fig, f"{ticker} — vs competitors, {years:.1f} years", sub)
+        th.save(fig, out_path)
+        return True
+    except Exception as e:
+        log(f"peers5y chart fail: {e}")
+        return False
+
+
+# ----------------------------------------------------------- evolution panel --
+# Depth floors. Roadmap N3's rule — never imply a band the data cannot support —
+# applied to a chart whose entire claim is "long horizon". Below MIN_YEARS the
+# panel is not drawn AT ALL rather than degrading to a few blank bars; below
+# MIN_MULTIPLE_YEARS the multiples panel alone is dropped.
+EVOLUTION_MIN_YEARS = 8
+EVOLUTION_MIN_MULTIPLE_YEARS = 5
+# The derived price/EBITDA multiple assumes reported EPS is GAAP net income per
+# share. That assumption is testable — net_income/EPS must give a stable implied
+# share count — and it FAILS on real data: MPWR FY2024 pairs an adjusted EPS of
+# 14.13 with a one-off-inflated net income of $1.79bn, implying 126m shares
+# against ~48m in every neighbouring year, which printed a phantom 150x multiple.
+# Years whose implied share count strays this far from their local neighbours are
+# dropped and counted.
+SHARE_COUNT_TOLERANCE = 0.20
+SHARE_COUNT_WINDOW = 5
+
+
+def _fy_year(label) -> int | None:
+    """Year out of an 'FY2016' / '2016Q3' / '2016-12-31' style label."""
+    s = str(label or "")
+    for i in range(len(s) - 3):
+        chunk = s[i:i + 4]
+        if chunk.isdigit() and 1900 <= int(chunk) <= 2100:
+            return int(chunk)
+    return None
+
+
+def consistent_share_years(net_income: dict, eps: dict) -> tuple[list, list]:
+    """Split years into (consistent, rejected) by implied share count.
+
+    implied shares = net income / EPS. A slow drift is normal — buybacks and
+    dilution are exactly what a long-horizon panel should show through. A single
+    year jumping by a multiple is not: it means the two series are measuring
+    different things that year (adjusted EPS against GAAP net income). So each
+    year is compared to the MEDIAN OF ITS NEAREST NEIGHBOURS, not to the whole
+    series, which tolerates drift while still catching a spike.
+    """
+    implied = {}
+    for y, e in eps.items():
+        ni = net_income.get(y)
+        if ni is None or e is None or e <= 0 or ni <= 0:
+            continue
+        implied[y] = ni / e
+    years = sorted(implied)
+    if len(years) < 3:
+        return years, []
+    ok, bad = [], []
+    lo, hi = 1.0 - SHARE_COUNT_TOLERANCE, 1.0 + SHARE_COUNT_TOLERANCE
+    for y in years:
+        near = sorted(years, key=lambda o: (abs(o - y), o))[:SHARE_COUNT_WINDOW]
+        vals = sorted(implied[o] for o in near)
+        ref = vals[len(vals) // 2] if len(vals) % 2 else \
+            (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2.0
+        (ok if ref > 0 and lo <= implied[y] / ref <= hi else bad).append(y)
+    return ok, bad
+
+
+def evolution_series(fin_history: dict, valuation_bands: dict,
+                     eps_records: list | None) -> dict | None:
+    """Fold the persisted annual histories into one year-keyed bundle.
+
+    Pure — no I/O, no plotting — so the depth rules and the derived multiple are
+    unit-testable without a network or a canvas.
+
+    The derived multiple deserves its arithmetic written down. `pe_band.series`
+    gives P/E per fiscal year and `annual.net_income` gives that year's earnings,
+    so `P/E x net income` is that year's MARKET CAP exactly — the implied share
+    count cancels, no share-count history is needed. Dividing by that year's
+    EBITDA gives **price/EBITDA**, an equity-side multiple.
+
+    It is deliberately NOT called EV/EBITDA. Enterprise value needs net debt per
+    year and nothing in this system persists that: financial_history carries
+    revenue/EBITDA/FCF/net income only, and `statements_raw` is two years deep.
+    Labelling an equity multiple as an enterprise one would misprice every
+    leveraged name in the direction that flatters it, so the chart prints what it
+    can actually compute and says so.
+    """
+    if not isinstance(fin_history, dict):
+        return None
+    annual = fin_history.get("annual") or {}
+    labels = list(annual.get("labels") or [])
+    if not labels:
+        return None
+
+    def _by_year(key):
+        vals = list(annual.get(key) or [])
+        out = {}
+        for lbl, v in zip(labels, vals):
+            y = _fy_year(lbl)
+            if y is None or v is None:
+                continue
+            try:
+                out[y] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    ebitda = _by_year("ebitda")
+    net_income = _by_year("net_income")
+    revenue = _by_year("revenue")
+
+    eps = {}
+    clean_eps = drop_offcycle_records([r for r in (eps_records or [])
+                                       if isinstance(r, dict) and r.get("date")])
+    for r in clean_eps:
+        y = _fy_year((r or {}).get("date"))
+        v = (r or {}).get("eps")
+        if y is None or v is None:
+            continue
+        try:
+            eps[y] = float(v)
+        except (TypeError, ValueError):
+            continue
+
+    pe = {}
+    for r in (((valuation_bands or {}).get("pe_band") or {}).get("series") or []):
+        y, v = (r or {}).get("year"), (r or {}).get("pe")
+        if y is None or v is None:
+            continue
+        try:
+            pe[int(y)] = float(v)
+        except (TypeError, ValueError):
+            continue
+
+    consistent, inconsistent = consistent_share_years(net_income, eps)
+    consistent = set(consistent)
+    p_ebitda = {}
+    for y, p in pe.items():
+        ni, eb = net_income.get(y), ebitda.get(y)
+        # Negative earnings make P/E meaningless and the product meaningless with
+        # it; a negative EBITDA denominator flips the sign of the multiple.
+        if ni is None or eb is None or ni <= 0 or eb <= 0 or p <= 0:
+            continue
+        if y not in consistent:
+            continue
+        p_ebitda[y] = p * ni / eb
+
+    years = sorted(set(ebitda) | set(eps))
+    if not years:
+        return None
+    multiple_years = sorted(set(pe) & set(range(years[0], years[-1] + 1)))
+    return {
+        "ticker": fin_history.get("ticker") or "",
+        "currency": fin_history.get("currency") or "",
+        "source": fin_history.get("source") or "?",
+        "years": years,
+        "depth_years": len(years),
+        "ebitda": ebitda, "eps": eps, "revenue": revenue,
+        "net_income": net_income, "pe": pe, "p_ebitda": p_ebitda,
+        # Only years the multiple would OTHERWISE have plotted. A pre-IPO year with
+        # no P/E is rejected too, but reporting it would be noise about a point
+        # that was never going to be drawn.
+        "eps_ni_mismatch_years": sorted(
+            y for y in inconsistent
+            if y in pe and y in ebitda and y in net_income
+            and net_income[y] > 0 and ebitda[y] > 0),
+        "multiple_depth_years": len(multiple_years),
+        "enough_depth": len(years) >= EVOLUTION_MIN_YEARS,
+        "enough_multiples": len(multiple_years) >= EVOLUTION_MIN_MULTIPLE_YEARS,
+    }
+
+
+def _monthly_price_xy(ticker: str, first_year: int, *, _fetcher=None):
+    """Monthly closes as (decimal-year, price) so the price panel shares the
+    integer-year x-axis of the bar panels below it."""
+    fetch = _fetcher or _yf_closes
+    s = fetch(ticker, "max", "1mo")
+    if s is None or s.empty:
+        return None
+    s = s[s.index.year >= first_year]
+    if s.empty:
+        return None
+    xs = [d.year + (d.month - 1) / 12.0 for d in s.index]
+    return xs, [float(v) for v in s.values]
+
+
+def chart_evolution(ticker: str, fin_history: dict, valuation_bands: dict,
+                    eps_records: list | None, out_path: Path,
+                    *, _fetcher=None) -> bool:
+    """Long-horizon evolution: price, valuation multiples, and the earnings power
+    underneath them, on one shared year axis.
+
+    Panel A  share price, monthly closes
+    Panel B  own-history P/E and derived price/EBITDA (see evolution_series)
+    Panel C  EBITDA (bars) and EPS (line) per fiscal year
+
+    ANNUAL ONLY, deliberately. A quarterly variant was specified and dropped after
+    checking what exists: there is no quarterly EPS series and no quarterly P/E
+    series anywhere in this system, so panel B cannot be drawn quarterly at all —
+    and panels A+C at quarterly resolution are precisely the existing
+    `ebitda_fcf` chart. A `--freq quarterly` flag would therefore have shipped as
+    either a broken panel or a duplicate chart.
+
+    Returns False (draws nothing) below EVOLUTION_MIN_YEARS of annual depth. That
+    floor is what stops a non-US name — AV fundamentals are US-only and the
+    yfinance fallback gives ~4-5 years — from rendering a price line over two
+    empty panels and calling it a decade.
+    """
+    try:
+        d = evolution_series(fin_history, valuation_bands, eps_records)
+        if d is None:
+            log("evolution: no annual history")
+            return False
+        if not d["enough_depth"]:
+            log(f"evolution: {d['depth_years']}y of annual depth "
+                f"< {EVOLUTION_MIN_YEARS}y floor — not drawn")
+            return False
+
+        years = d["years"]
+        price = _monthly_price_xy(ticker, years[0], _fetcher=_fetcher)
+        show_mult = d["enough_multiples"]
+
+        panels = ([("price", 1.15)] if price else []) \
+            + ([("mult", 1.0)] if show_mult else []) + [("ops", 1.0)]
+        fig, axes = plt.subplots(len(panels), 1, sharex=True,
+                                 figsize=(12, 2.6 * len(panels) + 1.2),
+                                 gridspec_kw={"height_ratios": [h for _, h in panels]})
+        if len(panels) == 1:
+            axes = [axes]
+        ax_by = {name: axes[i] for i, (name, _) in enumerate(panels)}
+        currency = d["currency"]
+        fmt = FuncFormatter(_money_fmt)
+
+        log_price = False
+        if price:
+            ax = ax_by["price"]
+            lo = min(v for v in price[1] if v > 0) if any(v > 0 for v in price[1]) else 0
+            hi = max(price[1])
+            # A 100-bagger on a linear axis is a flat line and a cliff: two decades
+            # of compounding vanish into the baseline. Log is the honest axis for a
+            # chart whose whole subject is long-horizon growth.
+            log_price = bool(lo > 0 and hi / lo >= 20)
+            ax.plot(price[0], price[1], color=th.PRIMARY, linewidth=1.9, zorder=4)
+            if log_price:
+                ax.set_yscale("log")
+            else:
+                ax.fill_between(price[0], 0, price[1], color=th.PRIMARY, alpha=0.10,
+                                linewidth=0, zorder=2)
+                ax.set_ylim(bottom=0)
+            th.style_axes(ax, ylabel=f"Share price ({currency})"
+                                     + (" — log scale" if log_price else ""))
+            th.value_chip(ax, price[0][-1], price[1][-1],
+                          f"{price[1][-1]:,.0f}", th.PRIMARY)
+
+        if show_mult:
+            ax = ax_by["mult"]
+            pe_xy = sorted((y, v) for y, v in d["pe"].items())
+            h_pe, = ax.plot([x for x, _ in pe_xy], [v for _, v in pe_xy],
+                            color=th.ACCENT, linewidth=2.0, zorder=4,
+                            label="P/E (own history, left)",
+                            **th.marker_kwargs(th.ACCENT))
+            handles = [h_pe]
+            pb_xy = sorted((y, v) for y, v in d["p_ebitda"].items())
+            if pb_xy:
+                ax2 = ax.twinx()
+                # The label carries the caveat so it travels with the line: this is
+                # market cap over EBITDA, an EQUITY multiple. Net-debt history is
+                # not persisted anywhere, so EV/EBITDA cannot be computed per year
+                # and is not what this line shows.
+                h_pb, = ax2.plot([x for x, _ in pb_xy], [v for _, v in pb_xy],
+                                 color=th.AQUA, linewidth=1.8, linestyle="--",
+                                 zorder=3,
+                                 label="Price/EBITDA — equity multiple, "
+                                       "NOT EV/EBITDA (right)")
+                th.style_axes(ax2, ylabel="Price/EBITDA (x)")
+                ax2.grid(False)
+                handles.append(h_pb)
+            th.style_axes(ax, ylabel="P/E (x)", legend_row=True)
+            th.legend_above(ax, ncol=2, handles=handles,
+                            labels=[h.get_label() for h in handles])
+
+        ax = ax_by["ops"]
+        eb_xy = [(y, d["ebitda"][y]) for y in years if y in d["ebitda"]]
+        if eb_xy:
+            ax.bar([x for x, _ in eb_xy], [v for _, v in eb_xy],
+                   color=th.PRIMARY, width=th.BAR_WIDTH, label=f"EBITDA ({currency})")
+            ax.yaxis.set_major_formatter(fmt)
+            ax.axhline(0, color=th.AXIS, linewidth=0.8, zorder=1)
+        eps_xy = [(y, d["eps"][y]) for y in years if y in d["eps"]]
+        if eps_xy:
+            axe = ax.twinx()
+            axe.plot([x for x, _ in eps_xy], [v for _, v in eps_xy],
+                     color=th.SERIES[3], linewidth=2.2, zorder=6, label="EPS",
+                     **th.marker_kwargs(th.SERIES[3]))
+            th.style_axes(axe, ylabel=f"EPS ({currency}/share)")
+            axe.grid(False)
+        th.style_axes(ax, ylabel=f"EBITDA ({currency})")
+        ax.set_xticks(years)
+        ax.set_xticklabels([str(y) for y in years], rotation=0, fontsize=8)
+        if len(years) > 16:
+            step = max(1, len(years) // 14)
+            ax.set_xticklabels([str(y) if i % step == 0 else ""
+                                for i, y in enumerate(years)], fontsize=8)
+
+        notes = [f"{d['depth_years']} fiscal years · source {d['source']}"]
+        mism = d.get("eps_ni_mismatch_years") or []
+        if mism and show_mult:
+            notes.append("price/EBITDA omitted for "
+                         + ", ".join(str(y) for y in mism)
+                         + " (reported EPS and net income disagree — adjusted vs GAAP)")
+        if not show_mult:
+            notes.append(f"multiples panel omitted — own-history P/E covers "
+                         f"{d['multiple_depth_years']}y, "
+                         f"floor is {EVOLUTION_MIN_MULTIPLE_YEARS}y")
+        if not price:
+            notes.append("price panel omitted — history unavailable")
+        th.caption(ax, "  ·  ".join(notes))
+
+        fig.tight_layout()
+        th.figure_title(
+            fig, f"{ticker} — long-horizon evolution",
+            f"{years[0]}-{years[-1]} · annual · price, multiples and earnings power",
+        )
+        th.save(fig, out_path)
+        return True
+    except Exception as e:
+        log(f"evolution chart fail: {e}")
+        return False
+
+
 def validate_segments(d) -> list[str]:
     """Pure validator for a _segments/*.json dict. Returns a list of problems
     (empty list = valid). Load-bearing structure only: `fiscal_years` (len 3) and
@@ -989,6 +1549,30 @@ def main() -> int:
     results["ni_pe"] = (
         chart_net_income_vs_pe(fin_hist, data.get("valuation_bands") or {},
                                args.ticker, img_dir / f"{stem}_ni_pe.png")
+        if fin_hist else False
+    )
+
+    # 5y vs competitors — reuses peer_info's OWN resolved set, so this chart and
+    # the peer bar chart above can never name different competitors.
+    results["peers5y"] = chart_peers5y(
+        args.ticker, peer_info, img_dir / f"{stem}_peers5y.png"
+    )
+
+    # Long-horizon evolution — annual EBITDA/EPS/P-E. EPS comes from the
+    # _valuation cache (same beside-IMG-then-production lookup as _fin_history).
+    val_path = img_dir.parent / "_valuation" / f"{safe_t}.json"
+    if not val_path.exists():
+        val_path = DEFAULT_IMG_DIR.parent / "_valuation" / f"{safe_t}.json"
+    eps_records = None
+    if val_path.exists():
+        try:
+            eps_records = (json.loads(val_path.read_text(encoding="utf-8"))
+                           or {}).get("eps_records")
+        except Exception as e:
+            log(f"eps cache load fail: {e}")
+    results["evolution"] = (
+        chart_evolution(args.ticker, fin_hist, data.get("valuation_bands") or {},
+                        eps_records, img_dir / f"{stem}_evolution.png")
         if fin_hist else False
     )
 
