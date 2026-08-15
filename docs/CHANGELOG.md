@@ -470,6 +470,78 @@ LLM-read figure. No third exception.
 
 ---
 
+### Wave 3 — audit, doctrine & category lens (2026-08-15, in progress)
+
+**§3.5 `category_lens.py` — cyclical / turnaround / asset play, as tests.**
+`lynch_category()` covers 4 of Lynch's 6 categories and its "cyclical" is the residual
+bucket, not a test. The expensive consequence runs the other way: a **cyclical at peak
+earnings reads as a `stalwart`**, shows record margins and a low trailing P/E, and passes
+Gate 2. `lynch_category` is left untouched (it feeds a scored component, so changing it
+would move the frozen composite); the classification ships beside it and names the
+disagreement in words. Thresholds published in `docs/CATEGORIES.md`.
+
+Four corrections the 53-name corpus forced, none of them guessable from the spec:
+- **Loss years break the arithmetic** — `(peak−v)/peak` is unbounded below zero, so AMD's
+  six loss years produced a 319 % "drawdown" and five phantom cycles. The test now runs on
+  the longest positive run and names the window it used.
+- **A one-year plunge is a write-down** — P&G's FY2019 Gillette impairment counted as a
+  completed 54 % cycle. Elapsed time from the peak did *not* fix it (P&G's peak sat eleven
+  years earlier); **consecutive** years below the threshold does.
+- **A fall that never returns is a secular decline** — IBM, called cyclical at high
+  confidence across the Kyndryl spin. Reported separately, and disqualifying: there is no
+  mid-cycle to revert to.
+- **First profitability is not a turnaround** — PLTR was flagged beside adidas; one
+  recovered a known earnings power, the other reached an unknown one.
+
+Plus two unit errors it refuses to publish: RIO.L at **280× book** (a pence quote against a
+GBP book value) and BRK-B at **0.001×** / TSM at **82×** (share class and reporting
+currency), caught by cross-checking `book_value` against equity/shares with a tolerance set
+from the 122-name distribution.
+
+**§3.6 `roic_lens.py` + `docs/ROIC_vs_ROE.md` — which return metric applies.** Flags
+leverage-manufactured ROE (>20 % on >1.0× D/E with <12 % ROIC — **3 of 147**), computes ROIC
+vs WACC from the CAPM cost of equity already in the JSON plus a derived cost of debt (no
+cost of equity ⇒ **no WACC**, never an assumed one), routes banks and insurers to ROE/ROTE
+(**22 of 147**), and says out loud that the Buffett moat multiplier silently does not fire
+when the net-cash guard suppresses ROIC (**12 of 147**, VEEV among them).
+
+Both are pure JSON consumers — zero network, zero API calls, <0.1 s per ticker. New report
+card **§2.20c**, new **Phase 2.4b**. `_STMT_ROWS` gains four intangibles rows, read from the
+balance frame already in memory.
+
+**§3.1 `docs/AUDIT_v43.md` — four lenses, measured against live code and the corpus.**
+Three roadmap items closed with fixes:
+
+- **R4** — Twelve Data answered `ADS.DE` from **XSTU (Stuttgart)** with a stale €182.25
+  while Xetra had gapped −18 %, and the gap was logged as a yfinance `data_quality: suspect`
+  flag. `td_exchange` was already captured and never read. A cross-venue gap is now named
+  and excluded from `agree`; an **unrecognised venue stays silent** rather than
+  manufacturing the same false flag from the other side.
+- **N4** — `fair_price` came from a DCF that survived its ±70 % gate by **0.30 pp**, so MSFT
+  published **\$118.35** against a live \$390.54 and a \$550 consensus. Now deterministic:
+  blend → blend_median (models disagree ≥6.0×, the same threshold as the §2.11a banner) →
+  dcf → consensus → omit. Measured over 62 analyses: 42 blend · 13 blend_median · 5
+  consensus · 1 dcf. MSFT moves to **\$303.28**. Computed in Python, no longer transcribed
+  by the LLM from a prose rule.
+- **N3** — adidas' **3-year** P/E band, median 47.73×, drove a €608 target and a first trim
+  rung at **2.9× the price**. Writing both of N3's conditions into one usability test was
+  tried first and marked **41 of 48** cached bands unusable, ACN (16 y) and CSCO (14 y)
+  among them; the shipped split excludes the collapse year from the series and applies only
+  a 4-clean-year depth floor to what survives. Re-measured: **44 usable · 3 unusable**.
+
+Findings deliberately **not** acted on, with their evidence recorded (new roadmap **G3**):
+Gate 7 (`quick ratio > 1.5`) is the binding gate at **32 % pass** and selects *against* the
+mandate's negative-working-capital compounders; Gate 4 passes **85 %**; the v2.2 growth
+bypass fired **twice in 267**. All three move `gates_passed`, hence the composite frozen at
+v2.2 — they belong to the G1 recalibration (≈2026-10-17), not to an audit. Likewise new
+roadmap **R6**: the balance sheet's `shares` row falls through to `"Common Stock"`, a par
+value on some filers, which would silently re-rate 40+ reports through the red-flag
+sub-scores if fixed casually.
+
+**Tests**: 1397 passed, 1 skipped (from 1268 at Wave 2 close) — +129.
+
+---
+
 ## v4.2 — 2026-08-05 → 2026-08-15 · tag `v4.2` · commit `70d02d6`
 
 Composite v2.2 untouched. **854 tests.**

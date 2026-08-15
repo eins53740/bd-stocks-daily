@@ -1929,6 +1929,54 @@ _TD_COUNTRY_BY_SUFFIX = {
 }
 
 
+# Roadmap R4, closed by the v4.3 §3.1 audit. Twelve Data resolves `ADS.DE` on the free
+# tier but answers from **XSTU (Stuttgart)**, a thin secondary venue — not Xetra. On
+# 2026-07-30 it returned a stale EUR182.25 while Xetra had gapped −18% on earnings, and
+# the system recorded that as a yfinance `data_quality: suspect` flag. THE REFERENCE PRICE
+# WAS WRONG, NOT THE DATA BEING CHECKED. `td_exchange` was already captured and simply
+# never read.
+#
+# The map is deliberately partial and the default is SILENCE. Naming a venue this table
+# does not know as a "mismatch" would manufacture exactly the false flag being fixed, so
+# an unrecognised venue yields `None` and the comparison proceeds unchanged.
+_TD_VENUE_ALIASES = {
+    # Twelve Data spelling -> canonical venue token
+    "NYSE": "US", "NASDAQ": "US", "NYSE American": "US", "OTC": "US",
+    "XETRA": "XETRA", "FSX": "FRANKFURT", "Frankfurt": "FRANKFURT",
+    "XSTU": "STUTTGART", "Stuttgart": "STUTTGART", "Berlin": "BERLIN",
+    "Munich": "MUNICH", "Dusseldorf": "DUSSELDORF", "Hamburg": "HAMBURG",
+    "Euronext": "EURONEXT", "Euronext Amsterdam": "EURONEXT",
+    "Euronext Paris": "EURONEXT", "Euronext Lisbon": "EURONEXT",
+    "LSE": "LONDON", "London Stock Exchange": "LONDON",
+    "BME": "MADRID", "MTA": "MILAN", "SIX": "SWISS",
+}
+# The venue the Yahoo suffix denotes. Derived from the suffix rather than from the
+# analysis JSON's prose `exchange` string, so the check has no dependency on a field this
+# function is not given.
+_SUFFIX_VENUE = {
+    "": "US", "DE": "XETRA", "AS": "EURONEXT", "PA": "EURONEXT", "LS": "EURONEXT",
+    "BR": "EURONEXT", "L": "LONDON", "MC": "MADRID", "MI": "MILAN", "SW": "SWISS",
+}
+
+
+def venue_mismatch(td_exchange, suffix) -> str | None:
+    """Named venue conflict, or None when either side is unknown (R4).
+
+    Returns a sentence when BOTH venues resolve to canonical tokens and those tokens
+    differ. Anything else — an unmapped spelling, a suffix not in the table — returns
+    None, because the cost of a FALSE venue flag is another wrong `data_quality: suspect`,
+    which is the defect this closes.
+    """
+    if suffix is None:
+        return None  # "" means a US listing; None means we were told nothing
+    a = _TD_VENUE_ALIASES.get((td_exchange or "").strip())
+    b = _SUFFIX_VENUE.get(suffix.strip())
+    if not a or not b or a == b:
+        return None
+    return (f"venue mismatch: Twelve Data quoted {td_exchange} ({a}) while the listing "
+            f"trades on {b} — a cross-venue gap, not a data error")
+
+
 def fetch_twelvedata_validation(ticker: str, fund: dict, price_curr) -> dict:
     """Layer 1b — external price cross-check via Twelve Data (EU-capable).
 
@@ -1997,9 +2045,16 @@ def fetch_twelvedata_validation(ticker: str, fund: dict, price_curr) -> dict:
             d = abs(price_curr - td_price) / max(abs(price_curr), abs(td_price))
             result["checked"].append("price")
             if d > 0.15:
-                result["divergences"].append(
-                    f"price: yfinance {price_curr:g} vs TwelveData {td_price:g} ({d*100:.0f}% apart)"
-                )
+                # R4: a gap between two DIFFERENT VENUES is not evidence that either
+                # quote is wrong. Named as such it stops being a data-quality flag.
+                vm = venue_mismatch(result.get("td_exchange"), suffix if base else "")
+                result["venue_mismatch"] = vm
+                msg = (f"price: yfinance {price_curr:g} vs TwelveData {td_price:g} "
+                       f"({d*100:.0f}% apart)")
+                if vm:
+                    result["venue_notes"] = [f"{msg} — {vm}"]
+                else:
+                    result["divergences"].append(msg)
         result["agree"] = len(result["divergences"]) == 0 and len(result["checked"]) > 0
         return result
     except Exception as e:

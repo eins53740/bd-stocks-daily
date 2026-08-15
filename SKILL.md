@@ -681,7 +681,7 @@ Returns a JSON dict with `business_summary` (yfinance `longBusinessSummary`, ~15
 **Nome do ficheiro**: `{date}_{ticker}_{verdict}.md` (deep) ou `{date}_{ticker}_screen.md` (screens).
 `verdict` ∈ {`great` ≥9.0, `invest` 7.5-8.9, `review` 6.0-7.4, `fair` 4.0-5.9, `reject` <4.0}.
 
-**Fair price (deep + screen)** — every report whose verdict signals decent fundamentals (`great` / `invest` / `review`) records a fair-price anchor in frontmatter: `fair_price` = `dcf_intrinsic` when `dcf_valid: true`, otherwise `consensus.target_median` when `analyst_count ≥ 3` (both straight from the analyze JSON — no LLM estimate). Set `fair_price_basis` to `dcf` or `consensus` accordingly. For `fair` / `reject` verdicts **omit both keys** — a price anchor on a weak thesis is noise. `build_dashboard.py` surfaces these as the "Fair Px" / "Upside" columns in All Evaluations.
+**Fair price (deep + screen)** — every report whose verdict signals decent fundamentals (`great` / `invest` / `review`) records a fair-price anchor in frontmatter. **v4.3 §3.1 (roadmap N4): o valor é DETERMINÍSTICO e vem do bloco `intrinsic_value.fair_price`** — `fair_price` e `fair_price_basis` são copiados de lá tal e qual, nunca escolhidos pelo LLM. A ordem é: **blend** (≥3 modelos válidos) → **blend_median** (quando os modelos divergem ≥6.0×, a mediana é a estatística robusta, não a média) → **dcf** (só quando não há blend) → **consensus** (`analyst_count ≥ 3`) → **omitir**. Porquê: a regra antiga ("DCF quando `dcf_valid`, senão consensus") publicou **$118.35** para a MSFT (2026-07-30) contra $390.54 em bolsa e uma mediana de consenso de $550 — o DCF sobreviveu ao gate de ±70% por **0,30 pp** e um modelo isolado passou por cima dos outros quatro. Para verdicts `fair` / `reject` **omitir ambas as keys** — uma âncora de preço sobre uma tese fraca é ruído. Sem o bloco `intrinsic_value` (screens), manter a regra antiga como fallback. `build_dashboard.py` mostra estes valores nas colunas "Fair Px" / "Upside" de All Evaluations.
 
 **Frontmatter v2** (lowercase, sem emojis, sem espaços):
 
@@ -703,8 +703,8 @@ piotroski_fscore: 8
 altman_zscore: 6.4
 price_at_eval: 842.1
 currency: EUR
-fair_price: 920                # dcf_intrinsic se dcf_valid, senão consensus target_median (≥3 analistas); OMITIR quando verdict ∈ {fair, reject} ou sem âncora fiável
-fair_price_basis: dcf          # dcf | consensus ; presente sse fair_price presente
+fair_price: 920                # COPIAR de intrinsic_value.fair_price.fair_price (determinístico, v4.3 N4); OMITIR quando verdict ∈ {fair, reject} ou sem âncora
+fair_price_basis: blend        # blend | blend_median | dcf | consensus ; presente sse fair_price presente
 fair_value_low: 830            # v4 Phase B: intrinsic_value.fair_value_range (min/blend/max dos modelos válidos); omitir os 3 se blend not computable
 fair_value_mid: 940            # o blend 5-model — a âncora do MoS
 fair_value_high: 1105

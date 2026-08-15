@@ -264,7 +264,7 @@ def run(analysis_json: str, rf_override: float | None = None) -> dict:
     blend = blend_models(models)
     mos = mos_verdict(blend["value"], price)
 
-    return {
+    block = {
         "fetched_at": datetime.now().isoformat(),
         "price_current": price,
         "currency": data.get("currency"),
@@ -279,6 +279,86 @@ def run(analysis_json: str, rf_override: float | None = None) -> dict:
         **mos,
         "fair_value_range": fair_value_range(models, blend["value"]),
     }
+    # N4: the anchor is computed here, deterministically, rather than transcribed into
+    # frontmatter by the LLM from a prose rule in SKILL.md. A structured number printed in
+    # a report belongs to a Python helper (`SKILL.md:56`), and the prose rule is exactly
+    # what allowed the MSFT artefact to be published without anything objecting.
+    block["fair_price"] = choose_fair_price(data, block)
+    return block
+
+
+BLEND_MIN_MODELS = 3          # models that must survive before the blend may be the anchor
+# Above this max/min spread the blend is a MEAN of numbers that disagree by an order of
+# magnitude, and a mean is the wrong summary of that. 6.0× is not a new threshold: it is
+# the one wave 2.5 recalibrated on 59 measured reports for the "methods disagree
+# materially" banner, so the anchor switches to the robust statistic at exactly the point
+# the report starts warning the reader. Preferring a median under dispersion is the same
+# move `justified_exit_pe` and the consensus target already make.
+BLEND_DISPERSION_WIDE = 6.0
+
+
+def choose_fair_price(data: dict, block: dict) -> dict:
+    """The deterministic fair-price anchor. Roadmap **N4**, closed by the v4.3 §3.1 audit.
+
+    The old rule was "DCF when `dcf_valid`, else consensus median". MSFT on 2026-07-30
+    survived the ±70 % DCF invalidation gate by **0.30 pp** (−69.70 %), so that rule
+    published **\\$118.35** as `fair_price` against a live \\$390.54 and a 54-analyst
+    consensus median of \\$550 — a number the dashboard then showed as Fair Px and Upside.
+    One model, on one set of assumptions, outvoted the other four.
+
+    The new order follows the roadmap's own guidance — *prefer the blend over a lone
+    model*, and *do not simply exclude the DCF* (on the 24-name sample
+    `roe_residual_income` set the low in 12 cases against the DCF's 5, so excluding the
+    DCF would just move the artefact somewhere else):
+
+      1. the **blend**, when at least `BLEND_MIN_MODELS` models are valid;
+      2. else the **DCF**, when `dcf_valid`;
+      3. else the **consensus median**, with `analyst_count >= 3`;
+      4. else **nothing** — omit the anchor rather than publish a weak one.
+
+    `dispersion` carries max/min across the valid models so a reader can see when the
+    methods disagree even though the anchor is the blend; it is the same ratio the §2.11a
+    "methods disagree materially" banner uses, and it never suppresses the anchor — a wide
+    spread is information about the anchor, not a reason to withhold it.
+    """
+    out = {"fair_price": None, "fair_price_basis": None, "reason": None,
+           "dispersion": None}
+    models = block.get("models") or {}
+    values = [m.get("value") for m in models.values()
+              if isinstance(m, dict) and m.get("valid") and m.get("value")]
+    if len(values) >= 2 and min(values) > 0:
+        out["dispersion"] = round(max(values) / min(values), 2)
+
+    blend = block.get("blend") or {}
+    if blend.get("value") and (blend.get("n_valid") or 0) >= BLEND_MIN_MODELS:
+        wide = (out["dispersion"] or 0) >= BLEND_DISPERSION_WIDE
+        if wide and len(values) >= 3:
+            out.update(fair_price=round(statistics.median(values), 2),
+                       fair_price_basis="blend_median",
+                       reason=(f"methods disagree {out['dispersion']:.1f}× — median of "
+                               f"{len(values)} valid models, not their mean"))
+        else:
+            out.update(fair_price=round(float(blend["value"]), 2),
+                       fair_price_basis="blend", reason=blend.get("label"))
+        return out
+
+    if data.get("dcf_valid") and data.get("dcf_intrinsic"):
+        out.update(fair_price=round(float(data["dcf_intrinsic"]), 2),
+                   fair_price_basis="dcf",
+                   reason=f"blend unavailable ({blend.get('n_valid') or 0} valid models) "
+                          f"— single-model anchor")
+        return out
+
+    cons = data.get("consensus") or {}
+    if cons.get("target_median") and (cons.get("analyst_count") or 0) >= 3:
+        out.update(fair_price=round(float(cons["target_median"]), 2),
+                   fair_price_basis="consensus",
+                   reason=f"no valid model — sell-side median, "
+                          f"{cons.get('analyst_count')} analysts")
+        return out
+
+    out["reason"] = "no anchor: no model blend, no valid DCF, no usable consensus"
+    return out
 
 
 def merge_into_analysis(analysis_json: str, block: dict) -> None:

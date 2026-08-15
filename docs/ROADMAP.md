@@ -58,21 +58,34 @@ untouched.
 - **Watch out**: raising the work-list size raises the run's API budget; the
   prefilter already runs a 2 h timeout.
 
-### R4. Twelve Data cross-check compares the wrong venue — **S**
+*(R4 removed 2026-08-15 — **shipped** by the v4.3 §3.1 audit. `venue_mismatch()` resolves
+the Twelve Data venue and the ticker's own venue to canonical tokens; a gap between two
+different venues is recorded under `venue_notes` and excluded from `agree`, so a
+cross-venue quote can no longer be published as a yfinance data error. An unrecognised
+venue on either side stays silent rather than manufacturing a false flag. See
+`AUDIT_v43.md` D1.)*
 
-`fetch_twelvedata_validation` resolves `ADS.DE` on the free tier, but the quote comes back
-from **`exchange: XSTU` (Stuttgart)**, a thin secondary venue — not Xetra. On 2026-07-30 it
-returned a stale €182.25 while Xetra had gapped **−18%** on earnings, and the divergence was
-recorded as a yfinance `data_quality: suspect` flag. **The reference price was wrong, not the
-data being checked.**
 
-- **Found** 2026-07-30 by the provider audit (ReadNow PDF 0263).
-- **Plan**: read `exchange` from the TD response and either refuse the comparison when it is
-  not the ticker's primary venue, or record the venue alongside the divergence so a
-  cross-venue gap is never reported as a data error.
-- **Also**: free-tier TD covers **one** of the six non-US markets held. Euronext is
-  `402 Grow/Venture`, TW/HK/KR `402 Pro/Venture`. Restricting TD to US cross-checks is the
-  honest alternative.
+---
+
+### R6. The balance sheet's `shares` row can be a currency amount — **S**
+
+`analyze_ticker._STMT_ROWS["balance"]["shares"]` resolves
+`("Share Issued", "Ordinary Shares Number", "Common Stock")` in order, and **"Common Stock"
+is a par value in currency on some filers**, not a share count.
+
+- **Found** 2026-08-15 by the v4.3 §3.1 audit (finding D2) while building the asset-play
+  test. Measured: across 122 reports where book value per share is computable two ways, all
+  but five sit within 3×, but a middle band of **1.7–2.9×** is this fall-through — IBM 6.41
+  vs 16.44, AMAT 16.49 vs 48.75, plus LRCX, DE, UNP, CTAS, PG, EMR.
+- **Why it was not fixed with the finding**: the row feeds `red_flags`' balance checks,
+  whose sub-score feeds the financial-quality star rating. Changing the extraction silently
+  re-rates published reports, so it needs its own change with its own before/after.
+- **Mitigated meanwhile**: `category_lens` treats a >5× disagreement between the two book-value
+  paths as *unreliable* and refuses to publish an asset-play claim.
+- **Plan**: add a share-count plausibility check (market cap / price, or the prior year's
+  count) and drop the `"Common Stock"` fallback when it fails; re-render the affected
+  reports deliberately.
 
 ---
 
@@ -122,6 +135,15 @@ margin-stable names within the same moat score.
 
 ### N3. P/E band depth guard — **S**
 
+> ✅ **SHIPPED 2026-08-15** (v4.3 §3.1 audit). An earnings-collapse year (EPS ≤ 15 % of the
+> median) is now excluded from the series exactly as a negative-EPS year already was, and
+> `band_usability()` applies a 4-clean-year depth floor to what survives; `justified_exit_pe`
+> returns `None` for an unusable band, which covers both consumers at once. Writing BOTH of
+> the conditions below into the usability test was tried first and marked **41 of 48** cached
+> bands unusable, ACN (16y) and CSCO (14y) among them — hence the split. Re-measured:
+> 44 usable · 3 unusable (ADS.DE among them). See `AUDIT_v43.md` A2. Entry retained for its
+> evidence; remove at the next prune.
+
 The own-history P/E band is unusable when its window contains an
 earnings-collapse year, and nothing currently says so. adidas on 2026-07-30: a
 **3-year** band whose *minimum* (25.44×) sat above the live multiple (19.20×) and
@@ -137,6 +159,14 @@ an exit ladder whose first trim rung was **2.9× the current price**.
   class of problem (ADSK 2026-07-22). It is not sufficient on a 3-year window.
 
 ### N4. Revisit `fair_price` vs the ±70% DCF gate — **S**
+
+> ✅ **SHIPPED 2026-08-15** (v4.3 §3.1 audit). `intrinsic_value.choose_fair_price()` is now
+> the deterministic anchor: **blend** (≥3 valid models) → **blend_median** (models disagree
+> ≥6.0×, the same threshold as the §2.11a banner) → **dcf** → **consensus** (≥3 analysts) →
+> omit. The DCF was **not** excluded, per the note below. MSFT's anchor moves \$118.35 →
+> \$303.28; measured across 62 analyses: 42 blend · 13 blend_median · 5 consensus · 1 dcf.
+> The value is computed in Python and copied into frontmatter, no longer chosen by the LLM
+> from a prose rule. See `AUDIT_v43.md` A1. Entry retained for its evidence.
 
 MSFT on 2026-07-30: `dcf_valid` stayed true at **−69.70%** against a ±70%
 invalidation threshold — surviving by **0.30pp** — so the deterministic rule
@@ -165,6 +195,25 @@ the resulting 7.33/10 carries the full **12%** peer weight in the composite.
 ---
 
 ## Gated — waiting on a trigger
+
+### G3. Gate calibration — the evidence, held until G1 — **M**
+
+The v4.3 §3.1 audit measured the seven gates over **267** analyses and found three things
+that a recalibration should start from. **Nothing was changed**: `gates_passed` contributes
+3 of the 10 points of the fundamentals sub-score, which carries 35 % of a composite frozen
+at v2.2.
+
+- **Gate 7 (`quick ratio > 1.5`) is the binding gate at 32 % pass, and it points against the
+  mandate.** It is a lender's test; the Quality Compounder mandate prizes **negative working
+  capital** — subscription software billing a year in advance, restaurants, retailers,
+  insurance float — and those businesses fail it structurally, costing ≈0.4 composite points.
+- **Gate 4 (`ROE 5y > 5 %`) passes 85 %** and barely discriminates, on a mandate whose moat
+  multiplier keys at ROIC > 25 %.
+- **The v2.2 gate-5 growth bypass fired twice in 267 evaluations** (0.7 %).
+
+- **Trigger**: the same one as **G1** — T+6m outcome data, first possible ≈2026-10-17.
+  Candidates to test then: Gate 7 → current ratio, or > 1.0, or demoted to a warning;
+  Gate 4 → 10–12 %. Do not guess. See `AUDIT_v43.md` Lens 1.
 
 ### G1. Naive backtest to calibrate `WEIGHTS_V2_DEEP` (§10 item 12) — **M**
 

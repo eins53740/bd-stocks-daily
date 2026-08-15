@@ -73,6 +73,9 @@ HORIZON_YEARS = 3            # forward target = FY+3 (TIKR presentation)
 GROWTH_CLAMP = (-0.10, 0.30)  # sanity clamp on the growth anchor
 SANE_IRR_RANGE = (-15.0, 30.0)  # outside ⇒ sanity_flag on the forward target
 CONSERVATIVE_PCTL = 15       # "conservative" multiple = 15th percentile (spec §7)
+# Roadmap N3 (closed by the v4.3 §3.1 audit) — see band_usability().
+MIN_USABLE_DEPTH = 4         # years of CLEAN positive-EPS history before a band sets a target
+EPS_ZERO_EPSILON = 0.15      # an EPS this small a fraction of the median is a collapse year
 AV_EARNINGS_URL = f"{fh.AV_BASE}?function=EARNINGS"
 
 
@@ -144,12 +147,71 @@ def drop_offcycle_records(records: list) -> list:
     return [r for r in records if r.get("date", "")[5:7] == dominant]
 
 
+def collapse_eps_floor(eps_records: list | None) -> float | None:
+    """The EPS level below which a year is an earnings collapse, not an observation.
+
+    `EPS_ZERO_EPSILON × median(|EPS|)`. None when there is nothing to measure against.
+    """
+    positives = [abs(r["eps"]) for r in (eps_records or [])
+                 if isinstance(r, dict) and isinstance(r.get("eps"), (int, float))
+                 and r["eps"]]
+    if not positives:
+        return None
+    return statistics.median(positives) * EPS_ZERO_EPSILON
+
+
+def band_usability(pe_band: dict | None) -> tuple[bool, str | None]:
+    """Is this P/E band fit to underwrite a price target? (usable, reason).
+
+    Roadmap **N3**, closed by the v4.3 §3.1 audit. adidas on 2026-07-30 published a
+    **3-year** band whose minimum (25.44×) sat ABOVE the live multiple (19.20×) and whose
+    median reached **47.73×**, because FY2023 EPS approached zero after the Yeezy
+    termination. That median propagated into `justified_exit_pe`, into two of the five
+    intrinsic models, into a €608 forward target and into an exit ladder whose first trim
+    rung was **2.9× the current price**. Using the median rather than the mean was the
+    earlier fix for this class of problem (ADSK, 2026-07-22); on a three-year window it is
+    not enough, because two of the three observations are the distortion.
+
+    THE FIX IS IN TWO PLACES, AND THE SPLIT WAS MEASURED, NOT ASSUMED. Writing both
+    conditions into this one function marked **41 of 48** cached bands unusable and would
+    have gutted the feature — including ACN (16 years) and CSCO (14), where a single
+    small-EPS year cannot move a median at all. So:
+
+      * a **collapse year is EXCLUDED from the series**, exactly as a negative-EPS year
+        already is — the distortion is removed rather than allowed to disqualify the
+        history around it;
+      * and this function applies only the **depth floor** to what survives.
+
+    adidas ends with 2 clean years → unusable. ACN keeps 15 → usable. Non-US names, whose
+    yfinance ceiling is 4-5 years, stay usable but keep the shallow warning, because a
+    4-year band of clean observations is thin, not false.
+
+    Unusable is NOT absent: the band still renders with its depth and its reason, so the
+    history stays visible. What it may not do is set a price target.
+    """
+    if not pe_band:
+        return False, "no band"
+    depth = pe_band.get("depth_years") or 0
+    if depth < MIN_USABLE_DEPTH:
+        dropped = pe_band.get("collapse_years") or 0
+        extra = (f" after dropping {dropped} earnings-collapse year(s)" if dropped else "")
+        return False, (f"shallow band — {depth}y of clean positive-EPS history{extra}, "
+                       f"under the {MIN_USABLE_DEPTH}y floor")
+    return True, None
+
+
 def justified_exit_pe(pe_band: dict | None) -> float | None:
     """The justified exit multiple for forward targets: the band MEDIAN capped
     at the band max. The median, not the mean — transition years with near-zero
     EPS produce outlier P/Es (e.g. ADSK 2016-18 >100×) that drag the mean far
-    above anything a buyer should underwrite (live finding, 2026-07-22)."""
+    above anything a buyer should underwrite (live finding, 2026-07-22).
+
+    Returns None for a band marked unusable (N3) — this is the single funnel both
+    `intrinsic_value` and the forward target read, so one guard covers both.
+    """
     if not pe_band:
+        return None
+    if pe_band.get("usable") is False:
         return None
     exit_pe = pe_band.get("median") or pe_band.get("mean")
     if exit_pe is not None and pe_band.get("max") is not None:
@@ -501,9 +563,19 @@ def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> d
 
     # --- Own-history P/E band ---
     pe_series = []
+    # N3: an earnings-collapse year is dropped from the series exactly as a negative-EPS
+    # year already is. Kept aligned 1:1 with eps_records (None, not removed) so
+    # pe_series_records still pairs them correctly for the NI-vs-P/E chart.
+    eps_floor = collapse_eps_floor(eps_records)
+    collapse_years = 0
     for r in eps_records:
         mp = mean_price_in_window(price_dates, price_closes, r["date"])
-        pe_series.append(mp / r["eps"] if (mp and r["eps"] and r["eps"] > 0) else None)
+        eps = r["eps"]
+        if eps and eps > 0 and eps_floor is not None and eps <= eps_floor:
+            collapse_years += 1
+            pe_series.append(None)
+            continue
+        pe_series.append(mp / eps if (mp and eps and eps > 0) else None)
     pe_band = band_stats(pe_series, fund.get("pe_ratio"),
                          f"{eps_source} EPS × yfinance 15y monthly prices")
     pe_latest = next((v for v in reversed(pe_series) if v and v > 0), None)
@@ -520,9 +592,17 @@ def run(ticker: str, analysis_json: str | None, out_dir: Path, force: bool) -> d
     # the mismatch degradation (pe_series is emptied there) so a degraded band
     # never ships a garbage series. Additive key; parsers tolerate absence.
     pe_band["series"] = pe_series_records(eps_records, pe_series)
-    if pe_band["depth_years"] < 5:
-        warnings.append(f"P/E band shallow: {pe_band['depth_years']}y "
-                        f"(source {eps_source}; expected on non-US names)")
+    # N3: mark the band before anything downstream reads it. `usable: False` still ships
+    # the band (a reader may want the history) but `justified_exit_pe` refuses to turn it
+    # into a target, which is the only place it could do damage.
+    pe_band["collapse_years"] = collapse_years
+    pe_band["usable"], pe_band["usable_reason"] = band_usability(pe_band)
+    if collapse_years:
+        warnings.append(f"P/E band: {collapse_years} earnings-collapse year(s) excluded "
+                        f"(EPS at or below {EPS_ZERO_EPSILON:.0%} of the median)")
+    if not pe_band["usable"]:
+        warnings.append(f"P/E band unusable for targets: {pe_band['usable_reason']} "
+                        f"(source {eps_source}; shallow is expected on non-US names)")
 
     # --- Own-history P/S band (fin-history annual revenue, current shares) ---
     fy_labels, revenues = load_fin_history_annual(out_dir, ticker)
