@@ -1342,6 +1342,23 @@ python "%SCRIPTS%\render_report.py" --index {date} --out-dir "%OUT_DIR%"
   mercados mapeados foram **lidos das próprias páginas do GuruFocus** a 2026-08-15; um
   sufixo não verificado **não gera link** — um 404 num report em que se age é pior do que
   link nenhum.
+- **v4.3 — `build_valuation_compare`.** Todos os métodos lado a lado; o cartão é sobre a
+  **discordância**, não sobre o blend. Modelos inválidos aparecem **com a razão**, não são
+  escondidos. O spread max/min é **sempre impresso**; o banner "methods disagree
+  materially" só dispara acima de **6.0×** — calibrado, não assumido: medido nos 59 JSONs
+  em disco o spread mediano é **3.37×**, logo o 2.5× do plano dispararia em 61 % dos
+  reports (um aviso que aparece na maioria é papel de parede). 6.0× dispara em ~24 %.
+- **v4.3 — índice cumulativo.** `index.html` — o ficheiro que o bookmark abre — passa a ser
+  o **índice cumulativo de todos os reports**, regenerado em cada corrida via
+  `docs/_build_index.py`. O hub do dia passa para `_index_{date}.html`. Os dois ficheiros
+  nunca foram duplicados e essa era a origem real do "índice desactualizado": `index.html`
+  era o hub de um só dia, **reescrito todos os dias**, e o cumulativo vivia em `_index.html`
+  que nada agendava (parado desde 2026-08-06). `refresh_cumulative_index()` **nunca levanta
+  excepção** — a Phase 6 é exactamente o passo que o timeout de 2026-08-15 saltou.
+  ⚠️ `_index.html` fica em disco como órfão; apagar quando confirmares que nada lhe aponta.
+- **v4.3 — watermark de versão.** O rodapé passa a `… · host: {hostname} · user: {username}
+  · skill v{__version__}`, lido de `scripts/version.py` (fonte única). O H1 do `SKILL.md`
+  derivou uma versão inteira precisamente por a versão viver em prosa.
 - **Phase F sessão 2 ✅** — cartão **"Valuation metric families — equity vs enterprise"**: Equity (P/E, PEG, P/S, P/B, earnings yield) + Enterprise (EV/Sales, EV/EBITDA, EV/EBIT, FCF/EV), valores tirados do JSON (`fundamentals` + `score_details.valuation.ev_ebit`; P/B e FCF/EV calculados; yields em %), com **tint cheap/fair/rich** por banda (`metrics_glossary.band_for`). Cheat-sheet estático (`metrics_glossary.py`, sem API) em **3 modos**: tooltip `title=` no ecrã · `<details>` por família no mobile · **coluna cinzenta** em impressão (`@media print`). Hub diário opcional `index.html` (`--index {date}`) varre os reports do dia (via frontmatter do `.md` irmão) → grelha de cartões ticker/verdict/score/action.
 
 ### Phase 6 — Update state

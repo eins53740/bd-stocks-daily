@@ -345,7 +345,46 @@ GuruFocus's own pages** (breadcrumb + peer-compare strips) on 2026-08-15.
   not a subresource the page loads, so the assertion now checks `src=`/`<link href=`/`@import`
   specifically — which is what "self-contained" actually meant.
 
-**Tests**: 1144 passed, 1 skipped (from 1001 at Wave 1 close) — +143.
+**2.5 — valuation methods side by side, and the threshold was calibrated rather than
+assumed.** `intrinsic_value.py` already computes a five-model blend; the report surfaced the
+blend, which is precisely the number that conceals one model saying half what its neighbour
+says. The card lays them out, shows invalid models **with their reason** instead of dropping
+them, and quotes the spread.
+
+- **The plan proposed a ~2.5× "methods disagree" banner. Measured, that fires on 61 % of
+  reports.** Across the 59 analysis JSONs on disk the max/min spread of valid models runs
+  p25 2.05× · **median 3.37×** · p75 5.79×, from 1.19× (0669.HK) to 40.3× (AMD). A warning
+  that appears on most reports is wallpaper and the reader stops seeing it exactly when it
+  matters. The banner is set at **6.0×**, which fires on ~24 % — roughly the top quartile.
+- The spread is printed on **every** report regardless, so a 4× can be judged rather than
+  inferred from the absence of a banner.
+- The blend row no longer restates every exclusion reason — that prose is already on the
+  excluded model's own row, and two paragraphs of it buried the number the row exists for.
+- Closes the shape of roadmap **N4**: MSFT publishing `fair_price` $118.35 against a $550
+  consensus median is now a visible disagreement rather than one blended figure.
+
+**2.6 (part) — the cumulative index and the version watermark.**
+
+- **`index.html` — the file the bookmark opens — is now the CUMULATIVE index**, rebuilt on
+  every run via `docs/_build_index.py`; the per-date hub moves to `_index_{date}.html`. The
+  two files were never duplicates, and that was the actual bug behind "the index is out of
+  date": `index.html` was a single-date hub **overwritten every day**, so yesterday's
+  reports vanished from it, while the cumulative index lived at `_index.html` and nothing
+  scheduled its rebuild — stale since **2026-08-06**.
+- `refresh_cumulative_index()` **never raises**: a missing builder, a non-zero exit, a
+  timeout and an exit-0-that-writes-nothing all log and return None. Phase 6 is exactly the
+  step the 2026-08-15 timeout skipped, so it must not be able to end a run after the reports
+  are already on disk.
+- ⚠️ `_index.html` is left on disk as an orphan rather than deleted — worth removing once
+  nothing is confirmed to link to it.
+- **Version watermark**: the footer gains `· user: {username} · skill v{__version__}`, read
+  from `scripts/version.py`. A skipped bump is now visible on the face of every report.
+
+Email delivery (the other half of 2.6) is **not** shipped: the plan requires choosing a
+mechanism first, because `file://` links in a digest are dead on a phone, which is where the
+digest is read. Nothing was removed from the current digest.
+
+**Tests**: 1162 passed, 1 skipped (from 1001 at Wave 1 close) — +161.
 
 ---
 

@@ -47,6 +47,7 @@ glossary = _sibling("metrics_glossary")
 # cannot. `star_ratings.py` also has a CLI, so any other consumer gets the same numbers.
 star_ratings = _sibling("star_ratings")
 markets = _sibling("markets")
+version = _sibling("version")
 # Pure stdlib, like this module — see mermaid_render's docstring for why it does not
 # import chart_theme (and therefore matplotlib) to get its ink.
 mermaid_render = _sibling("mermaid_render")
@@ -827,6 +828,132 @@ def _fmt_big(v, currency=None) -> str:
     return f"{sign}{sym}{a:,.2f}"
 
 
+METHOD_LABELS = {
+    "two_minute_eps_growth": ("2-minute EPS growth", "Lynch's exit-multiple sketch"),
+    "lynch_peg": ("Lynch PEG", "fair P/E = growth rate"),
+    "forward_pe_target": ("Forward P/E target", "consensus FY3, discounted"),
+    "dcf": ("DCF", "±70% sanity gate"),
+    "roe_residual_income": ("ROE residual income", "sets the low in most cases"),
+    "gordon_growth": ("Gordon growth", "dividend payers only"),
+}
+# CALIBRATED, not assumed. The plan proposed ~2.5×, so I measured the max/min spread of
+# valid models across the 59 analysis JSONs on disk: p25 2.05× · **median 3.37×** · p75
+# 5.79×, range 1.19× (0669.HK) to 40.3× (AMD). A 2.5× banner would fire on 61 % of reports
+# and a 3× banner on 53 % — a warning that appears on most reports is wallpaper, and the
+# reader stops seeing it precisely when it matters. 6.0× fires on 24 %, roughly the top
+# quartile, which is what "materially" should mean.
+#
+# The spread is printed on EVERY report regardless, so the reader can judge a 4× themselves
+# instead of inferring "fine" from the absence of a banner.
+VALUATION_DISPERSION_X = 6.0
+MEDIAN_DISPERSION_X = 3.37     # the measured median, quoted in the card so the reader has
+                               # a yardstick rather than an unanchored multiple
+
+
+def build_valuation_compare(data: dict) -> str:
+    """Every valuation method side by side — the card is about DISAGREEMENT.
+
+    `intrinsic_value.py` already computes a five-model blend; the report surfaced the
+    blend, which is exactly the number that conceals a model saying half what its
+    neighbour says. This lays them out, marks the invalid ones **with their reason**
+    rather than dropping them, and raises a banner when the valid spread exceeds
+    `VALUATION_DISPERSION_X`.
+
+    No new fetches: every input is already in the analysis JSON.
+    """
+    iv = data.get("intrinsic_value") or {}
+    models = iv.get("models") or {}
+    price = _num(data.get("price_current"))
+    cur = data.get("currency")
+
+    def upside(v):
+        n = _num(v)
+        if n is None or price is None or price <= 0:
+            return "—"
+        pct = (n - price) / price * 100.0
+        cls = "up" if pct >= 0 else "down"
+        return f'<span class="vc-{cls}">{pct:+.0f}%</span>'
+
+    rows = [(f'<b>Current price</b>', fmt_money(price, cur), "—", "anchor", "")]
+    valid_values = []
+
+    for key, m in models.items():
+        label, note = METHOD_LABELS.get(key, (key.replace("_", " ").title(), ""))
+        val = _num((m or {}).get("value"))
+        if (m or {}).get("valid") and val is not None:
+            valid_values.append(val)
+            rows.append((esc(label), fmt_money(val, cur), upside(val), note, ""))
+        else:
+            # Invalid models are SHOWN with their reason, not hidden. "The DCF was
+            # excluded" is information; a table that silently has four rows instead of
+            # five is not.
+            reason = (m or {}).get("reason") or "not computable"
+            rows.append((esc(label), '<span class="sub">excluded</span>', "—",
+                         esc(reason), "vc-out"))
+
+    pe = ((data.get("valuation_bands") or {}).get("pe_band") or {})
+    # Back out today's EPS from price ÷ current P/E, then re-price it on the own-history
+    # median multiple. Written out rather than chained: the one-line version read fine and
+    # divided None by a float the moment `price_current` was absent, which a test caught.
+    cur_pe, med = _num(pe.get("current")), _num(pe.get("median"))
+    eps = (price / cur_pe) if (price and cur_pe and cur_pe > 0) else None
+    if eps and med:
+        # Own-history median P/E × the EPS implied by today's price and current P/E.
+        band_val = eps * med
+        depth = pe.get("depth_years")
+        valid_values.append(band_val)
+        rows.append(("Own-history P/E band", fmt_money(band_val, cur), upside(band_val),
+                     f"median {med:.1f}× over {esc(depth)}y", ""))
+
+    cons = data.get("consensus") or {}
+    n_an = _num(cons.get("analyst_count"))
+    tgt = _num(cons.get("target_median"))
+    if tgt and n_an and n_an >= 3:
+        valid_values.append(tgt)
+        rows.append(("Consensus median", fmt_money(tgt, cur), upside(tgt),
+                     f"sell-side, {int(n_an)} analysts", ""))
+
+    blend = iv.get("blend") or {}
+    bval = _num(blend.get("value"))
+    if bval is not None:
+        # The blend's own label restates every exclusion reason verbatim, which is already
+        # on the excluded model's row. Two paragraphs of duplicated prose in the summary
+        # row is what buries the number the row exists to show.
+        n_valid, n_models = blend.get("n_valid"), blend.get("n_models")
+        note = (f"blend of {n_valid}/{n_models} valid models"
+                if n_valid and n_models else (blend.get("label") or ""))
+        rows.append(('<b>Blend</b>', f'<b>{esc(fmt_money(bval, cur))}</b>', upside(bval),
+                     esc(note), "vc-blend"))
+
+    if len(rows) <= 2:
+        return ""
+
+    banner = ""
+    positives = [v for v in valid_values if v > 0]
+    if len(positives) >= 2:
+        lo, hi = min(positives), max(positives)
+        spread = hi / lo
+        if spread >= VALUATION_DISPERSION_X:
+            banner = (f'<div class="vc-warn"><b>Methods disagree materially.</b> '
+                      f'The valid methods span {esc(fmt_money(lo, cur))} to '
+                      f'{esc(fmt_money(hi, cur))} — a <b>{spread:.1f}× spread</b>, against '
+                      f'a {MEDIAN_DISPERSION_X:.1f}× median across this system\'s own '
+                      f'reports. A single blended fair value is not a safe summary here; '
+                      f'read the rows, not the blend.</div>')
+        else:
+            banner = (f'<p class="sub">Spread across valid methods: <b>{spread:.1f}×</b> '
+                      f'({esc(fmt_money(lo, cur))}–{esc(fmt_money(hi, cur))}); the median '
+                      f'across this system\'s reports is {MEDIAN_DISPERSION_X:.1f}×.</p>')
+
+    body = "".join(
+        f'<tr class="{cls}"><td>{lbl}</td><td class="num">{val}</td>'
+        f'<td class="num">{up}</td><td class="sub">{note}</td></tr>'
+        for lbl, val, up, note, cls in rows)
+    table = ('<table class="vc"><tr><th>Method</th><th class="num">Value/share</th>'
+             '<th class="num">vs price</th><th>Note</th></tr>' + body + "</table>")
+    return _card("Valuation — methods side by side", banner + table, "vcompare", new="v4.3")
+
+
 def _normalise_ws(s) -> str:
     """Whitespace- and case-insensitive form, for comparing two prose strings."""
     return re.sub(r"\s+", " ", str(s or "")).strip().lower()
@@ -1285,18 +1412,33 @@ def run_host():
         return "unknown"
 
 
+def run_user():
+    """The account that produced this report. Paired with the hostname so a report found
+    later can be traced to the run that made it, not just to the machine."""
+    import getpass
+    try:
+        return getpass.getuser() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def build_footer(data, fm):
     model = data.get("model_name") or "Claude Opus 4.8"
     asof = (data.get("fetched_at") or fm.get("date") or "")[:10]
     src = "yfinance / Alpha Vantage / stockanalysis (ground-truth); commentary by the model."
+    # The version is read from `version.py`, the single source — never a literal here. The
+    # SKILL.md H1 drifted a whole version precisely because a version lived in prose, and
+    # this watermark is what makes a skipped bump visible on the face of every report.
     return (f'<footer>Horizon 1–5 years · Quality Compounder + Piotroski + Altman · data: {esc(src)}<br>'
             f'Analysis written by {esc(model)} · as-of {esc(asof)} · bsdias©2026 '
-            f'· host: {esc(run_host())}</footer>')
+            f'· host: {esc(run_host())} · user: {esc(run_user())} '
+            f'· skill v{esc(version.version_string())}</footer>')
 
 
 NAV_ITEMS = [("tldr", "TL;DR"), ("duel", "Bull vs Bear"), ("stars", "⭐ Ratings"),
              ("exit", "Exit Plan"),
-             ("val", "Valuation"), ("metrics", "Metric families"), ("flags", "Red Flags"),
+             ("val", "Valuation"), ("vcompare", "Methods compared"),
+             ("metrics", "Metric families"), ("flags", "Red Flags"),
              ("ret", "Return profile"), ("op", "Opinion panel"), ("news", "News & sentiment"),
              ("peer", "Peers"), ("swot", "SWOT"), ("sankey", "Money engine"),
              ("charts", "Charts")]
@@ -1332,7 +1474,8 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     stars = build_stars(data)
     if stars:
         cards.append(stars)
-    for fn in (build_exit, build_valuation, build_metric_families, build_redflags,
+    for fn in (build_exit, build_valuation, build_valuation_compare,
+               build_metric_families, build_redflags,
                build_return_profile, build_opinion, build_news_sentiment, build_peers):
         html_ = fn(data)
         if html_:
@@ -1412,6 +1555,37 @@ def index_reports(out_dir: Path, date: str) -> list[dict]:
     return rows
 
 
+def refresh_cumulative_index(out_dir: Path) -> str | None:
+    """Rebuild the cumulative `index.html` from every report on disk. Returns its path,
+    or None if it could not be built.
+
+    Delegates to `docs/_build_index.py`, which already knows how to scan the whole folder
+    — reimplementing that scan here would give the vault two indexers that drift apart,
+    which is the shape of the bug this is fixing.
+
+    **Never raises.** Phase 6 is the step the 2026-08-15 timeout skipped, so it must be
+    cheap and it must not be able to take a run down after the reports are already on disk.
+    """
+    script = out_dir / "docs" / "_build_index.py"
+    if not script.exists():
+        log(f"cumulative index skipped — {script} not found")
+        return None
+    import subprocess
+    try:
+        proc = subprocess.run([sys.executable, str(script)], cwd=str(out_dir),
+                              capture_output=True, text=True, timeout=180)
+    except Exception as exc:  # noqa: BLE001 — an index refresh must never end a run
+        log(f"cumulative index failed ({type(exc).__name__}: {exc})")
+        return None
+    target = out_dir / "index.html"
+    if proc.returncode != 0 or not target.exists():
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        log(f"cumulative index failed (rc={proc.returncode}): {tail[-1] if tail else 'no output'}")
+        return None
+    log(f"cumulative index refreshed ({target.stat().st_size // 1024} KB)")
+    return str(target)
+
+
 def build_index_html(out_dir: Path, date: str, icon_b64: str) -> str:
     rows = index_reports(out_dir, date)
     header = (
@@ -1477,15 +1651,26 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.index:
+        # v4.3: `index.html` — the file the bookmark points at — is now the CUMULATIVE
+        # index, and the per-date hub moves to `_index_{date}.html`.
+        #
+        # The two files were never duplicates, and that was the actual bug behind "the
+        # index is out of date". `index.html` was `--index {date}` output, a single-date
+        # hub *overwritten every day*, so yesterday's reports vanished from it. The
+        # cumulative index lived at `_index.html`, built by `docs/_build_index.py`, which
+        # nothing scheduled — it had been stale since 2026-08-06.
         try:
             out_dir = Path(args.out_dir)
-            target = Path(args.out) if args.out else (out_dir / "index.html")
+            target = Path(args.out) if args.out else (out_dir / f"_index_{args.index}.html")
             target.write_text(build_index_html(out_dir, args.index, load_icon_b64()), encoding="utf-8")
         except Exception as e:
             log(f"FATAL(index): {type(e).__name__}: {e}")
             print(json.dumps({"error": str(e), "error_type": type(e).__name__}))
             return 0
-        print(json.dumps({"index": str(target), "n_reports": len(index_reports(Path(args.out_dir), args.index))}, ensure_ascii=False))
+        cumulative = None if args.out else refresh_cumulative_index(Path(args.out_dir))
+        print(json.dumps({"index": str(target), "cumulative_index": cumulative,
+                          "n_reports": len(index_reports(Path(args.out_dir), args.index))},
+                         ensure_ascii=False))
         return 0
 
     if not args.md:

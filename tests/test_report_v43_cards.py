@@ -435,3 +435,150 @@ class TestCoverFormatters:
         threshold, and float representation put 0.005 on the wrong side of it — the guard
         fired for a value that rounds perfectly well. Ask the formatter, do not predict it."""
         assert rr._fmt_ratio(0.005) == "0.01"
+
+
+# --- valuation methods compared (2.5) ---------------------------------------
+
+VAL_JSON = {
+    "ticker": "MPWR", "currency": "USD", "price_current": 1362.55,
+    "intrinsic_value": {
+        "models": {
+            "two_minute_eps_growth": {"value": 911.22, "valid": True, "reason": None},
+            "lynch_peg": {"value": 409.57, "valid": True, "reason": None},
+            "forward_pe_target": {"value": 1243.96, "valid": True, "reason": None},
+            "dcf": {"value": None, "valid": False,
+                    "reason": "DCF implies -88% vs price — exceeds the 70% sanity threshold"},
+            "roe_residual_income": {"value": 146.07, "valid": True, "reason": None},
+        },
+        "blend": {"value": 677.71, "n_valid": 4, "n_models": 5,
+                  "label": "blend of 4/5 (…) — dcf excluded: DCF implies -88% vs price …"},
+    },
+    "valuation_bands": {"pe_band": {"current": 83.34, "median": 32.12, "depth_years": 15}},
+    "consensus": {"target_median": 1820.0, "analyst_count": 13},
+}
+
+
+class TestValuationCompare:
+    def test_every_method_gets_a_row(self):
+        html = rr.build_valuation_compare(VAL_JSON)
+        for label in ("Current price", "2-minute EPS growth", "Lynch PEG",
+                      "Forward P/E target", "DCF", "ROE residual income",
+                      "Own-history P/E band", "Consensus median", "Blend"):
+            assert label in html, label
+
+    def test_an_invalid_model_is_shown_with_its_reason_not_hidden(self):
+        """"The DCF was excluded, and why" is information. A table that silently has four
+        rows instead of five is not — it is the same concealment the blend already does."""
+        html = rr.build_valuation_compare(VAL_JSON)
+        assert "excluded" in html and "sanity threshold" in html
+
+    def test_upside_and_downside_are_signed_and_colour_coded(self):
+        html = rr.build_valuation_compare(VAL_JSON)
+        assert "+34%" in html and 'vc-up' in html      # consensus above price
+        assert "-89%" in html and 'vc-down' in html    # residual income below price
+
+    def test_a_wide_spread_raises_the_banner(self):
+        html = rr.build_valuation_compare(VAL_JSON)
+        assert "Methods disagree materially" in html and "12.5×" in html
+
+    def test_a_narrow_spread_still_prints_the_spread(self):
+        """The reader must be able to judge a 4× themselves rather than infer "fine" from
+        the absence of a banner."""
+        tight = {**VAL_JSON, "intrinsic_value": {
+            "models": {"lynch_peg": {"value": 1300.0, "valid": True},
+                       "forward_pe_target": {"value": 1500.0, "valid": True}},
+            "blend": {"value": 1400.0, "n_valid": 2, "n_models": 2}},
+            "consensus": {}, "valuation_bands": {}}
+        html = rr.build_valuation_compare(tight)
+        assert "Methods disagree materially" not in html
+        assert "Spread across valid methods" in html and "1.2×" in html
+
+    def test_the_threshold_is_the_calibrated_one(self):
+        """Measured across the 59 analysis JSONs on disk: median spread 3.37×. The plan's
+        proposed 2.5× would have fired on 61 % of reports — a warning that appears on most
+        reports is wallpaper. 6.0× fires on ~24 %, roughly the top quartile."""
+        assert rr.VALUATION_DISPERSION_X == 6.0
+        assert rr.MEDIAN_DISPERSION_X == 3.37
+
+    def test_the_blend_row_does_not_restate_every_exclusion_reason(self):
+        """The blend's own label repeats the DCF reason verbatim, which is already on the
+        DCF row; two paragraphs of duplicated prose bury the number the row exists for."""
+        html = rr.build_valuation_compare(VAL_JSON)
+        assert "blend of 4/5 valid models" in html
+        assert html.count("sanity threshold") == 1
+
+    def test_consensus_needs_at_least_three_analysts(self):
+        thin = {**VAL_JSON, "consensus": {"target_median": 1820.0, "analyst_count": 2}}
+        assert "Consensus median" not in rr.build_valuation_compare(thin)
+
+    def test_an_analysis_without_models_renders_nothing(self):
+        assert rr.build_valuation_compare({"ticker": "X", "price_current": 10.0}) == ""
+
+    def test_a_missing_price_does_not_raise(self):
+        html = rr.build_valuation_compare({**VAL_JSON, "price_current": None})
+        assert "Lynch PEG" in html and "—" in html
+
+
+class TestFooterWatermark:
+    def test_the_version_comes_from_version_py_not_a_literal(self):
+        """The SKILL.md H1 drifted a whole version because a version lived in prose. This
+        watermark is what makes a skipped bump visible on the face of every report."""
+        import version as v
+        html = rr.build_footer({}, {})
+        assert f"skill v{v.version_string()}" in html
+
+    def test_host_and_user_are_both_stamped(self):
+        html = rr.build_footer({}, {})
+        assert "host:" in html and "user:" in html
+
+
+# --- the cumulative index (2.6) ---------------------------------------------
+
+class TestIndexSplit:
+    """`index.html` and `_index.html` were never duplicates, and that was the real bug
+    behind "the index is out of date": `index.html` was a single-DATE hub overwritten every
+    day, so yesterday's reports vanished from it, while the cumulative index lived at
+    `_index.html` and nothing scheduled its rebuild (stale since 2026-08-06)."""
+
+    def test_the_dated_hub_no_longer_claims_the_bookmarked_filename(self):
+        import inspect
+        src = inspect.getsource(rr.main)
+        assert '_index_{args.index}.html' in src
+        assert 'out_dir / "index.html"' not in src
+
+    def test_a_missing_builder_is_reported_not_raised(self, tmp_path):
+        """Phase 6 is the step the 2026-08-15 timeout skipped. An index refresh must not be
+        able to take a run down after the reports are already on disk."""
+        assert rr.refresh_cumulative_index(tmp_path) is None
+
+    def test_a_failing_builder_is_reported_not_raised(self, tmp_path, monkeypatch):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "_build_index.py").write_text("raise SystemExit(1)", encoding="utf-8")
+        assert rr.refresh_cumulative_index(tmp_path) is None
+
+    def test_a_builder_that_hangs_is_reported_not_raised(self, tmp_path, monkeypatch):
+        import subprocess
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "_build_index.py").write_text("pass", encoding="utf-8")
+
+        def boom(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="py", timeout=180)
+        monkeypatch.setattr(subprocess, "run", boom)
+        assert rr.refresh_cumulative_index(tmp_path) is None
+
+    def test_exit_zero_without_the_file_is_still_a_failure(self, tmp_path):
+        """A builder that succeeds and writes nothing would otherwise be reported as a
+        refreshed index."""
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "_build_index.py").write_text("pass", encoding="utf-8")
+        assert rr.refresh_cumulative_index(tmp_path) is None
+
+    def test_a_successful_build_returns_the_path(self, tmp_path):
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "_build_index.py").write_text(
+            "from pathlib import Path\n"
+            "Path(__file__).resolve().parent.parent.joinpath('index.html')"
+            ".write_text('<html>cumulative</html>', encoding='utf-8')\n",
+            encoding="utf-8")
+        out = rr.refresh_cumulative_index(tmp_path)
+        assert out and (tmp_path / "index.html").read_text(encoding="utf-8") == "<html>cumulative</html>"
