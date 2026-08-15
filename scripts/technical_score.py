@@ -70,6 +70,25 @@ BENCH_BY_SUFFIX = {
     ".OL": "^OSEAX", ".WA": "WIG20.WA", ".VI": "^ATX", ".IR": "^ISEQ",
     ".TW": "^TWII", ".TWO": "^TWII", ".SS": "000001.SS", ".SZ": "399001.SZ",
     ".KS": "^KS11", ".KQ": "^KQ11", ".NS": "^NSEI", ".BO": "^BSESN",
+    # ---- v4.3 expansion, every symbol re-verified live 2026-08-15 ----
+    # .JP is an alias of .T for Tokyo. It had metadata but no benchmark, so any
+    # ticker using it was charted against the US default while priced in JPY --
+    # found by the cross-table consistency test the moment that test existed.
+    ".JP": "^N225",
+    ".SI": "^STI", ".SA": "^BVSP", ".MX": "^MXX", ".JK": "^JKSE",
+    # Frankfurt and Hanover are secondary German venues quoting companies whose
+    # primary line is Xetra, so the DAX is the right reference for both.
+    ".F": "^GDAXI", ".HA": "^GDAXI",
+    # TSX Venture's own index (^JX) is DELISTED on Yahoo -- measured, 404. The
+    # large-cap composite is the only working proxy, and it understates venture
+    # volatility, so .V relative strength reads optimistically. Say so rather than
+    # leaving the suffix unmapped and silently benchmarked against the US.
+    ".V": "^GSPTSE",
+    # Both of these resolve but are THIN: ^TASI.SR returned 5 rows in a month and
+    # ^BUX.BD returned 1. They are mapped so the market is not benchmarked against
+    # the wrong country, but relative strength from them is not meaningful --
+    # markets._MARKET_CAVEATS carries that warning into the report.
+    ".SR": "^TASI.SR", ".BD": "^BUX.BD",
 }
 DEFAULT_BENCH = "^GSPC"  # US / fallback
 

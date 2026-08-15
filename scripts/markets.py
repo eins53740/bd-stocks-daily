@@ -57,10 +57,46 @@ _SUFFIX_META: dict[str, tuple[str, str, str, str]] = {
     "VI": ("AT", "EUR", "IFRS", "Wiener Borse"),
     "SW": ("CH", "CHF", "IFRS", "SIX Swiss"),
     "TO": ("CA", "CAD", "IFRS", "Toronto Stock Exchange"),
+    "HA": ("DE", "EUR", "IFRS", "Hanover (secondary)"),
+    # ---- v4.3 expansion: suffixes already present in _universe.yaml but unmapped ----
+    # Every one of these was resolving to INTL/USD, which silently broke to_eur()
+    # FX conversion, region_of() and the accounting caveat. 241 pool tickers were
+    # affected, 200 of them .AX alone -- the second-largest market in the universe
+    # after the US.
+    "AX": ("AU", "AUD", "IFRS", "ASX"),          # AASB is IFRS-equivalent
+    "SI": ("SG", "SGD", "IFRS", "Singapore Exchange (SGX)"),
+    "V": ("CA", "CAD", "IFRS", "TSX Venture"),
+    "MX": ("MX", "MXN", "IFRS", "Bolsa Mexicana (BMV)"),
+    # .SA is BRAZIL and .SR is SAUDI ARABIA. They are easy to transpose and the
+    # universe holds both (WEGE3/RENT3/RADL3.SA; 2222/1120.SR), so mapping SA to
+    # SAR would corrupt the currency of three Brazilian names.
+    "SA": ("BR", "BRL", "IFRS", "B3 Sao Paulo"),
+    "SR": ("SAU", "SAR", "IFRS", "Tadawul (Saudi)"),
+    "JK": ("ID", "IDR", "IFRS", "Indonesia Stock Exchange (IDX)"),
+    "BD": ("HU", "HUF", "IFRS", "Budapest Stock Exchange"),
 }
 
 # US default (no suffix).
 _US_META = ("US", "USD", "US-GAAP", "US (NYSE/Nasdaq)")
+
+# ------------------------------- Tradability tier -------------------------------
+# The brief was "every region IBKR Europe can BUY, plus every region Yahoo can
+# MONITOR". That is a union with a distinction, not an intersection: some venues
+# quote cleanly on Yahoo but are not reachable from an IBKR Europe retail account.
+# Offering those as buyable would be the dishonest outcome, so they are carried as
+# an explicit MONITOR-ONLY tier instead of being dropped or silently included.
+#
+# This is a *coverage* statement, not investment advice, and it is reference data
+# that goes stale: brokers add and remove market access. Re-confirm before acting.
+_MONITOR_ONLY_REGIONS: frozenset = frozenset({"BR", "SAU", "ID", "HU"})
+
+# Secondary/regional venues that quote the SAME company as a primary listing. They
+# are thin, and a thin venue is how roadmap R4 happened: ADS.DE resolved to
+# XSTU/Stuttgart, returned a stale price while Xetra had gapped -18% on earnings,
+# and the divergence was logged as a yfinance error when the REFERENCE was wrong.
+# Identity is handled by listings.py (SSUN.F is already registered as a Samsung
+# GDR); this set exists so the price cross-check carries the warning.
+_THIN_SECONDARY_SUFFIXES: frozenset = frozenset({"F", "HA", "V"})
 
 
 def suffix_of(ticker: str) -> str:
@@ -134,7 +170,48 @@ _MARKET_CAVEATS: dict[str, str] = {
     "UK": ("London (.L): shares are usually quoted in GBp (pence) = 1/100 GBP — "
            "yfinance reports GBp/GBX; prices are normalised to GBP before the EUR "
            "conversion (a raw pence value read as GBP would be 100x too high)"),
+    # ---- v4.3 expansion ----
+    "AU": ("Australia (.AX): AASB is IFRS-equivalent, so ratios are comparable; but "
+           "issuers report HALF-YEARLY, not quarterly — the quarterly EBITDA/FCF "
+           "series is unavailable for most names and is omitted rather than faked"),
+    "SG": ("Singapore (.SI): IFRS (SFRS); the index is REIT- and bank-heavy, so peer "
+           "medians drawn from it skew toward yield rather than growth"),
+    "CA": ("Canada (.TO/.V): IFRS. .V is TSX Venture — small/micro-cap, thin volume, "
+           "and its own index (^JX) is delisted on Yahoo, so relative strength falls "
+           "back to the large-cap ^GSPTSE and understates venture volatility"),
+    "BR": ("Brazil (.SA): IFRS. NOTE .SA is Sao Paulo (BRL) and .SR is Tadawul (SAR) — "
+           "transposing them corrupts the currency. BRL is volatile: local returns and "
+           "EUR returns can differ by tens of percent in a year"),
+    "SAU": ("Saudi (.SR): IFRS. Tadawul trades Sun-Thu, so the week does not align with "
+            "European sessions; yfinance index coverage is thin (^TASI.SR returned 5 "
+            "rows in a month when measured), making relative strength unreliable"),
+    "MX": ("Mexico (.MX): IFRS. MXN is an EM currency and the peso can move enough in a "
+           "year to dominate the equity return — judge performance in EUR, not local"),
+    "ID": ("Indonesia (.JK): IFRS-converged (PSAK); yfinance fundamental coverage is "
+           "partial; IDR is large-denomination — watch per-share magnitudes"),
+    "HU": ("Hungary (.BD): IFRS; a very small market. The BUX index is barely covered by "
+           "yfinance (1 row in a month when measured), so treat any relative-strength "
+           "or beta figure for .BD as not meaningful"),
 }
+
+
+def is_tradable(ticker: str) -> bool:
+    """Whether this venue is reachable from the IBKR Europe account (best effort).
+
+    False means MONITOR-ONLY: quotable and analysable, but do not present it as
+    something that can be bought. Unknown suffixes are not tradable either — an
+    unresolved market must never be implied to be reachable.
+    """
+    meta = market_meta(ticker)
+    return bool(meta["known"]) and meta["region"] not in _MONITOR_ONLY_REGIONS
+
+
+def tradability(ticker: str) -> str:
+    """'tradable' | 'monitor_only' | 'unknown' — the report-facing label."""
+    meta = market_meta(ticker)
+    if not meta["known"]:
+        return "unknown"
+    return "monitor_only" if meta["region"] in _MONITOR_ONLY_REGIONS else "tradable"
 
 
 def market_caveats(ticker: str) -> list[str]:
@@ -150,6 +227,19 @@ def market_caveats(ticker: str) -> list[str]:
     cav = _MARKET_CAVEATS.get(meta["region"])
     if cav:
         out.append(f"accounting/coverage [{meta['region']}]: {cav}")
+    if meta["region"] in _MONITOR_ONLY_REGIONS:
+        out.append(
+            f"tradability [{meta['region']}]: MONITOR-ONLY — {meta['exchange']} is "
+            f"quotable on Yahoo but not reachable from the IBKR Europe account; "
+            f"analyse it, do not present it as buyable"
+        )
+    if meta["suffix"] in _THIN_SECONDARY_SUFFIXES:
+        out.append(
+            f"venue [{meta['suffix']}]: thin secondary listing — quotes can be stale "
+            f"or gap away from the primary line; prefer the primary listing "
+            f"(listings.py) and treat a price divergence as a REFERENCE problem "
+            f"before calling it a data error"
+        )
     return out
 
 

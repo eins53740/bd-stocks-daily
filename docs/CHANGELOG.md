@@ -176,6 +176,50 @@ ticker → explicit reason; **foreign private issuer** (`NVO`, a real ADR filing
 
 **965 passed, 1 skipped** (+87).
 
+**1.4 — region coverage (IBKR Europe to buy ∪ Yahoo to monitor).** Nine suffixes that were
+**already live in `_universe.yaml`** were resolving to the `INTL`/`USD` fallback — **241
+tickers, 200 of them `.AX` alone**, the second-largest market in the pool after the US. The
+fallback is not cosmetic: it breaks `to_eur()` FX conversion, `region_of()`, benchmark
+selection and the accounting caveat.
+
+Verified end-to-end on a real run: `LYC.AX` resolved as
+`{'region':'INTL','currency':'USD','exchange':'unknown (AX)'}` before and
+**`AU / AUD / ASX`** after, with the half-yearly caveat surfacing in `data_warnings`.
+
+- **Two tiers, because the brief was a union and not an intersection.** `.SA` (Brazil),
+  `.SR` (Saudi), `.JK` (Indonesia) and `.BD` (Hungary) quote on Yahoo but are not reachable
+  from the IBKR Europe account, so they are **monitor-only** and flagged as such rather than
+  silently offered as buyable. `is_tradable()` / `tradability()` expose it, and an *unknown*
+  suffix is never reported tradable — fail closed.
+- **`.SA` is Brazil (BRL), `.SR` is Saudi (SAR)**, and the universe holds both. A regression
+  test asserts them apart; transposing them would price three Brazilian names in riyal.
+- **`.F`/`.HA` were deliberately NOT given their own market identity.** They are thin German
+  secondary venues quoting companies whose primary line is Xetra — the roadmap **R4** trap.
+  `listings.py` already registers `SSUN.F` as a Samsung GDR, so identity is handled there;
+  `markets.py` only adds the stale-quote caveat, which says a divergence is a *reference*
+  problem before it is a data error.
+- **Every new benchmark was verified live, and three failed honestly**: `^JX` (TSX Venture)
+  is **delisted on Yahoo**, so `.V` falls back to `^GSPTSE` and understates venture
+  volatility; `^TASI.SR` returned **5 rows in a month** and `^BUX.BD` returned **1**. All
+  three are mapped — better the right country than the US default — and all three carry a
+  caveat saying relative strength from them is not meaningful.
+
+**The cross-table consistency test is the durable part.** `_SUFFIX_META` keys carry no dot,
+`BENCH_BY_SUFFIX` keys do, so adding a market to one and forgetting the other is silent — and
+had already happened **in both directions**. It caught `.JP` (Tokyo alias, metadata but no
+benchmark, so it was charted against the US index while priced in JPY) the moment it existed.
+
+Also fixed, and unrelated to this work: `bd-stocks-prefilter`'s suite was **red** because
+`MIN_COMPOSITE` was lowered 6.0 → 5.75 on 2026-08-15 while its test still asserted 6.0 and
+called the bar "unchanged". The code is the intended state (documented at the constant); the
+assertion was stale. Worth noting that **`bd-stocks-prefilter` is not a git repository**, so
+that skill has no rollback point.
+
+**Gates**: full suite **1001 passed, 1 skipped**; the prefilter's own suite 27 passed; a
+prefilter `--dry-run --limit 25` completed clean (21 pass / 4 fail / **0 errors**).
+Expect **one-time pool churn** on the next Monday prefilter as 241 members re-price into
+their real currencies.
+
 **Known incident, 2026-08-15** — worth recording because it shaped the plan. `StocksGrowth`
 and `StocksDaily` both fired at **13:36** as Task Scheduler missed-task catch-up (the machine
 was asleep at their 12:45 / 13:30 triggers). They contended and **both hit their timeouts**
