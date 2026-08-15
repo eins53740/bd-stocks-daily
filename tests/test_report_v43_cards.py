@@ -296,3 +296,142 @@ class TestSharedImageBudget:
         _, dropped_alone = rr.build_charts(tmp_path / "r.md", tmp_path, "X", fm, used=0)
         _, dropped_after = rr.build_charts(tmp_path / "r.md", tmp_path, "X", fm, used=200)
         assert dropped_alone == [] and dropped_after == ["price"]
+
+
+# --- the one-page cover -----------------------------------------------------
+
+COVER_JSON = {
+    "ticker": "MPWR", "company_name": "Monolithic Power Systems, Inc.", "currency": "USD",
+    "verdict": "review", "price_current": 1362.55, "gates_passed": 7,
+    "piotroski_fscore": 6, "altman_zscore": 63.25,
+    "scores": {"composite": 6.34, "moat": 10.0},
+    "fundamentals": {"market_cap": 6.696e10, "revenue_ttm": 3.274e9, "ebitda_ttm": 1.0e9,
+                     "net_debt": -1.39e9, "roic_ttm": 0.2766, "roe_ttm": 0.2198,
+                     "roe_5y_avg": 0.2966, "net_margin_ttm": 0.245,
+                     "operating_margin_ttm": 0.31, "gross_margin_ttm": 0.552,
+                     "revenue_stability_0_1": 0.95, "revenue_cagr_5y": 0.1586,
+                     "eps_cagr_5y": 0.112, "pe_ratio": 83.34, "forward_pe": 39.16,
+                     "ev_ebitda": 65.5, "ev_ebit": 89.98, "peg": 1.4,
+                     "debt_to_equity": 0.00486, "net_debt_ebitda": -1.39, "quick_ratio": 3.53,
+                     "shares_change_5y_pct": 3.4},
+    "top_strip": {"fcf_margin_pct": 13.57, "fcf_yield_pct": 0.66, "beta_3y": 2.005,
+                  "alpha_ann_pct": 9.23, "revenue_cagr_5y_pct": 15.86},
+    "intrinsic_value": {"mos_class": "rich", "mos_pct": -101.1,
+                        "capm": {"cost_of_equity": 0.1307}},
+    "technical": {"go_no_go": "GO"},
+    "exit_plan": {"thesis_broken_trigger": {"text": "Growth below 10% while the multiple normalises."}},
+    "capital_returns": {"net_payout_yield": 0.0044, "shares_change_5y_pct": 3.4},
+    "red_flags": {"income": {"subscore_0_10": 9.2}, "balance": {"subscore_0_10": 10.0},
+                  "cashflow": {"subscore_0_10": 10.0}},
+}
+
+COVER_FM = {"ticker": "MPWR", "currency": "USD", "verdict": "review", "score": "6.34",
+            "fair_price": "1820.0", "fair_price_basis": "consensus", "mos_class": "rich",
+            "go_no_go": "GO", "bear_case_trigger": "Growth below 10% while the multiple normalises."}
+
+COVER_BODY = ("> [!success] 💚 **Thesis**: **A wide-moat analog power specialist.**\n\n"
+              "> [!danger] 🔴 **Risks**: **83.3x GAAP earnings with no valuation cushion.**\n")
+
+
+class TestCover:
+    def test_the_answer_comes_first(self):
+        html = rr.build_cover(COVER_JSON, COVER_FM, COVER_BODY)
+        assert html.index("WATCH") < html.index("Key financials")
+        assert 'id="cover"' in html
+
+    def test_every_requested_group_is_present(self):
+        html = rr.build_cover(COVER_JSON, COVER_FM, COVER_BODY)
+        for g in ("Scale", "Profitability", "Valuation", "Health", "Growth", "Risk / return"):
+            assert g in html, g
+
+    def test_the_headline_numbers_render(self):
+        html = rr.build_cover(COVER_JSON, COVER_FM, COVER_BODY)
+        for token in ("$66.96B", "83.3×", "6/9", "63.25", "7/7", "27.7%", "15.9%"):
+            assert token in html, token
+
+    def test_a_duplicated_exit_trigger_is_not_printed_twice(self):
+        """`exit_plan.thesis_broken_trigger` is frequently a verbatim copy of the
+        frontmatter's `bear_case_trigger`, and printing both spent a third of the answer
+        band restating one sentence on the page with no room to waste."""
+        html = rr.build_cover(COVER_JSON, COVER_FM, COVER_BODY)
+        assert html.count("Growth below 10% while the multiple normalises") == 1
+        assert "Exit trigger" not in html
+
+    def test_a_distinct_exit_trigger_is_printed(self):
+        data = {**COVER_JSON,
+                "exit_plan": {"thesis_broken_trigger": {"text": "Sell if margins break 40%."}}}
+        html = rr.build_cover(data, COVER_FM, COVER_BODY)
+        assert "Exit trigger" in html and "margins break 40%" in html
+
+    def test_missing_values_render_na_never_zero(self):
+        """A cover printing 0.00 for a missing net-debt figure reads as a debt-free
+        company — the single most expensive way for this page to be wrong."""
+        html = rr.build_cover({"ticker": "X"}, {"ticker": "X"}, "")
+        assert "n/a" in html
+        assert "$0.00" not in html and "0.0%" not in html
+
+    def test_a_tiny_ratio_is_not_rounded_to_zero(self):
+        """MPWR's D/E is 0.005. `0.00` reads as missing data or as an exact zero, and it
+        is neither."""
+        html = rr.build_cover(COVER_JSON, COVER_FM, COVER_BODY)
+        assert "&lt;0.01" in html or "<0.01" in html
+
+    def test_roic_falls_back_to_roe_with_a_changed_label(self):
+        """The v4.2 IC_MIN_FRACTION guard returns None for cash-rich balance sheets on
+        purpose. ROE is the right metric there, and the label has to say which is shown."""
+        data = {**COVER_JSON, "fundamentals": {**COVER_JSON["fundamentals"], "roic_ttm": None}}
+        html = rr.build_cover(data, COVER_FM, COVER_BODY)
+        assert "ROIC n/a" in html and "22.0%" in html      # the ROE value
+
+    def test_the_gurufocus_link_appears_for_a_mapped_venue(self):
+        assert "gurufocus.com/stock/MPWR" in rr.build_cover(COVER_JSON, COVER_FM, COVER_BODY)
+
+    def test_no_link_is_emitted_for_an_unverified_venue(self):
+        data, fm = {**COVER_JSON, "ticker": "LYC.AX"}, {**COVER_FM, "ticker": "LYC.AX"}
+        assert "gurufocus" not in rr.build_cover(data, fm, COVER_BODY).lower()
+
+    def test_the_stars_row_only_lists_rated_dimensions(self):
+        thin = {"ticker": "X", "fundamentals": {"revenue_stability_0_1": 0.9,
+                                                "gross_margin_ttm": 0.6,
+                                                "revenue_cagr_5y": 0.1}}
+        html = rr.build_cover(thin, {"ticker": "X"}, "")
+        assert "Business model" in html and "Capital allocation" not in html
+
+    def test_an_empty_analysis_still_produces_a_cover(self):
+        """The cover is page 1 — it must render even when almost nothing loaded, because
+        a missing page 1 is more alarming than a sparse one."""
+        html = rr.build_cover({}, {}, "")
+        assert 'id="cover"' in html and "Key financials" in html
+
+    def test_the_prose_budget_is_advisory_not_a_truncation(self, capsys):
+        """Clipping a bear trigger mid-sentence is worse than a cover that runs 1-2 lines
+        long, so exceeding the measured budget logs and prints everything anyway."""
+        long_fm = {**COVER_FM, "bear_case_trigger": "x" * (rr.COVER_PROSE_BUDGET_CHARS + 50)}
+        html = rr.build_cover(COVER_JSON, long_fm, COVER_BODY)
+        assert "x" * 100 in html
+        assert "may run onto a second page" in capsys.readouterr().err
+
+
+class TestCoverFormatters:
+    def test_compact_money_scales(self):
+        assert rr._fmt_big(6.696e10, "USD") == "$66.96B"
+        assert rr._fmt_big(3.274e9, "USD") == "$3.27B"
+        assert rr._fmt_big(-1.39e9, "USD") == "-$1.39B"
+        assert rr._fmt_big(None, "USD") == "n/a"
+
+    def test_multiples_are_marked_so_they_cannot_be_read_as_percentages(self):
+        assert rr._fmt_x(83.34) == "83.3×"
+        assert rr._fmt_x(None) == "n/a"
+
+    def test_small_ratios_are_floored_not_rounded_away(self):
+        assert rr._fmt_ratio(0.00486) == "<0.01"   # MPWR's real D/E
+        assert rr._fmt_ratio(-0.00486) == "-0.01"  # sign survives the floor
+        assert rr._fmt_ratio(0.0) == "0.00"        # a real zero still prints as zero
+        assert rr._fmt_ratio(3.53) == "3.53"
+        assert rr._fmt_ratio(None) == "n/a"
+
+    def test_a_value_that_rounds_fine_is_left_alone(self):
+        """The first version compared against a hand-derived `0.5 * 10**-decimals`
+        threshold, and float representation put 0.005 on the wrong side of it — the guard
+        fired for a value that rounds perfectly well. Ask the formatter, do not predict it."""
+        assert rr._fmt_ratio(0.005) == "0.01"

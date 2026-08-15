@@ -99,6 +99,84 @@ _MONITOR_ONLY_REGIONS: frozenset = frozenset({"BR", "SAU", "ID", "HU"})
 _THIN_SECONDARY_SUFFIXES: frozenset = frozenset({"F", "HA", "V"})
 
 
+# --- GuruFocus deep links (v4.3) -------------------------------------------
+# GuruFocus namespaces a symbol as `{PREFIX}:{SYMBOL}`, and the prefix is NOT the Yahoo
+# suffix. Every entry below was READ OFF GuruFocus's own pages on 2026-08-15 — the
+# breadcrumb ("Europe > Germany > XTER") and the peer-compare strips, which spell each
+# peer in GuruFocus's own namespace. None of it is inferred from the ISO 10383 MIC list,
+# because GuruFocus only *sometimes* uses MICs: Paris is `XPAR` (a MIC) but London is
+# `LSE`, Tokyo `TSE`, Hong Kong `HKSE`, Milan `MIL`, Copenhagen `CSE` and Taipei `TPE` —
+# none of which are. Guessing from the MIC list would have produced six broken links.
+#
+# A SUFFIX THAT IS NOT IN THIS MAP GETS NO LINK. That is the whole discipline here: an
+# unverified prefix yields a 404 in a report you act on, which is worse than no link.
+# Adding one means opening the venue on GuruFocus and reading the breadcrumb, not
+# reasoning about what the code "should" be.
+_GURUFOCUS_PREFIX: dict[str, str] = {
+    "": "",           # US symbols are bare — verified: gurufocus.com/stock/IBM resolves
+    "DE": "XTER",     # Xetra
+    "AS": "XAMS",     # Euronext Amsterdam
+    "PA": "XPAR",     # Euronext Paris
+    "MC": "XMAD",     # Bolsa de Madrid
+    "MI": "MIL",      # Borsa Italiana — NOT XMIL
+    "SW": "XSWX",     # SIX Swiss
+    "L": "LSE",       # London — NOT XLON
+    "HK": "HKSE",     # Hong Kong — NOT XHKG
+    "T": "TSE",       # Tokyo — NOT XTKS
+    "TW": "TPE",      # Taiwan — NOT XTAI
+    "SS": "SHSE",     # Shanghai
+    "SZ": "SZSE",     # Shenzhen
+    "NS": "NSE",      # India NSE
+    "BO": "BOM",      # India BSE
+    "HA": "HAM",      # Hanover
+}
+
+# Yahoo and GuruFocus spell the SYMBOL differently on Hong Kong. Everything not listed
+# here passes through unchanged.
+_GURUFOCUS_SYMBOL_FIXUPS = {
+    # Hong Kong pads to five digits: Yahoo `0700.HK` is GuruFocus `HKSE:00700`, verified
+    # live (Tencent). Yahoo's own padding varies (`1929.HK`, `0700.HK`), so normalise.
+    "HK": lambda s: s.zfill(5) if s.isdigit() else s,
+}
+
+# COPENHAGEN IS DELIBERATELY ABSENT, and the reason is worth keeping. GuruFocus's own
+# compare strip spells Novo Nordisk `CSE:NOVO B` — with a space — but BOTH URL forms were
+# tried live and both land on an empty search page: `CSE:NOVO%20B` → 0 results,
+# `CSE:NOVO-B` → 0 results. Whatever GuruFocus routes on for that venue is not the string
+# it displays, so `.CO` gets no link rather than a link that 404s in a report.
+#
+# Same treatment, same reason, for every venue not in the map above: `.ST` `.OL` `.HE`
+# `.LS` `.IR` `.BR` `.VI` `.WA` `.KS` `.TO` `.AX` `.SI` `.SA` `.SR` `.MX` `.JK` `.BD`.
+# They are not unsupported by GuruFocus — they are unverified by me. Adding one is a
+# five-minute job: open the venue on GuruFocus, read the breadcrumb prefix, confirm one
+# generated URL resolves, then add the entry.
+
+
+def gurufocus_url(ticker: str) -> str | None:
+    """GuruFocus deep link for a ticker, or None when the venue is unverified.
+
+    Returning None rather than a best guess is deliberate — see `_GURUFOCUS_PREFIX`.
+    """
+    if not ticker or not isinstance(ticker, str):
+        return None
+    from urllib.parse import quote
+    suffix = suffix_of(ticker)
+    if suffix not in _GURUFOCUS_PREFIX:
+        return None
+    symbol = ticker.rpartition(".")[0] if suffix else ticker
+    symbol = (symbol or ticker).strip().upper()
+    if not symbol:
+        return None
+    fixup = _GURUFOCUS_SYMBOL_FIXUPS.get(suffix)
+    if fixup:
+        symbol = fixup(symbol)
+    prefix = _GURUFOCUS_PREFIX[suffix]
+    path = f"{prefix}:{symbol}" if prefix else symbol
+    # https, never http — the plain form redirects, and a redirect in an emailed report
+    # is one more thing that can be rewritten or stripped in transit.
+    return f"https://www.gurufocus.com/stock/{quote(path, safe=':')}/summary"
+
+
 def suffix_of(ticker: str) -> str:
     """Return the Yahoo exchange suffix (without dot), or '' for US/no-suffix.
 

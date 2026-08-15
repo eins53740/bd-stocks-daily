@@ -280,7 +280,72 @@ first would have silently dropped three sections the reader relies on.
    `P/E < 35 OR (PEG < 2.5 AND ROE > 20%)`, and Gate 3 `FCF > 0` has no node at all).
    Re-cutting the ladder to match the code belongs to the §3.1 audit.
 
-**Tests**: 1072 passed, 1 skipped (from 1001 at Wave 1 close) — +71.
+**2.8 — ⭐ five-star quality ratings, 100 % deterministic.** Five dimensions from bands
+published in the new `docs/STAR_RATINGS.md`. **No LLM residual**: a star printed in a report
+is a structured number, so an LLM-set star would breach the ground-truth rule exactly as an
+LLM-set P/E would. Either it computes from the bands or it renders `n/a`.
+
+- **Computed in the renderer, not persisted.** A stored star could disagree with the
+  published bands after a band change; a computed one cannot. A CLI gives other consumers
+  the same numbers from the same JSON.
+- **Financial quality is the one weighted dimension** (Piotroski ×2, Altman ×0.5). Equal
+  weights produced a flat column on real names: 9880.HK printed four stars off a Piotroski
+  of 3/9 because an Altman Z of 8.9 pinned that component at five. Above its own 3.0 "safe"
+  threshold Altman carries **no further information**, so an unweighted average let one
+  saturated ratio outvote a nine-signal composite.
+- The scanner's three statement sub-scores count as **one** component — as three they
+  over-weighted a single source and pushed screens over a coverage cliff (IBM's 2026-08-15
+  screen printed `n/a` for a dimension its Piotroski and Altman answer perfectly well).
+- Rounding is **half up**; banker's rounding printed the same star for two companies half a
+  star apart. Coverage is measured in **weight**, not count.
+- Anti-drift tests assert every threshold and weight in the code appears in
+  `STAR_RATINGS.md`, so "the doc is the contract" is enforced rather than hoped.
+
+**2.4 — the one-page cover.** `build_cover` + a `.cover` section: page 1 is the answer
+(verb · verdict · score · price · fair value · MoS · GO/NO-GO · ⭐ · thesis · risk · bear
+trigger), then a six-group key-financials strip. Every field already existed in
+`fundamentals`/`top_strip`, so this is **layout, not new computation** — zero budget cost.
+
+- **The cover sits outside `<main>`**, directly under the header. Inside `<main>` it landed
+  on printed page 2 behind the hero radar — found by print-media screenshot, which is the
+  only way to see it.
+- **Measured at A4** (726 × 1039 px @96dpi): four real covers land at 887–954 px. The header
+  collapses to a slim band in print — every fact in it is repeated on the cover below —
+  which recovers the ~90 px that had CSCO overflowing by 14. Type size is deliberately
+  unchanged; a cover needing a magnifying glass defeats the purpose.
+- **Never prints zero for an absence**, and `<0.01` where a real ratio would round to
+  `0.00` — MPWR's D/E of 0.00486 read as a debt-free company.
+- ROIC falls back to **ROE with the label changed** when the v4.2 `IC_MIN_FRACTION` guard
+  returns `None`. Not a workaround: ROE is the right metric for a cash-rich balance sheet.
+- A duplicated exit trigger is suppressed — `exit_plan.thesis_broken_trigger` is frequently
+  a verbatim copy of `bear_case_trigger`, and printing both spent a third of the answer band
+  restating one sentence.
+- `COVER_PROSE_BUDGET_CHARS` is **advisory**: over budget logs, never truncates. Clipping a
+  bear trigger mid-sentence is worse than a cover that runs a line long.
+
+**2.4b — GuruFocus deep link per ticker** (`markets.gurufocus_url`, 17 venues).
+
+The prefix is GuruFocus's own namespace, **not** the Yahoo suffix and **not reliably the ISO
+10383 MIC**: Paris is `XPAR` (a MIC) but London is `LSE`, Tokyo `TSE`, Hong Kong `HKSE`,
+Milan `MIL`, Copenhagen `CSE` and Taipei `TPE` — none of which are. Deriving them from the
+MIC list, as first planned, would have shipped six broken links. Every mapping was **read off
+GuruFocus's own pages** (breadcrumb + peer-compare strips) on 2026-08-15.
+
+- **US symbols are bare** — `gurufocus.com/stock/IBM` resolves, which removes the NAS-vs-NYSE
+  decision that was the one part of this not derivable from the ticker.
+- Hong Kong pads to five digits (`0700.HK` → `HKSE:00700`, verified live).
+- **Copenhagen is deliberately absent**: GuruFocus displays `CSE:NOVO B`, but both
+  `CSE:NOVO%20B` and `CSE:NOVO-B` land on an empty search page. Whatever it routes on is not
+  the string it shows.
+- **An unverified venue gets no link**, ever. A 404 in a report you act on is worse than no
+  link. 17 unmapped venues are listed by name in `markets.py` with the five-minute recipe for
+  adding one.
+- One existing test had to be narrowed: it banned the literal string `https://` from the HTML
+  as a proxy for "self-contained". An `<a href>` is a hyperlink the reader chooses to follow,
+  not a subresource the page loads, so the assertion now checks `src=`/`<link href=`/`@import`
+  specifically — which is what "self-contained" actually meant.
+
+**Tests**: 1144 passed, 1 skipped (from 1001 at Wave 1 close) — +143.
 
 ---
 

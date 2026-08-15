@@ -1312,6 +1312,36 @@ python "%SCRIPTS%\render_report.py" --index {date} --out-dir "%OUT_DIR%"
     **duas** disposições que existem no corpus (grelha 2×2 e lista um-quadrante-por-linha).
     40/40 SWOTs do corpus parseiam completos.
   - **`build_sankey`** — ver a secção "Business-model Sankey" no fim deste ficheiro.
+- **v4.3 — capa de uma página (`build_cover`).** Página 1 = a resposta, depois os números
+  que a suportam. Duas bandas: (1) action verb · verdict · score · preço · fair value ·
+  MoS · GO/NO-GO · ⭐ ratings · thesis · risk · bear trigger; (2) **key financials** em 6
+  grupos (Scale · Profitability · Valuation · Health · Growth · Risk/return) — tudo já
+  existente em `fundamentals`/`top_strip`, logo **layout, não computação nova**, e custo
+  zero no budget de 30 min.
+  - A capa vive **fora do `<main>`**, logo a seguir ao header, porque dentro do `<main>`
+    caía para a página 2 atrás do radar — confirmado por screenshot em `media=print`, que
+    é a única forma de o ver.
+  - **Medido a A4** (726×1039 px @96dpi): quatro capas reais em 887–954 px. O header
+    colapsa para uma banda fina em impressão (os seus factos estão todos repetidos na
+    capa), o que recupera os ~90 px que impediam o CSCO de caber.
+  - **Nunca imprime zero por ausência**: `n/a` quando falta, e `<0.01` quando um rácio
+    real arredondaria a `0.00` (o D/E 0.00486 da MPWR lia-se como "sem dívida").
+  - ROIC cai para **ROE com a etiqueta trocada** quando o guard `IC_MIN_FRACTION` da v4.2
+    devolve `None` — não é workaround, é a métrica certa para balanços cash-rich.
+  - `COVER_PROSE_BUDGET_CHARS = 1200` é **advisory**: excedê-lo escreve um aviso no log,
+    nunca trunca. Cortar um bear trigger a meio da frase é pior do que uma capa com mais
+    uma linha.
+- **v4.3 — `build_stars` (⭐ quality ratings).** Cinco dimensões × 1-5 estrelas, 100 %
+  determinístico a partir das bandas publicadas em `docs/STAR_RATINGS.md`. **Nenhuma
+  estrela entra no composite nem no veredicto.** Sem dados suficientes → `n/a`, nunca uma
+  estrela. Calculado no renderer, **não persistido**: uma estrela guardada podia divergir
+  das bandas publicadas depois de uma mudança de banda; uma calculada não pode.
+- **v4.3 — link GuruFocus por ticker** (`markets.gurufocus_url`). O prefixo é o namespace
+  do GuruFocus, **não** o sufixo Yahoo nem fiavelmente o MIC ISO 10383: Paris é `XPAR`
+  (MIC) mas Londres é `LSE`, Tóquio `TSE`, HK `HKSE`, Milão `MIL`, Taipé `TPE`. Os 17
+  mercados mapeados foram **lidos das próprias páginas do GuruFocus** a 2026-08-15; um
+  sufixo não verificado **não gera link** — um 404 num report em que se age é pior do que
+  link nenhum.
 - **Phase F sessão 2 ✅** — cartão **"Valuation metric families — equity vs enterprise"**: Equity (P/E, PEG, P/S, P/B, earnings yield) + Enterprise (EV/Sales, EV/EBITDA, EV/EBIT, FCF/EV), valores tirados do JSON (`fundamentals` + `score_details.valuation.ev_ebit`; P/B e FCF/EV calculados; yields em %), com **tint cheap/fair/rich** por banda (`metrics_glossary.band_for`). Cheat-sheet estático (`metrics_glossary.py`, sem API) em **3 modos**: tooltip `title=` no ecrã · `<details>` por família no mobile · **coluna cinzenta** em impressão (`@media print`). Hub diário opcional `index.html` (`--index {date}`) varre os reports do dia (via frontmatter do `.md` irmão) → grelha de cartões ticker/verdict/score/action.
 
 ### Phase 6 — Update state

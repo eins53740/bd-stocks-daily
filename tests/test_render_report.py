@@ -7,6 +7,7 @@ render (self-contained: no external refs / no JS) and the frozen-md regression
 (build_dashboard.slim_report must still fully populate a v4 report).
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -157,8 +158,14 @@ def test_render_is_self_contained_and_complete(tmp_path):
     md_path = tmp_path / "2026-07-22_CSCO_invest.md"
     md_path.write_text(FIXTURE_MD, encoding="utf-8")
     html = rr.render(FIXTURE_MD, FIXTURE_JSON, md_path, tmp_path, icon_b64="")
-    # self-contained + static
-    assert "http://" not in html and "https://" not in html
+    # Self-contained + static. "Self-contained" means no external SUBRESOURCE is fetched
+    # when the file is opened — not that the string "https" never appears. v4.3 adds a
+    # GuruFocus <a href>, which is a hyperlink the reader chooses to follow, not a
+    # resource the page loads; the old blanket ban on "https://" would have made that
+    # feature untestable while proving nothing extra about offline rendering.
+    assert not re.search(r'\b(src|action)\s*=\s*["\']https?://', html)
+    assert not re.search(r'<link\b[^>]*href\s*=\s*["\']https?://', html, re.I)
+    assert not re.search(r'@import|url\(\s*["\']?https?://', html, re.I)
     assert "<script" not in html
     assert 'src="data:image' not in html or "base64" in html  # only data-URIs allowed
     # answer-first + all v4 cards present

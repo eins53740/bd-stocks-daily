@@ -46,6 +46,7 @@ glossary = _sibling("metrics_glossary")
 # stored star could disagree with the published bands after a band change; a computed one
 # cannot. `star_ratings.py` also has a CLI, so any other consumer gets the same numbers.
 star_ratings = _sibling("star_ratings")
+markets = _sibling("markets")
 # Pure stdlib, like this module — see mermaid_render's docstring for why it does not
 # import chart_theme (and therefore matplotlib) to get its ink.
 mermaid_render = _sibling("mermaid_render")
@@ -63,6 +64,10 @@ TEMPLATE = SCRIPT_DIR / "report_template.html"
 ICON = SCRIPT_DIR.parent / "docs" / "v4_design" / "assets" / "bdfinance_icon.png"
 OUT_DIR_DEFAULT = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
 IMG_BUDGET_BYTES = 1_500_000  # ≤~1.5 MB of embedded PNGs per report (spec §11)
+# Cover prose (thesis + risk + bear trigger + exit trigger) that still fits on one printed
+# A4 page. Derived from four measured covers — see build_cover for the working. Advisory:
+# exceeding it logs, never truncates.
+COVER_PROSE_BUDGET_CHARS = 1200
 
 VERDICT_LABELS = {"great": "GREAT", "invest": "INVEST", "review": "REVIEW",
                   "fair": "FAIR", "reject": "REJECT"}
@@ -427,6 +432,19 @@ def _card(title, inner, anchor=None, new=False):
             f'{inner}</section>')
 
 
+def _external_links(ticker: str) -> str:
+    """External deep links for the header. Empty when nothing is verifiable.
+
+    Only GuruFocus for now, and only for the venues `markets._GURUFOCUS_PREFIX` was
+    confirmed against live pages. An unmapped venue emits **no link** rather than a
+    guessed one — a 404 in a report you act on is worse than no link at all.
+    """
+    url = markets.gurufocus_url(ticker or "")
+    if not url:
+        return ""
+    return (f' · <a href="{esc(url)}" target="_blank" rel="noopener noreferrer">GuruFocus</a>')
+
+
 def build_header(data, fm, icon_b64):
     ticker = data.get("ticker") or fm.get("ticker") or "?"
     name = data.get("company_name") or ""
@@ -454,7 +472,7 @@ def build_header(data, fm, icon_b64):
         '<small>EQUITY RESEARCH</small></div></div>'
         '<div class="hdr-mid">'
         f'<div class="tk">{esc(name or ticker)} · {esc(ticker)}</div>'
-        f'<div class="sub">{esc(sector)}{" · " + esc(region) if region else ""} · Quality Compounder · as-of {esc(asof)}</div>'
+        f'<div class="sub">{esc(sector)}{" · " + esc(region) if region else ""} · Quality Compounder · as-of {esc(asof)}{_external_links(ticker)}</div>'
         f'<div class="decide">Quality <b>{esc(score_txt)}</b> · {esc(mos_txt)} · Horizon 1–5y → <b>{esc(verb)}</b></div>'
         '</div>'
         f'<div class="hdr-right"><div class="verdict {vclass}">{esc(VERDICT_LABELS.get(verdict,"REVIEW"))}</div>'
@@ -795,6 +813,215 @@ def build_peers(data):
     return _card("Peer comparison", f"<table>{header}{''.join(rows)}</table>", "peer")
 
 
+def _fmt_big(v, currency=None) -> str:
+    """Compact money for the cover strip: $2.79B, €711M, -$1.39bn. "n/a" when absent."""
+    n = _num(v)
+    if n is None:
+        return "n/a"
+    sym = CURRENCY_SYMBOL.get(currency or "", (currency + " ") if currency else "")
+    sign = "-" if n < 0 else ""
+    a = abs(n)
+    for cut, unit in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if a >= cut:
+            return f"{sign}{sym}{a / cut:.2f}{unit}"
+    return f"{sign}{sym}{a:,.2f}"
+
+
+def _normalise_ws(s) -> str:
+    """Whitespace- and case-insensitive form, for comparing two prose strings."""
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+
+def _fmt_ratio(v, decimals=2) -> str:
+    """A plain ratio (D/E, quick ratio) — but a small non-zero value is shown as `<0.01`
+    rather than rounded to `0.00`. MPWR's D/E is 0.005, and a cover printing `0.00` reads
+    as missing data or as an exact zero; it is neither."""
+    n = _num(v)
+    if n is None:
+        return "n/a"
+    out = f"{n:.{decimals}f}"
+    # Decided on the FORMATTED result, not on a hand-derived threshold. Comparing against
+    # `0.5 * 10**-decimals` looked equivalent and was not: float representation put 0.005
+    # on the wrong side of its own boundary, so the guard fired for a value that rounds
+    # perfectly well. Ask the formatter what it produced instead of predicting it.
+    if n != 0 and float(out) == 0:
+        return f"{'-' if n < 0 else '<'}{10 ** -decimals:.{decimals}f}"
+    return out
+
+
+def _fmt_x(v, decimals=1) -> str:
+    """A multiple: 83.3×. Distinct from a percentage so a cover reader cannot misread one
+    as the other at a glance."""
+    n = _num(v)
+    return "n/a" if n is None else f"{n:.{decimals}f}×"
+
+
+def _cover_groups(data: dict, fm: dict) -> list[tuple[str, list[tuple[str, str]]]]:
+    """The cover's key-financials strip: six labelled groups of (metric, value).
+
+    Every field here already exists in `fundamentals` / `top_strip` — verified against a
+    live analysis JSON — so this is **layout, not new computation**, and it adds nothing
+    to the 30-minute budget.
+
+    ROIC falls back to ROE when ROIC is `None`, which is not a workaround: the v4.2
+    `IC_MIN_FRACTION` guard deliberately returns `None` for cash-rich balance sheets where
+    the net-cash subtraction has hollowed out invested capital, and ROE is the right
+    metric there. The label changes with it so the reader always knows which they are
+    looking at.
+    """
+    f = data.get("fundamentals") or {}
+    ts = data.get("top_strip") or {}
+    cur = data.get("currency") or fm.get("currency")
+    iv = data.get("intrinsic_value") or {}
+
+    roic, roe = _num(f.get("roic_ttm")), _num(f.get("roe_ttm"))
+    roic_label, roic_val = ("ROIC", roic) if roic is not None else ("ROE *(ROIC n/a)*", roe)
+
+    return [
+        ("Scale", [
+            ("Market cap", _fmt_big(f.get("market_cap"), cur)),
+            ("Revenue TTM", _fmt_big(f.get("revenue_ttm"), cur)),
+            ("EBITDA TTM", _fmt_big(f.get("ebitda_ttm"), cur)),
+            ("Net debt", _fmt_big(f.get("net_debt"), cur)),
+        ]),
+        ("Profitability", [
+            (roic_label, fmt_pct(roic_val * 100 if roic_val is not None else None)),
+            ("Net margin", fmt_pct(_num(f.get("net_margin_ttm")) * 100
+                                   if _num(f.get("net_margin_ttm")) is not None else None)),
+            ("Operating margin", fmt_pct(_num(f.get("operating_margin_ttm")) * 100
+                                         if _num(f.get("operating_margin_ttm")) is not None else None)),
+            ("FCF margin", fmt_pct(ts.get("fcf_margin_pct"))),
+        ]),
+        ("Valuation", [
+            ("P/E", _fmt_x(f.get("pe_ratio"))),
+            ("Forward P/E", _fmt_x(f.get("forward_pe"))),
+            ("EV/EBITDA", _fmt_x(f.get("ev_ebitda"))),
+            ("EV/EBIT", _fmt_x(f.get("ev_ebit"))),
+            ("FCF yield", fmt_pct(ts.get("fcf_yield_pct"), 2)),
+            ("PEG", _fmt_x(f.get("peg"), 2)),
+        ]),
+        ("Health", [
+            ("Piotroski", (f"{int(_num(data.get('piotroski_fscore')))}/9"
+                           if _num(data.get("piotroski_fscore")) is not None else "n/a")),
+            ("Altman Z", (f"{_num(data.get('altman_zscore')):.2f}"
+                          if _num(data.get("altman_zscore")) is not None else "n/a")),
+            ("D/E", _fmt_ratio(f.get("debt_to_equity"))),
+            ("Net debt/EBITDA", _fmt_x(f.get("net_debt_ebitda"), 2)),
+            ("Quick ratio", _fmt_ratio(f.get("quick_ratio"))),
+        ]),
+        ("Growth", [
+            ("Revenue CAGR 5y", fmt_pct(ts.get("revenue_cagr_5y_pct"))),
+            ("EPS CAGR 5y", fmt_pct(_num(f.get("eps_cagr_5y")) * 100
+                                    if _num(f.get("eps_cagr_5y")) is not None else None)),
+        ]),
+        ("Risk / return", [
+            ("β 3y", _fmt_ratio(ts.get("beta_3y"))),
+            ("α 3y", fmt_pct(ts.get("alpha_ann_pct"))),
+            ("Gates passed", (f"{int(_num(data.get('gates_passed')))}/7"
+                              if _num(data.get("gates_passed")) is not None else "n/a")),
+            ("Cost of equity", fmt_pct(_num((iv.get("capm") or {}).get("cost_of_equity")) * 100
+                                       if _num((iv.get("capm") or {}).get("cost_of_equity")) is not None
+                                       else None)),
+        ]),
+    ]
+
+
+def build_cover(data: dict, fm: dict, body: str) -> str:
+    """Page 1: the answer, then the numbers behind it — nothing else.
+
+    Two bands, and the order is the point. The verdict, the price context and the two
+    triggers come first because that is the decision; the key-financials strip follows so
+    the page stands alone without scrolling into the body. `page-break-after: always`
+    makes print/PDF page 1 *be* the wrap-up.
+
+    Values render **blank where absent, never zero** — a cover that prints 0.00 for a
+    missing net-debt figure reads as a debt-free company.
+    """
+    ticker = data.get("ticker") or fm.get("ticker") or "?"
+    cur = data.get("currency") or fm.get("currency")
+    verdict = (data.get("verdict") or fm.get("verdict") or "").lower()
+    score = _num((data.get("scores") or {}).get("composite")) or _num(fm.get("score"))
+    iv = data.get("intrinsic_value") or {}
+    mos_class = iv.get("mos_class") or fm.get("mos_class")
+    go = (data.get("technical") or {}).get("go_no_go") or fm.get("go_no_go")
+    verb = action_verb(verdict, mos_class, go)
+
+    stars = star_ratings.compute(data or {})
+    star_row = " · ".join(
+        f'{esc(d["label"])} {esc(star_ratings.render_stars(d["stars"]))}'
+        for _k, _l, _fn in star_ratings.DIMENSIONS
+        for d in [stars["dimensions"][_k]] if d["stars"] is not None)
+
+    thesis = extract_label(body, "Thesis")
+    risks = extract_label(body, "Risks") or extract_label(body, "Risk")
+    bear = fm.get("bear_case_trigger")
+    xp = data.get("exit_plan") or {}
+    trig = xp.get("thesis_broken_trigger")
+    exit_trig = trig.get("text") if isinstance(trig, dict) else trig
+
+    facts = [
+        ("Verdict", f'{VERDICT_EMOJI.get(verdict, "")} {VERDICT_LABELS.get(verdict, verdict.upper() or "n/a")}'
+                    + (f'<span class="sub"> {score:.2f}/10</span>' if score is not None else "")),
+        ("Price", fmt_money(data.get("price_current") or fm.get("price_at_eval"), cur)),
+        ("Fair value", fmt_money(fm.get("fair_price"), cur)
+                       + (f' <span class="sub">({esc(fm.get("fair_price_basis"))})</span>'
+                          if fm.get("fair_price_basis") else "")),
+        ("Margin of safety", (f'{esc(mos_class)}' if mos_class else "n/a")
+                             + (f' · {fmt_pct(iv.get("mos_pct"), 0)}'
+                                if _num(iv.get("mos_pct")) is not None else "")),
+        ("Timing", esc(go) if go else "not run"),
+    ]
+    fact_html = "".join(
+        f'<div class="cv-fact"><div class="k">{esc(k)}</div><div class="v">{v}</div></div>'
+        for k, v in facts)
+
+    lines = []
+    if thesis:
+        lines.append(f'<div class="cv-line cv-bull"><b>Thesis</b> {md_inline(thesis)}</div>')
+    if risks:
+        lines.append(f'<div class="cv-line cv-bear"><b>Risk</b> {md_inline(risks)}</div>')
+    if bear:
+        lines.append(f'<div class="cv-line cv-bear"><b>Bear trigger</b> {md_inline(bear)}</div>')
+    # `exit_plan.thesis_broken_trigger` is frequently copied verbatim from the frontmatter's
+    # `bear_case_trigger`. Printing both spent a third of the answer band restating one
+    # sentence, on the one page that has no room to waste.
+    if exit_trig and _normalise_ws(exit_trig) != _normalise_ws(bear):
+        lines.append(f'<div class="cv-line"><b>Exit trigger</b> {md_inline(exit_trig)}</div>')
+
+    # Measured, not guessed: at A4 print width (726px content, 1039px height at 96dpi)
+    # four real covers landed at 887–954px, i.e. 84–152px spare, and 84px is about four
+    # lines of prose. The prose is the only variable part, so it gets a budget. Exceeding
+    # it does not truncate — clipping a bear trigger mid-sentence is worse than a cover
+    # that runs 1–2 lines long — it logs, so a systematic drift is visible rather than
+    # discovered in a PDF months later.
+    prose_chars = sum(len(x) for x in (thesis, risks, bear, exit_trig) if x)
+    if prose_chars > COVER_PROSE_BUDGET_CHARS:
+        log(f"cover prose {prose_chars} chars > {COVER_PROSE_BUDGET_CHARS} budget — "
+            f"the printed cover may run onto a second page")
+
+    groups = []
+    for title, rows in _cover_groups(data, fm):
+        cells = "".join(f'<div class="cv-m"><span>{md_inline(k)}</span>'
+                        f'<b>{esc(v)}</b></div>' for k, v in rows)
+        groups.append(f'<div class="cv-grp"><h4>{esc(title)}</h4>{cells}</div>')
+
+    stars_html = (f'<div class="cv-stars">{star_row}'
+                  + (f' · <b>{stars["overall"]}/5</b>' if stars.get("overall") is not None else "")
+                  + "</div>") if star_row else ""
+
+    return (
+        f'<section class="cover" id="cover">'
+        f'<div class="cv-verb">{esc(verb)}</div>'
+        f'<div class="cv-tk">{esc(data.get("company_name") or ticker)} '
+        f'<span class="sub">· {esc(ticker)}{_external_links(ticker)}</span></div>'
+        f'<div class="cv-facts">{fact_html}</div>'
+        f'{stars_html}'
+        f'{"".join(lines)}'
+        f'<h3 class="cv-h">Key financials</h3>'
+        f'<div class="cv-groups">{"".join(groups)}</div>'
+        f'</section>')
+
+
 def build_stars(data: dict) -> str:
     """The ⭐ quality card — five dimensions, 1-5 stars, from published bands.
 
@@ -1091,6 +1318,12 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     hero = build_hero(data)
     disc = '<div class="disc">🤖 Auto-generated · <b>not investment advice.</b> Verify all figures before acting.</div>'
 
+    # The cover sits OUTSIDE <main>, directly under the header, because the plan's
+    # requirement is that printed page 1 *is* the wrap-up. Left inside <main> it landed on
+    # page 2 behind the hero radar and metric tiles — verified by print-media screenshot,
+    # which is the only way to see it.
+    cover = build_cover(data, fm, body)
+
     cards = []
     cards.append(build_tldr(fm, body, data))
     duel = build_thesis_duel(body)
@@ -1130,7 +1363,8 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     nav = build_nav(present)
     footer = build_footer(data, fm)
 
-    body_html = (f'<div class="wrap">{header}{hero}{disc}{nav}<main>{"".join(cards)}</main>{footer}</div>')
+    body_html = (f'<div class="wrap">{header}{disc}{cover}{hero}{nav}'
+                 f'<main>{"".join(cards)}</main>{footer}</div>')
     template = TEMPLATE.read_text(encoding="utf-8")
     company = data.get("company_name") or ticker
     title = f"BD Finance — {ticker} ({company})"

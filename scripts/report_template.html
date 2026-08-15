@@ -138,6 +138,57 @@
   .lean.even{border-left-color:var(--muted)}
   .lean-k{font-size:10.5px;font-weight:700;letter-spacing:1.1px;color:var(--muted);margin-right:7px}
   .lean-why{margin-top:5px;font-size:13.5px;color:var(--ink)}
+  /* ---- COVER — page 1 (v4.3) ---- */
+  .cover{grid-column:1/-1;background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:22px 24px 20px;box-shadow:var(--shadow);margin-bottom:16px}
+  .cv-verb{display:inline-block;font-size:13px;font-weight:800;letter-spacing:1.6px;
+    padding:5px 12px;border-radius:7px;background:var(--bd-green);color:#fff;margin-bottom:10px}
+  .cv-tk{font-size:26px;font-weight:800;letter-spacing:-.5px;margin-bottom:14px}
+  .cv-tk .sub{font-size:14px;font-weight:500}
+  .cv-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;
+    margin-bottom:12px}
+  .cv-fact{border:1px solid var(--line);border-radius:10px;padding:8px 11px}
+  .cv-fact .k{font-size:10px;font-weight:700;letter-spacing:1px;color:var(--muted);text-transform:uppercase}
+  .cv-fact .v{font-size:16px;font-weight:700;margin-top:2px}
+  .cv-stars{font-size:12.5px;color:var(--muted);margin:2px 0 12px}
+  .cv-line{font-size:13.5px;line-height:1.5;margin:7px 0;padding-left:11px;border-left:3px solid var(--line)}
+  .cv-line b{margin-right:6px;text-transform:uppercase;font-size:11px;letter-spacing:.8px;color:var(--muted)}
+  .cv-bull{border-left-color:var(--bd-green)} .cv-bear{border-left-color:var(--reject)}
+  .cv-h{margin:16px 0 8px;font-size:12px;letter-spacing:1.3px;text-transform:uppercase;color:var(--muted)}
+  .cv-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+  .cv-grp{border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+  .cv-grp h4{margin:0 0 6px;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--bd-teal)}
+  .cv-m{display:flex;justify-content:space-between;gap:8px;font-size:12.7px;padding:2px 0}
+  .cv-m span{color:var(--muted)} .cv-m b{font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* Print: the cover MUST be page 1 on its own. Measured at A4 (726px content width,
+     1039px content height at 96dpi) the default spacing overflowed by ~42px once the
+     branded header and the disclaimer were counted, which would have pushed the key
+     financials onto page 2 — the exact failure the cover exists to prevent. The type size
+     is deliberately NOT reduced (a cover that needs a magnifying glass defeats the
+     purpose); the recovered space comes from padding and gaps. */
+  @media print{
+    /* The screen header stacks name / sub / decide over ~190px and every fact in it is
+       repeated on the cover directly below. In print it collapses to a slim brand band,
+       which is both better print typography and the ~90px that stops a long thesis from
+       pushing the key financials onto page 2 (CSCO overflowed by 14px without it). */
+    header{padding:10px 14px}
+    .hdr-mid .tk{font-size:17px}
+    .hdr-mid .decide{display:none}
+    .brand-icon{width:34px;height:34px}
+    .dial{width:52px;height:52px;font-size:18px}
+    .disc{margin-top:9px;padding:6px 11px;font-size:10.5px}
+    .cover{page-break-after:always;break-after:page;box-shadow:none;border:none;padding:0}
+    .cover .cv-tk{font-size:21px;margin-bottom:9px}
+    .cover .cv-verb{margin-bottom:7px}
+    .cover .cv-facts{gap:7px;margin-bottom:8px}
+    .cover .cv-fact{padding:6px 9px}
+    .cover .cv-stars{margin:0 0 8px}
+    .cover .cv-line{margin:4px 0}
+    .cover .cv-h{margin:11px 0 6px}
+    .cover .cv-groups{gap:7px}
+    .cover .cv-grp{padding:7px 9px}
+    .cover .cv-m{padding:1px 0}
+  }
   /* ---- STAR RATINGS (v4.3) ---- */
   .stars-overall{font-size:15px;margin:0 0 10px} .stars-overall b{font-size:20px;color:var(--bd-green)}
   table.stars{width:100%} table.stars td{border-bottom:1px solid var(--line);padding:7px 6px}
