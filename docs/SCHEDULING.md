@@ -12,8 +12,19 @@ All live in Task Scheduler folder **`\BD\Finance\`**. `Get-ScheduledTask` and
 | Task | Time | Bat | Timeout | Sends email? |
 |---|---|---|---|---|
 | `StocksGrowth` | **12:45** | `stocks-growth.bat` | 1500 s (25 min) | **No** — guarded |
-| `StocksDaily` | **13:30** | `stocks-daily.bat` | 1500 s (25 min) | **Yes** — the only sender |
-| `StocksPrefilter` | 16:45 | `stocks-prefilter.bat` | 2 h | No |
+| `StocksDaily` | **13:30** | `stocks-daily.bat` | **1800 s (30 min)** | **Yes** — the only sender |
+| `StocksPrefilter` | **Mon 14:30** | `stocks-prefilter.bat` | 2 h | No |
+| `StocksWatchdog` | 14:15 | `stocks-watchdog.bat` | — | No |
+| `StocksEarningsPreview` | 06:00 | `stocks-earnings-preview.bat` | 1800 s | Yes (own) |
+| `StocksEarningsReview` | 07:30 | `stocks-earnings-review.bat` | 2700 s | No — by design |
+| `StocksPortfolioWeekly` | Mon 08:30 | `stocks-portfolio-ingest.bat` | — | No |
+
+All times verified against the live triggers with
+`Get-ScheduledTask -TaskPath '\BD\Finance\'` on 2026-08-15 — **read the tasks, not this
+table, when they disagree.** Two drifts were corrected here on that date: the prefilter was
+documented as `16:45` (it is **Mon 14:30**, and `bd-stocks-prefilter/SKILL.md` separately
+claimed 14:00), and `StocksDaily`'s timeout was documented as 1500 s while
+`stocks-daily.bat:83` has passed `-TimeoutSeconds 1800` since 2026-07-31.
 | `StocksPortfolioWeekly` | Mon 08:30 | `stocks-portfolio-ingest.bat` | — | No |
 
 Order matters in both directions:

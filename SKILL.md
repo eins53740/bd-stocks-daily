@@ -4,7 +4,12 @@ description: Daily stock evaluation — picks 3 tickers (1 deep + 2 screens, 1 o
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v4 wave-1 complete + v4.1 wave-2 Phase H — scoring schema 2.2)
+# Daily Stock Evaluation (v4.2 — scoring schema 2.2)
+
+> **Versão e histórico**: a versão corrente é sempre a do último tag git (`git describe --tags`)
+> e o histórico completo por versão vive em `docs/CHANGELOG.md`. Este H1 esteve desactualizado
+> uma versão inteira (dizia "v4.1 Phase H" enquanto o corpo já documentava a v4.2); não voltar
+> a escrever contagens de testes nem estado de wave aqui — pertencem ao changelog.
 
 Avaliação diária automática de 3 acções (1 deep-dive + 2 screens, dos quais 1 garantidamente de mercado não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 22 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.59 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
 
@@ -157,6 +162,32 @@ Devolve `{version, skip_nodes, skip_scripts, skip_json_keys, note}`. Regras para
 - **`v3`** → **SALTAR** os nós overlay v4 listados em `skip_nodes` (2.3 · 2.4 · 2.55 · 2.56 · 2.57 · 2.58 · 2.59 · 5.7): não correr esses scripts, não escrever as suas keys aditivas, e escrever o report na **shape v3.1** (md-primário, sem os cartões overlay). O resto do pipeline (nós 2, 2.2, 2.5, 2.6, 3, 3.5, 4, 5, 5.5, 6, 7) corre igual.
 - **`v1`/`v2`** → NÃO alcançáveis por este flag (antecedem o schema 2.2). O gate resolve-os para `latest`; para reproduzir v1/v2 usar git tags + worktrees.
 - **Garantia**: as componentes **determinísticas** do composite (gates, Piotroski, Altman, valuation, peer, growth, market) são idênticas entre v3 e v4 — o score é materialmente o mesmo. *Ressalva*: a componente **management** (8%) é escrita por LLM a partir do analysis JSON, que sob v4 contém os blocos overlay e sob v3 não — logo o composite é *materialmente*, não *bit-a-bit*, idêntico (o mgmt read já é não-determinístico de run para run). O flag muda o que renderiza; nunca os pesos nem as componentes determinísticas.
+
+## Node timing (v4.3 — OBRIGATÓRIO nos nós pesados)
+
+O job das 13:30 corre com um tecto de **1800 s** e mediu **22m21s** e **23m41s** nos dois dias
+anteriores a 2026-08-15 — ou seja, ~6 minutos de folga. Para decidir o que pode ficar
+default-on é preciso **medir**, não adivinhar. `node_timing.py` regista o tempo de cada nó.
+
+Prefixa a invocação dos nós **pesados** (2, 2.2, 2.3, 2.5, 2.56, 2.58, 2.59, 3, 3.5, 5.7) com:
+
+```bash
+python "%SCRIPTS%\node_timing.py" --node 2.2 --ticker ASML.AS -- python "%SCRIPTS%\financial_history.py" --ticker ASML.AS --analysis-json "..."
+```
+
+O wrapper é **transparente**: devolve o exit code do comando filho intacto, e uma falha da
+própria instrumentação nunca rebenta o pipeline (escreve nada e segue). Grava uma linha JSONL
+em `OUT_DIR\_timings\{date}.jsonl` — append-only, para que um run morto a meio **mantenha** o
+que já mediu (foi exactamente o que se perdeu no timeout de 2026-08-15, que matou a Phase 6).
+
+No fim do run, inclui no output da Phase 8 a linha de topo de:
+
+```bash
+python "%SCRIPTS%\node_timing.py" --report
+```
+
+`BD_TIMINGS=0` desliga a gravação. Nós leves (update_log, update_shortlist, watchlist) não
+precisam de wrapper — o custo do wrapper não compensa o sinal.
 
 ## Workflow (executar por esta ordem exacta)
 

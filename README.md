@@ -11,8 +11,12 @@ a transparent composite score, and writes tiered Obsidian reports + an HTML dash
 > (LLM-extracted from the official filing → `_segments/`) and macro valuation/country data (WebFetch → `_macro/`).
 
 Schema **v2.2**. Runs via Windows Task Scheduler (`StocksDaily`, daily 13:30) → `C:\Github\.scripts\stocks-daily.bat`,
-under a **30-minute wall-clock budget**: 3 tickers (1 deep + 2 screens), 25-min timeout, then the email. The growth
+under a **30-minute wall-clock budget**: 3 tickers (1 deep + 2 screens), **1800 s timeout**, then the email. The growth
 lens is a separate task (`StocksGrowth`, 12:45) so it can never delay the digest — see `docs/SCHEDULING.md`.
+
+Version history lives in **`docs/CHANGELOG.md`**; the open backlog in **`docs/ROADMAP.md`**.
+The heavy `Stocks*` jobs serialise through `C:\Github\.scripts\job_lock.ps1` so a Task
+Scheduler catch-up burst cannot run four of them at once (incident 2026-08-15).
 
 **v3.1 (2026-07-15)**: quarterly EBITDA+FCF chart with hybrid 4Q forecast (`financial_history.py`, Alpha Vantage for US listings + yfinance fallback, 80-day cache, 20-call/day AV guard); top-of-report metrics strip (`top_strip`); 3-year revenue-segments chart; 30-month relative-performance chart vs region benchmark + sector SPDR; promoted thesis/risk callouts; €1500 broker-recommendation section (composite ≥ 7.0, reuses `broker_compare.py`); daily macro section with `_macro/` cache (`macro_snapshot.py` + `prompts/macro_daily.md`).
 
@@ -143,7 +147,7 @@ uv run python "C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\analyze_ti
 # Regenerate the dashboard
 uv run python "...\scripts\build_dashboard.py"
 
-# Tests (249)
+# Tests (865: 864 pass + 1 opt-in Chromium skip, as of v4.3 wave 0)
 uv run --with pytest pytest "C:\Users\bsdias\.claude\skills\bd-stocks-daily\tests" -q
 ```
 
