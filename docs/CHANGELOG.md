@@ -384,7 +384,89 @@ Email delivery (the other half of 2.6) is **not** shipped: the plan requires cho
 mechanism first, because `file://` links in a digest are dead on a phone, which is where the
 digest is read. Nothing was removed from the current digest.
 
-**Tests**: 1162 passed, 1 skipped (from 1001 at Wave 1 close) — +161.
+**2.1 — peers 5y.** `{date}_{ticker}_peers5y.png`: five years of **total** return
+(`auto_adjust`, dividends reinvested), every series converted to EUR through
+`markets.eur_fx_pair` before indexing to 100, subject against its 3-5 named competitors.
+
+- The peer set comes from `score_details.peer_info.peer_tickers` — **the same set the peer
+  sub-score ranked** — so the two peer charts can never name different companies.
+- The resolution tier prints on every render and the loose tiers (`by_industry`,
+  `by_sector`) are flagged **amber**. Roadmap **N5** is what an unlabelled sector fallback
+  looks like: adidas ranked against Amazon, McDonald's, Home Depot and Starbucks.
+- A peer whose FX cross fails to fetch is **dropped and named**, never compared
+  unconverted. GBp needs no special case — a constant factor cancels in the indexing.
+- The common start is the **subject's**, so a peer that listed two years ago cannot
+  truncate everyone else's five-year window; a peer too short for the window is dropped.
+
+**2.2 — long-horizon evolution.** `{date}_{ticker}_evolution.png`: price · P/E +
+price/EBITDA · EBITDA + EPS, on one shared year axis. Three defects found by rendering
+real data, not by reading the spec:
+
+- **A phantom 150× multiple at MPWR FY2024.** `market cap = P/E × net income` is exact only
+  if reported EPS is GAAP net income per share. AV pairs an *adjusted* EPS of 14.13 with a
+  one-off-inflated $1.79bn net income → 126m implied shares against ~48m either side.
+  `consistent_share_years()` now tests that premise directly against each year's nearest
+  neighbours, which tolerates buyback drift and catches a spike. Rejected years are dropped
+  and named in the caption.
+- **A collapsed final year** from a partial-year EPS stub (MPWR `2026-06-30`) — the same
+  defect `valuation_bands` hit with VEEV. `drop_offcycle_records` is **imported** from
+  there rather than re-implemented, so the two cannot drift apart.
+- **22 years of compounding flattened into a baseline.** The price panel switches to log
+  scale above a 20× range.
+
+The second line is called **price/EBITDA and never EV/EBITDA**, in the axis label, the
+legend and the docstring: net-debt history is persisted nowhere, so an enterprise multiple
+cannot be computed per year, and labelling an equity one as enterprise flatters exactly the
+leveraged names where it matters.
+
+`--freq quarterly` was specified and **dropped after checking what exists**: there is no
+quarterly EPS or P/E series anywhere in the system, so the multiples panel cannot be drawn
+quarterly at all, and price + EBITDA quarterly is precisely the existing `ebitda_fcf`
+chart. The flag would have shipped a broken panel or a duplicate.
+
+Depth floor measured across all 54 cached names: **25 render, 29 do not**. Every
+yfinance-sourced name sits at 4 years and is blocked, as the plan predicted — this chart is
+a US artefact until roadmap **N0**. (Separately observed: 9 AV names cache only 6 annual
+years while 25 cache 8-31, and it is not a cache-age effect — AV's own coverage varies.)
+
+**Image budget re-measured BEFORE adding** (plan item C2): a full MPWR deep dive now spends
+**459 KB of the 1.5 MB cap**, 31%. Unchanged. Added wall-clock: **7.5 s** on a 22-24 min
+budget, so both charts are default-on rather than flagged.
+
+**2.7 — SWOT materiality.** Each item now carries **MATERIAL** or *minor* with the test in
+the prompt: *would it change the verdict or the position size?* MATERIAL renders in full ink
+with a red marker, minor set back in muted grey. The 40 SWOTs already on disk carry no tags
+and keep rendering as prose — inventing a bullet per sentence would fabricate a structure
+nobody wrote. Two prompt defects fixed alongside: the prompt asked for `###` sub-headings
+while §2.18a consumes a **table**, and the `red_flags` cross-reference was described but not
+required (every `bad`/`warn` flag must now appear in Threats or Weaknesses).
+
+The **2×2 quadrant PNG is deliberately not shipped**. The corpus quadrants are dense prose,
+so the image would be a wall of unreadable, unsearchable, fixed-width type duplicating the
+card above it. 2.7's stated purpose — get the SWOT into the HTML at all — is served better
+as text.
+
+**2.4a — earnings commentary.** `prompts/08_earnings_commentary.md`: what management *said*
+and what *changed* — guidance, segment reversals, margin direction and the reason given,
+one-offs, tone versus the prior print, and any new risk language named explicitly.
+
+The plan called this a new section, on the premise that nothing in the report reads the last
+print. **That premise was wrong**: §2.7 and §2.8 have always been this job. What they lacked
+was the filing, and MPWR's 2026-08-14 report says why in its own words — *"SEC EDGAR is not
+fetched directly per the skill's 403 policy"* — a policy Phase 1.5 removed in wave 1.3
+without anyone rewiring these sections. A new §2.6d would have been a third overlapping
+section while the two originals kept printing "narrative unavailable". So the commentary
+lands in §2.8/§2.7, and Phase 4 now fetches EDGAR **first** for US names with
+`get_narrative.py` as the fallback — the doctrine already said this; only the instruction
+still routed through the yfinance blurb.
+
+Opt-in (`BD_EARNINGS_COMMENT`), default **off** on the 13:30 path: a WebFetch plus an LLM
+call per ticker across three picks, on a job at 22-24 min of a 30-min ceiling. The
+ground-truth rule is restated **inside** the prompt rather than inherited — handing an LLM a
+document full of numbers and asking for prose is the likeliest place in the skill to leak an
+LLM-read figure. No third exception.
+
+**Tests**: 1268 passed, 1 skipped (from 1001 at Wave 1 close) — +267.
 
 ---
 
