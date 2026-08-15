@@ -705,6 +705,107 @@ def build_redflags(data):
     return _card("Red-Flag Scanner", f'<ul class="flags">{"".join(items)}</ul>{note}', "flags", new=True)
 
 
+_CATEGORY_LABEL = {"cyclical": "Cyclical", "turnaround": "Turnaround",
+                   "asset_play": "Asset play"}
+
+
+def _pct100(v):
+    """Fraction → percent. The lens blocks store 0.078; `fmt_pct` prints a percent."""
+    n = _num(v)
+    return None if n is None else n * 100.0
+
+
+def _clip(text: str, limit: int) -> str:
+    """Truncate on a word boundary — a sentence cut mid-word reads as a rendering bug."""
+    t = (text or "").strip()
+    if len(t) <= limit:
+        return t
+    cut = t[:limit].rsplit(" ", 1)[0]
+    return cut + "…"
+
+
+def build_lens(data):
+    """§2.21 — the category lens (3.5) and the ROIC-vs-ROE doctrine (3.6), in one card.
+
+    Both blocks answer the same reader question — "what do these numbers actually mean for
+    this kind of company?" — so they share a card rather than adding two entries to a NAV
+    the plan already flagged as growing past what a reader scans. Either block alone is
+    enough to render it; neither is required.
+    """
+    cat = data.get("category_lens") or {}
+    roic = data.get("roic_lens") or {}
+    if (not cat or cat.get("error")) and (not roic or roic.get("error")):
+        return ""
+    rows = []
+
+    if cat and not cat.get("error"):
+        primary = cat.get("primary")
+        head = (f'<span class="pill bad">{esc((_CATEGORY_LABEL.get(primary, primary) or "").upper())}</span>'
+                if primary else '<span class="pill ok">DEFAULT LENS</span>')
+        rows.append(head + " " + (
+            "<b>Category:</b> the default yardsticks — trailing P/E, TTM margins, the "
+            "growth gates — misread this shape; see the notes below"
+            if primary else
+            "<b>Category:</b> none of cyclical / turnaround / asset play — the Quality "
+            "Compounder yardsticks apply as written"))
+        for key in ("cyclical", "turnaround", "asset_play"):
+            f = (cat.get("flags") or {}).get(key) or {}
+            if not f.get("detected"):
+                continue
+            # The LATE-CYCLE line gets its own pill row below; repeating it here is what
+            # pushed the joined evidence past the truncation limit mid-sentence.
+            ev = _clip("; ".join(e for e in (f.get("evidence") or [])
+                                 if not e.startswith("LATE-CYCLE")), 300)
+            rows.append(f'<b>{esc(_CATEGORY_LABEL[key])}</b> '
+                        f'({esc(f.get("confidence") or "n/a")}): {esc(ev)}')
+        if cat.get("peak_earnings_warning"):
+            rows.append('<span class="pill bad">LATE-CYCLE</span> trailing P/E is measured '
+                        'on cycle-high earnings — judge on mid-cycle EPS, not TTM')
+        if ((cat.get("flags") or {}).get("cyclical") or {}).get("secular_decline"):
+            rows.append('<span class="pill warn">SECULAR</span> earnings fell from their '
+                        'peak and have not recovered — a decline, not a cycle')
+        if cat.get("disagreement_note"):
+            rows.append(f'<b>vs <code>lynch_category</code> = '
+                        f'{esc(cat.get("lynch_category") or "n/a")}:</b> '
+                        f'{esc(cat["disagreement_note"])}')
+
+    if roic and not roic.get("error"):
+        pref = roic.get("preferred_metric")
+        # roic_lens stores FRACTIONS (0.078); fmt_pct formats a PERCENT (7.8). Missing
+        # this printed "ROIC 0.1% vs WACC 0.2%" on a company earning 7.8% against 17.0%.
+        vals = " · ".join(
+            f"{lbl} {fmt_pct(_pct100(roic.get(k)))}"
+            for lbl, k in (("ROIC", "roic"), ("ex-goodwill", "roic_ex_goodwill"),
+                           ("ROE", "roe"), ("ROTE", "rote"), ("ROCE", "roce"))
+            if roic.get(k) is not None)
+        rows.append(f'<b>Return metric — {esc((pref or "n/a").upper())}:</b> '
+                    f'{esc(roic.get("preferred_reason") or "")}')
+        if vals:
+            rows.append(f'<b>Measured:</b> {vals}')
+        rv = roic.get("roic_vs_wacc") or {}
+        if rv.get("verdict"):
+            cls = {"creates value": "ok", "marginal": "warn",
+                   "destroys value": "bad"}.get(rv["verdict"], "warn")
+            rows.append(f'<span class="pill {cls}">{esc(rv["verdict"].upper())}</span> '
+                        f'<b>ROIC vs WACC:</b> {fmt_pct(_pct100(rv.get("roic")))} vs '
+                        f'{fmt_pct(_pct100(rv.get("wacc")))} '
+                        f'(spread {fmt_pct(_pct100(rv.get("spread")))})')
+        lev = roic.get("leverage_manufactured_roe") or {}
+        if lev.get("flagged"):
+            rows.append(f'<span class="pill bad">LEVERAGED ROE</span> {esc(lev["note"])}')
+        bm = roic.get("buffett_multiplier") or {}
+        if bm.get("note"):
+            rows.append(f'<span class="sub">{esc(bm["note"])}</span>')
+
+    if not rows:
+        return ""
+    note = ('<p class="sub">Overlay — a lens on the numbers, not a change to them. '
+            'Neither block enters the composite, the gates or the verdict. '
+            'Thresholds: <code>docs/CATEGORIES.md</code>, <code>docs/ROIC_vs_ROE.md</code>.</p>')
+    return _card("Category & return-metric lens",
+                 "<p>" + "<br>".join(rows) + "</p>" + note, "lens", new=True)
+
+
 def build_return_profile(data):
     ab = data.get("alpha_beta") or {}
     if not ab or ab.get("error"):
@@ -1499,7 +1600,7 @@ NAV_ITEMS = [("tldr", "TL;DR"), ("duel", "Bull vs Bear"), ("stars", "⭐ Ratings
              ("exit", "Exit Plan"),
              ("val", "Valuation"), ("vcompare", "Methods compared"),
              ("metrics", "Metric families"), ("flags", "Red Flags"),
-             ("ret", "Return profile"), ("op", "Opinion panel"), ("news", "News & sentiment"),
+             ("lens", "Category lens"), ("ret", "Return profile"), ("op", "Opinion panel"), ("news", "News & sentiment"),
              ("peer", "Peers"), ("swot", "SWOT"), ("sankey", "Money engine"),
              ("charts", "Charts")]
 
@@ -1535,7 +1636,7 @@ def render(md_text: str, data: dict, md_path: Path, out_dir: Path, icon_b64: str
     if stars:
         cards.append(stars)
     for fn in (build_exit, build_valuation, build_valuation_compare,
-               build_metric_families, build_redflags,
+               build_metric_families, build_redflags, build_lens,
                build_return_profile, build_opinion, build_news_sentiment, build_peers):
         html_ = fn(data)
         if html_:

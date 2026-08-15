@@ -12,6 +12,7 @@ Fixtures are shaped from real reports on disk (MPWR, CSCO, TSM, FAE.MC), includi
 awkward bits: the threats cell that opens with the word "threat", the header row whose
 first cell is empty, and the mermaid block that opens with a YAML config preamble.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -693,3 +694,121 @@ class TestSwotMaterialityRendering:
         css = (SCRIPTS / "report_template.html").read_text(encoding="utf-8")
         for cls in ("swot-items", "swot-material", "swot-minor"):
             assert cls in css
+
+
+# ===================================================================
+# wave 3.5 / 3.6 — the category & return-metric lens card
+# ===================================================================
+CAT_BLOCK = {
+    "schema": "category_lens/1",
+    "primary": "cyclical",
+    "detected": ["cyclical"],
+    "lynch_category": "stalwart",
+    "agrees_with_lynch": False,
+    "disagreement_note": "at peak earnings a cyclical shows high ROE",
+    "peak_earnings_warning": True,
+    "flags": {
+        "cyclical": {"detected": True, "confidence": "moderate",
+                     "evidence": ["1 completed cycle(s) in 9y, deepest 90%",
+                                  "LATE-CYCLE: margin sits in the top 17%"],
+                     "metrics": {}, "not_computable": [], "secular_decline": False},
+        "turnaround": {"detected": False, "confidence": "high", "evidence": [],
+                       "metrics": {}, "not_computable": []},
+        "asset_play": {"detected": False, "confidence": "high", "evidence": [],
+                       "metrics": {}, "not_computable": []},
+    },
+}
+
+ROIC_BLOCK = {
+    "schema": "roic_lens/1",
+    "roic": 0.078, "roe": 0.081, "roce": 0.063,
+    "roic_ex_goodwill": None, "rote": None,
+    "preferred_metric": "roic", "preferred_reason": "ROIC is leverage-neutral",
+    "roic_vs_wacc": {"roic": 0.078, "wacc": 0.170, "spread": -0.092,
+                     "verdict": "destroys value", "note": "below its cost of capital"},
+    "leverage_manufactured_roe": {"flagged": False, "note": None},
+    "buffett_multiplier": {"fires": False, "gate": 0.25, "note": None},
+    "capital_intensity": {}, "notes": [],
+}
+
+
+class TestLensCard:
+    def test_no_blocks_no_card(self):
+        assert rr.build_lens({}) == ""
+
+    def test_either_block_alone_renders(self):
+        assert rr.build_lens({"category_lens": CAT_BLOCK})
+        assert rr.build_lens({"roic_lens": ROIC_BLOCK})
+
+    def test_an_errored_block_is_skipped_not_rendered(self):
+        assert rr.build_lens({"category_lens": {"error": "boom"},
+                              "roic_lens": {"error": "boom"}}) == ""
+
+    def test_percentages_are_scaled_from_fractions(self):
+        """roic_lens stores 0.078; fmt_pct prints a percent. Missing this printed
+        'ROIC 0.1% vs WACC 0.2%' on a company earning 7.8% against 17.0%."""
+        html = rr.build_lens({"roic_lens": ROIC_BLOCK})
+        assert "7.8%" in html and "17.0%" in html
+        assert "0.1%" not in html
+
+    def test_the_late_cycle_warning_gets_its_own_row(self):
+        html = rr.build_lens({"category_lens": CAT_BLOCK})
+        assert "LATE-CYCLE" in html
+        assert "mid-cycle EPS" in html
+
+    def test_the_warning_line_is_not_repeated_inside_the_evidence(self):
+        html = rr.build_lens({"category_lens": CAT_BLOCK})
+        assert html.count("LATE-CYCLE") == 1
+
+    def test_evidence_is_clipped_on_a_word_boundary(self):
+        long_ev = dict(CAT_BLOCK)
+        long_ev["flags"] = dict(CAT_BLOCK["flags"])
+        long_ev["flags"]["cyclical"] = {**CAT_BLOCK["flags"]["cyclical"],
+                                        "evidence": ["word " * 200]}
+        html = rr.build_lens({"category_lens": long_ev})
+        assert "…" in html
+        assert "wor…" not in html
+
+    def test_the_disagreement_with_lynch_is_shown(self):
+        html = rr.build_lens({"category_lens": CAT_BLOCK})
+        assert "lynch_category" in html and "peak earnings" in html
+
+    def test_a_secular_decline_is_flagged_separately_from_a_cycle(self):
+        block = json.loads(json.dumps(CAT_BLOCK))
+        block["primary"] = None
+        block["flags"]["cyclical"] = {"detected": False, "confidence": "high",
+                                      "evidence": [], "metrics": {},
+                                      "not_computable": [], "secular_decline": True}
+        html = rr.build_lens({"category_lens": block})
+        assert "SECULAR" in html and "a decline, not a cycle" in html
+
+    def test_no_category_says_the_default_lens_applies(self):
+        block = json.loads(json.dumps(CAT_BLOCK))
+        block.update(primary=None, detected=[], peak_earnings_warning=False,
+                     disagreement_note=None)
+        block["flags"]["cyclical"]["detected"] = False
+        html = rr.build_lens({"category_lens": block})
+        assert "DEFAULT LENS" in html
+        assert "Quality Compounder yardsticks apply as written" in html
+
+    def test_the_leverage_flag_is_surfaced_when_it_fires(self):
+        block = json.loads(json.dumps(ROIC_BLOCK))
+        block["leverage_manufactured_roe"] = {
+            "flagged": True, "note": "ROE 28.0% rests on 2.10x debt/equity"}
+        html = rr.build_lens({"roic_lens": block})
+        assert "LEVERAGED ROE" in html and "2.10x" in html
+
+    def test_the_silently_unfired_buffett_multiplier_reaches_the_reader(self):
+        block = json.loads(json.dumps(ROIC_BLOCK))
+        block["buffett_multiplier"]["note"] = "silently does not fire"
+        assert "silently does not fire" in rr.build_lens({"roic_lens": block})
+
+    def test_the_card_states_it_is_overlay_only(self):
+        html = rr.build_lens({"category_lens": CAT_BLOCK, "roic_lens": ROIC_BLOCK})
+        assert "not enter the composite" in html or "Neither block enters the composite" in html
+        assert "docs/CATEGORIES.md" in html and "docs/ROIC_vs_ROE.md" in html
+
+    def test_the_card_is_in_the_nav_and_in_the_assembly(self):
+        assert ("lens", "Category lens") in rr.NAV_ITEMS
+        import inspect
+        assert "build_lens" in inspect.getsource(rr.render)

@@ -864,6 +864,19 @@ _STMT_ROWS = {
         "stockholders_equity": ("Stockholders Equity", "Total Stockholder Equity", "Common Stock Equity"),
         "retained_earnings": ("Retained Earnings",),
         "shares": ("Share Issued", "Ordinary Shares Number", "Common Stock"),
+        # v4.3 wave 3: intangibles. Two consumers need them and neither can
+        # derive them from anything already here — `category_lens` prices the
+        # asset-play test off TANGIBLE book, and `roic_lens` reports ROIC
+        # ex-goodwill beside ROIC. Read from the balance frame that is already
+        # in memory, so this costs no fetch and no API call.
+        # Kept as three separate keys on purpose: yfinance publishes either the
+        # split rows or the combined one depending on the filer, and adding
+        # `goodwill` to a combined row that already contains it would double-
+        # count the largest line on an acquisitive balance sheet.
+        "goodwill": ("Goodwill",),
+        "intangibles": ("Other Intangible Assets", "Intangible Assets"),
+        "goodwill_and_intangibles": ("Goodwill And Other Intangible Assets",),
+        "net_tangible_assets": ("Net Tangible Assets",),
     },
     "cashflow": {
         "operating_cash_flow": ("Operating Cash Flow", "Total Cash From Operating Activities", "Cash Flow From Continuing Operating Activities"),

@@ -405,6 +405,22 @@ python "%SCRIPTS%\red_flags.py" --ticker ASML.AS --analysis-json "%OUT_DIR%\_tmp
 - **Flags a ler no output**: `summary.verdict` (`clean`/`watch`/`elevated`) + `summary.glyph`, `beneish.flag`, `beneish.missing`, cada `*.subscore_0_10`. Frontmatter aditivo sugerido (single-line, tolerado pelos parsers): `red_flags_verdict`, `red_flags_bad`, `red_flags_beneish` (número ou `n/a`), `red_flags_income_score` / `_balance_score` / `_cashflow_score`.
 - Falha total → `{"error": ...}` + exit 0; o cartão degrada para nota "red-flag scan unavailable". Screens NÃO correm esta phase.
 
+### Phase 2.4b — Category & return-metric lens (deep only, v4.3 wave 3)
+
+Corre a seguir à Phase 2.4 e **antes da Phase 2.5** — o LLM que escreve o SWOT e a tese precisa de saber que está a olhar para um cíclico no topo do ciclo, e não descobre isso do composite. **Puros consumidores de JSON — zero rede, zero chamadas API** (`category_lens` lê o cache `_fin_history/` da Phase 2.2; `roic_lens` lê `intrinsic_value.capm` da Phase 2.3, logo **a ordem 2.3 → 2.4b é obrigatória**):
+
+```bash
+python "%SCRIPTS%\category_lens.py" "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+python "%SCRIPTS%\roic_lens.py"     "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+- **Overlay-only**: keys aditivas `category_lens` e `roic_lens` (schema continua 2.2). `lynch_category` fica **intocado** — alterá-lo mexia no sub-score de Growth-durability e portanto no composite, que v4.3 não pode mudar. A lente vive **ao lado** dele e diz por palavras onde os dois discordam.
+- **`category_lens`** testa três coisas com bandas publicadas em `docs/CATEGORIES.md`: amplitude de lucros ao longo de um ciclo (pico → vale **sustentado** → recuperação), inflexão prejuízo→lucro **com lucro anterior à perda**, e preço contra book **tangível**. Sinais a ler: `primary`, `peak_earnings_warning` (o trap clássico — P/E baixo no pico), `flags.cyclical.secular_decline` (queda sem retorno: não é ciclo), `disagreement_note`.
+- **`roic_lens`** aplica a doutrina de `docs/ROIC_vs_ROE.md`: qual das métricas se aplica (bancos/seguradoras → ROE/ROTE; ROIC `None` pelo guard de net-cash → ROE), ROIC vs WACC como teste de valor económico, e a flag de **ROE fabricado por alavancagem** (ROE>20% ∧ D/E>1.0 ∧ ROIC<12%). Diz também, em voz alta, que o multiplicador Buffett (ROIC>25%) **não dispara** quando o ROIC está suprimido — correcto, mas até agora invisível.
+- **Custo medido**: <0,1 s por ticker os dois juntos (nenhum I/O de rede). Default-on no deep.
+- **Degradação honesta**: sem `_fin_history` cached os testes de amplitude devolvem `detected: null` e a secção diz que o teste não correu — nunca "não há ciclo". Sem `intrinsic_value.capm` não há WACC (nunca uma taxa inventada).
+- Falha total → `{"error": ...}` + exit 0; o cartão §2.20c degrada para nota. **Screens NÃO correm esta phase.**
+
 ### Phase 2.5 — Qualitative LLM pass (deep only)
 
 Runs in Claude's orchestration context. Skipped entirely for screens.
@@ -434,6 +450,7 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
    para `%OUT_DIR%\_segments\{TICKER}.json`. **Esta é a ÚNICA situação em que números vêm do LLM** — porque nenhuma API free tem segment data. O chart e a §2.1 marcam sempre a origem ("company filings, LLM-extracted") + `source_url`. Sem filing disponível → não escrever JSON, chart skipped, `segments_available: false` + `⚠️ Segment data unavailable` na §2.1. Valores só da tabela oficial — nunca estimar nem interpolar.
 
 7c. **SWOT (v4 Phase C)** — run `06_swot.md` with `{RED_FLAGS_JSON}` = the `red_flags` block from Phase 2.4 and `{BULL_THESIS}` (same as step 7). Output → the SWOT card (§2.18a). The **Threats/Risks quadrant leads and gets double depth**, and must reconcile every `bad`/`warn` scanner flag + the Beneish verdict. Overlay-only narrative — no number enters the composite.
+   - **Se a Phase 2.4b detectou uma categoria**, incluir a linha de evidência de `category_lens` no contexto do prompt: um SWOT de um cíclico no topo do ciclo que não menciona o ciclo, ou de um turnaround que não menciona a sobrevivência do balanço, está errado independentemente do que escreve. O mesmo vale para `roic_lens.leverage_manufactured_roe` quando disparada — é Weakness, não curiosidade.
 
 7d. **Statement commentary (v4 Phase C)** — for each of the three statement sub-sections (Income / Balance / Cash-Flow, §2.6a–c), write a 2–3 sentence anomaly note. **The 0-10 sub-score is the deterministic number from `red_flags.py` (Phase 2.4) — do NOT recompute it in the LLM**; the LLM only names the anomalies behind the flagged checks (ground-truth rule). Skip a statement's commentary if its sub-score is `null` (all checks n/a).
 
@@ -1208,6 +1225,31 @@ Renderiza do bloco `opinion_panel` (Phase 2.58). Modelo **independente** (Groq�
 ```
 
 *(A convicção do painel é uma opinião de modelo independente, não uma medida ground-truth; use-a como contraste ao composite, nunca como substituto.)*
+
+### 2.20c Category & return-metric lens  *(v4.3 wave 3 · overlay — lente sobre os números, não altera nenhum)*
+
+Renderiza dos blocos `category_lens` e `roic_lens` (Phase 2.4b). **Ambos determinísticos** — o LLM escreve no máximo a frase de leitura; nenhum número aqui vem de LLM. Bandas publicadas em `docs/CATEGORIES.md` e `docs/ROIC_vs_ROE.md`. Se ambos os blocos faltarem ⇒ saltar a secção inteira.
+
+```md
+**Categoria: {category_lens.primary ou "nenhuma das três — aplica-se a régua Quality Compounder"}**
+{por cada flag detectada: "- **{Cyclical|Turnaround|Asset play}** ({confidence}): {evidence}"}
+{se peak_earnings_warning: "> [!warning] Late-cycle — o P/E trailing está medido sobre lucros de topo de ciclo. Avaliar por EPS mid-cycle e por EV/EBITDA contra a própria banda do ciclo, não contra a mediana do sector."}
+{se flags.cyclical.secular_decline: "> [!warning] Declínio secular — os lucros caíram do pico e não recuperaram. Não é um ciclo: não existe \"mid-cycle\" para onde reverter."}
+{se disagreement_note: "*Divergência com `lynch_category` = {lynch_category}: {disagreement_note}*"}
+{se asset_play detectada: "*Catalisador de realização: não derivável de dados financeiros — ver narrativa. Sem catalisador, um desconto sobre o book é uma armadilha, não uma tese.*"}
+
+**Métrica de retorno aplicável: {roic_lens.preferred_metric}** — {preferred_reason}
+
+| ROIC | ROIC ex-goodwill | ROE | ROTE | ROCE | WACC | Spread |
+|---|---|---|---|---|---|---|
+| {roic}% | {roic_ex_goodwill}% | {roe}% | {rote}% | {roce}% | {wacc.value}% | {spread}% → **{verdict}** |
+
+{se leverage_manufactured_roe.flagged: "> [!danger] ROE fabricado por alavancagem — {note}"}
+{se buffett_multiplier.note: "*{note}*"}
+{por cada nota de intensidade de capital: "*{note}*"}
+```
+
+*(Overlay puro: nenhum destes valores entra no composite, nas gates ou no veredicto. A lente explica **porque** o score lê como lê — não o corrige.)*
 
 ## 3. Links para ir mais fundo
 - 📘 [Annual report {year}]({annual_url}) — publicado {annual_date}
