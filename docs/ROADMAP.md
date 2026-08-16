@@ -63,6 +63,41 @@ is a par value in currency on some filers**, not a share count.
   count) and drop the `"Common Stock"` fallback when it fails; re-render the affected
   reports deliberately.
 
+### R7. Two broker tariffs that need a human with a browser — **S**
+
+Opened 2026-08-16 when Trading 212 was verified and the other two were not. Neither is a
+research problem; both are an access problem, which is exactly why they are recorded
+rather than estimated. Both brokers stay `verified: false` and excluded from every cost
+matrix until filled.
+
+- **Bankinter** — the figures are in *Preçário de Títulos, Fundos e Seguros de
+  Investimento* (`banco.bankinter.pt/particulares/pdfs/precario/ptfs_c.pdf`, mirrored on
+  `clientebancario.bportugal.pt`). Both refuse automated fetch: 403 on the first, encoded
+  streams on the mirror. Needs: commission % and minimum for PT / other-EU / US, the
+  custody schedule and any per-semester minimum, and the non-EUR conversion spread.
+  A 0.1 % / €5-minimum manual-processing commission appears in search summaries and is
+  recorded as `partial_unverified` — **not** used anywhere.
+- **eToro** — the decisive number is the **currency conversion fee**, and eToro publishes
+  it only as "varies by location, payment method and Club tier". On a USD-base account
+  funded in EUR that fee is the dominant cost, so without it the broker cannot be ranked
+  at all. The per-exchange commission table also renders only after selecting a country
+  and exchange in the browser. What *was* confirmed: no inactivity fee, no deposit fee,
+  withdrawal free from a EUR account, and USD 1–2 possible per open and per close.
+- **Trading 212, minor**: interest on uninvested cash is real and paid daily with no
+  minimum, but it tracks central-bank rates and is not a published constant, so no number
+  is pinned. Do not let a review site's figure become one.
+
+### R8. `bd-stocks-monitor` is the only skill not under version control — **S**
+
+`bd-stocks-daily` is a git repo with a remote; `bd-stocks-monitor` is a bare directory.
+It now holds `monitor_report.py`, `send_monitor_email.py` and a SKILL.md that a **live
+weekly scheduled task** executes, so an edit that breaks it has no diff and no way back.
+
+- **Found** 2026-08-16, immediately after the `StocksMonitor` task was registered.
+- **Trigger**: none needed; this is only unscheduled because Wave 5's packaging question
+  (one repo per skill vs one `bd-finance` repo for all eight) should be settled first —
+  giving it a repo now and moving it in a fortnight is churn.
+
 ---
 
 ## Next — AGREED-DEFERRED
@@ -109,54 +144,13 @@ margin-stable names within the same moat score.
 - **Architecture**: one extra JSON field + 3 years of operating margin via
   `Ticker.financials`.
 
-### N3. P/E band depth guard — **S**
-
-> ✅ **SHIPPED 2026-08-15** (v4.3 §3.1 audit). An earnings-collapse year (EPS ≤ 15 % of the
-> median) is now excluded from the series exactly as a negative-EPS year already was, and
-> `band_usability()` applies a 4-clean-year depth floor to what survives; `justified_exit_pe`
-> returns `None` for an unusable band, which covers both consumers at once. Writing BOTH of
-> the conditions below into the usability test was tried first and marked **41 of 48** cached
-> bands unusable, ACN (16y) and CSCO (14y) among them — hence the split. Re-measured:
-> 44 usable · 3 unusable (ADS.DE among them). See `AUDIT_v43.md` A2. Entry retained for its
-> evidence; remove at the next prune.
-
-The own-history P/E band is unusable when its window contains an
-earnings-collapse year, and nothing currently says so. adidas on 2026-07-30: a
-**3-year** band whose *minimum* (25.44×) sat above the live multiple (19.20×) and
-whose median reached **47.73×**, because 2023 EPS approached zero after the Yeezy
-termination. That median then propagated into `justified_exit_pe`, two of the five
-intrinsic models, a €608 forward target (IRR +60.8%, correctly sanity-flagged) and
-an exit ladder whose first trim rung was **2.9× the current price**.
-
-- **Plan**: refuse to publish a band (or mark it `unusable`, alongside the existing
-  `skewed`/`mismatch` states) when depth < ~5 years **or** when any year's EPS is
-  within a small epsilon of zero. Consumers already handle a degraded band.
-- **Note**: using the median instead of the mean was the earlier fix for this
-  class of problem (ADSK 2026-07-22). It is not sufficient on a 3-year window.
-
-### N4. Revisit `fair_price` vs the ±70% DCF gate — **S**
-
-> ✅ **SHIPPED 2026-08-15** (v4.3 §3.1 audit). `intrinsic_value.choose_fair_price()` is now
-> the deterministic anchor: **blend** (≥3 valid models) → **blend_median** (models disagree
-> ≥6.0×, the same threshold as the §2.11a banner) → **dcf** → **consensus** (≥3 analysts) →
-> omit. The DCF was **not** excluded, per the note below. MSFT's anchor moves \$118.35 →
-> \$303.28; measured across 62 analyses: 42 blend · 13 blend_median · 5 consensus · 1 dcf.
-> The value is computed in Python and copied into frontmatter, no longer chosen by the LLM
-> from a prose rule. See `AUDIT_v43.md` A1. Entry retained for its evidence.
-
-MSFT on 2026-07-30: `dcf_valid` stayed true at **−69.70%** against a ±70%
-invalidation threshold — surviving by **0.30pp** — so the deterministic rule
-("DCF when valid, else consensus median") published **$118.35** as `fair_price`
-against a live price of $390.54 and a 54-analyst consensus median of **$550**. The
-dashboard's Fair Px / Upside columns therefore show a known artefact, and the
-company's own 15-year P/E band put it at the 53rd percentile (i.e. ordinary).
-
-- **Options**: tighten the gate; require the DCF to agree within some band of the
-  blend before it may become `fair_price`; or prefer the blend over a lone model.
-- **Do not** simply exclude the DCF — on the 24-name sample,
-  `roe_residual_income` set the low in 12 cases against the DCF's 5.
-- **Related, already fixed** 2026-07-30: the watch-list moved off
-  `fair_value_range.low` onto the blend for exactly this reason.
+*(N3 and N4 removed 2026-08-16 — both **shipped** in v4.3 §3.1 and their evidence lives in
+`AUDIT_v43.md` A2 and A1 and in `CHANGELOG.md` v4.3. They had been left in place with
+SHIPPED banners "to remove at the next prune"; this is that prune. N3: an
+earnings-collapse year is excluded from the P/E series and a 4-clean-year depth floor
+applies to what survives — 44 usable, 3 unusable. N4: `choose_fair_price()` is the
+deterministic anchor, blend → blend_median → dcf → consensus → omit, moving MSFT
+$118.35 → $303.28.)*
 
 ### N5. Peer-set quality when `peers_source == by_sector` — **M**
 
@@ -221,6 +215,9 @@ without a backtest is an educated guess on top of an educated guess
 | B2 | `/bd-stocks-fallen-angels` sub-skill (Biggest Losers) (§10 item 13) | **M** | Counter-thesis to the compounder mandate; needs its own "fallen angels" prefilter. yfinance exposes `52WeekChange`. |
 | B3 | News-sentiment NLP via BERT, own pipeline (§10 item 14) | **L** | Heavy infra (model + scraping + cache) that belongs in a separate service; incompatible with the ~$20/run budget. Phase H's LLM-classified dials already cover the use case cheaply. |
 | B4 | Four yfinance names with no FCF series at all | **S** | `0175.HK, CMO.MC, FLOW.AS, INGA.AS` — thin non-US statements where FCF genuinely is not published. Correct degradation today; only worth revisiting if a second source is added. |
+| B5 | `patrimonio positions` cannot write a disposal | **M** | By design: the holdings file records what is held, never a sale price, date or commission, and inventing one puts a fabricated capital gain in a tax-relevant sheet. Live case 2026-08-16: DOMO sits open on row 27 with no matching holding. Closing it needs those three inputs from a broker statement, which is a different importer. |
+| B6 | Only **9 free rows** remain in the `Accoes (BD)` formula block | **S** | Lots live on rows 3–36 and `H37` is `=SUMIFS(H3:H36,N3:N36,"")`. Rows 28–36 are free; the tenth new lot has nowhere to go that the invested total can see. Extending the block means extending the SUMIFS and copying the six per-row formulas down — deliberate work, not something a writer should do on the fly. |
+| B7 | The documented test command misses a dependency | **S** | `uv run --with pytest pytest tests` leaves 9 email tests failing on a `<pre>` fallback because the `markdown` package is absent from that env — a red suite that is purely environmental, which is worse than a slow one. Either add `--with markdown` everywhere it is documented, or pin the test deps in a `pyproject`. |
 
 ---
 
