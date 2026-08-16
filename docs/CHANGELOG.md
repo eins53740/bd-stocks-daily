@@ -30,7 +30,7 @@ face of every report.
 
 ---
 
-## v4.3.1 — 2026-08-16 · schema 2.2 · **1567 tests**
+## v4.3.1 — 2026-08-16 · schema 2.2 · **1611 tests**
 
 Post-release work: the delivery decision that v4.3 left open, and two roadmap items that
 were READY with nothing blocking them.
@@ -85,6 +85,40 @@ Three causes wearing one label:
 - The early exit on a refusal has its own test. The first attempt omitted it and the
   refusal was undone three lines later by tangible-book code; only the corpus replay showed
   it (TSM `detected` went `None` → `False`).
+
+### R2 — the §6 regime gauges finally have numbers
+`_macro/<date>.md` §6 had rendered *"Not available"* for its entire life, and not because
+the data is hard to get: the prompt asked the **LLM to WebFetch** the Buffett Indicator and
+M2, and an LLM that cannot reach a source correctly refuses to estimate one. The gap was a
+missing *pinned source*, not a missing number — and these are structured numbers, so under
+the ground-truth rule they were on the wrong side of the Python/LLM line the whole time.
+
+**`scripts/macro_fred.py`**, live on 2026-08-16:
+- **M2 liquidity** (FRED `M2SL`): $23.16 tn, **+5.53 % YoY**, 3-month annualised
+  **+8.72 %** → `expanding`. The 3-month rate is carried because it turns first, and the
+  regime label comes from **published bands** (`M2_BANDS`), so it is ground truth rather
+  than a word the model chose.
+- **Buffett Indicator** (`NCBEILQ027S` ÷ `GDP`): **218.1 %** as of Q1 2026.
+
+Two traps, both handled rather than discovered later:
+- **Units are asserted, not assumed.** `NCBEILQ027S` is published in *millions* and `GDP`
+  in *billions*. Multiplying straight through gives a Buffett Indicator wrong by **1000×**
+  — that one is loud enough to catch, but a thousands-vs-millions pairing would not be, so
+  the unit string is read from the series metadata every run and an unrecognised one
+  returns an error instead of a number.
+- **The two series end on different dates.** The equities leg lags GDP by a quarter, so
+  the ratio is taken on the latest quarter *both* cover and that quarter is printed beside
+  it. A ratio mixing Q1 equities with Q2 GDP is a different statistic.
+
+The API key is stripped of surrounding quotes before use: a quoted key is 34 characters
+instead of 32 and FRED answers **400**, which reads like a revoked key rather than a stray
+pair of quotes.
+
+**§7 stays "not available", and that is now a finding.** Index-level forward earnings are a
+licensed product (FactSet, LSEG, S&P); no free pinnable API publishes them, and a page that
+reprints them is not a pinned source. Split out of R2 as roadmap **N6** so the reason
+travels with the gap instead of being rediscovered. Per-ticker forward earnings are
+unaffected.
 
 ### R8 — `bd-stocks-monitor` put under version control
 The only one of the eight finance skills with no repository, and a live weekly task

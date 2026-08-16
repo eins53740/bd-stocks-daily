@@ -20,21 +20,16 @@ stale on disk while the fix sat uncommitted, and the v4.3 plan re-scheduled work
 already done as a result — the reason this file must be pruned when things ship, not just
 appended to. Recorded in `CHANGELOG.md` under v4.2.)*
 
-### R2. Macro gauges — Buffett Indicator + M2 regime + forward-profit horizons — **M**
-
-`_macro/<date>.md` §6 and §7 have been rendering "not available" because these
-three gauges are WebFetch-sourced and no source is pinned in `macro_daily.md`.
-
-- **Decided 2026-07-30** (Bruno): build it. Chosen over the segments chart because
-  the cost is one-off — the `_macro/` cache is daily, so there is **zero per-run
-  cost** once the sources are pinned.
-- **Plan**: FRED `M2SL` for the liquidity regime (clean public JSON API);
-  market-cap-to-GDP for the Buffett Indicator needs a source picked and pinned;
-  index-level forward-profit horizons (3m/6m/1Y/2Y/3Y) from the same
-  multpl/gurufocus family already used for P/E and CAPE.
-- **Constraint**: keep the existing per-gauge independent degradation — one dead
-  source must never blank the section, and **"not available" always beats an
-  estimate**.
+*(R2 removed 2026-08-16 — **two of its three gauges shipped** as `scripts/macro_fred.py`;
+the third is now **N6** below, because it is not buildable rather than not built. §6 had
+rendered "not available" for its whole life for one reason: the prompt asked an LLM to
+WebFetch what a pinned API already serves. FRED M2 reads $23.16 tn, **+5.53 % YoY** with
+the 3-month running hotter at **+8.72 %**; the Buffett Indicator reads **218.1 %** as of
+Q1 2026. Units are read from the series metadata and converted explicitly —
+`NCBEILQ027S` is published in millions and `GDP` in billions, so multiplying straight
+through gives a ratio wrong by 1000× — and the ratio is taken on the latest quarter both
+series cover, since the equities leg lags GDP by one. Per-gauge independent degradation
+kept. See `CHANGELOG.md` v4.3.1.)*
 
 *(R3 removed 2026-08-15 — **shipped** with v4.3 wave 4.2. `run_prefilter.py` now promotes
 ANSWERED pending entrants (pass or fail) into `_universe.yaml` before wiping PENDING, so a
@@ -146,6 +141,23 @@ earnings-collapse year is excluded from the P/E series and a 4-clean-year depth 
 applies to what survives — 44 usable, 3 unusable. N4: `choose_fair_price()` is the
 deterministic anchor, blend → blend_median → dcf → consensus → omit, moving MSFT
 $118.35 → $303.28.)*
+
+### N6. Index-level forward-profit horizons (§7) — **BLOCKED ON A SOURCE, not on work**
+
+Split out of R2 on 2026-08-16 when the other two gauges shipped. §7 of `_macro/<date>.md`
+asks for S&P 500 forward earnings at 3m / 6m / 1Y / 2Y / 3Y. It says "not available", and
+that is now a **recorded finding rather than an open task**.
+
+- **Why**: forward earnings estimates are a licensed product — FactSet, LSEG, S&P — and
+  no free, pinnable API publishes them. FRED has no forward-earnings series.
+- **Why not scrape**: a page that reprints someone's licensed consensus is not a pinned
+  source. It changes layout without notice, it carries no as-of you can trust, and the
+  whole point of R2 was to stop sourcing numbers from pages.
+- **Trigger**: a paid data subscription, or a free provider that publishes consensus
+  estimates under a stable API. Neither exists today.
+- Per-ticker forward earnings are **unaffected** — those come from the analyst consensus
+  already on each analysis, and Phase B's forward target uses them. This is index-level
+  only.
 
 ### N5. Peer-set quality when `peers_source == by_sector` — **M**
 

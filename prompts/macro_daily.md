@@ -1,16 +1,19 @@
 # Prompt — Daily macro & market snapshot
 
 Feeds the daily `_macro/<DATE>.md` file. Runs once per day from the macro phase.
-The Python numbers in `{PYTHON_METRICS_JSON}`, `{BREADTH_JSON}` and `{SECTORS_JSON}`
-come from `macro_snapshot.py --fetch` + `macro_breadth.py --update` (yfinance ground
-truth) — never overwrite them. Valuation, regime and country-macro figures are NOT in
-the JSON and must be sourced via WebFetch with a citation each.
+The Python numbers in `{PYTHON_METRICS_JSON}`, `{BREADTH_JSON}`, `{SECTORS_JSON}` and
+`{REGIME_JSON}` come from `macro_snapshot.py --fetch` + `macro_breadth.py --update` +
+`macro_fred.py --update` (yfinance and FRED ground truth) — never overwrite them.
+**Valuation (§2) and country-macro (§5) are the only sections still sourced by WebFetch**;
+each figure there needs its own citation. §6 moved to `{REGIME_JSON}` in v4.3.1 (roadmap
+R2) and §7 is a documented gap, not a fetch.
 
 Substitutions:
 - `{DATE}` — today, ISO (e.g. 2026-07-15)
 - `{PYTHON_METRICS_JSON}` — the `--fetch` JSON block (indices, VIX, 10y, FX, commodities, crypto)
 - `{BREADTH_JSON}` — the `breadth` block from `_macro/<DATE>.json` (RSP/SPY ratio stats; may be `{"error": ...}`)
 - `{SECTORS_JSON}` — the `sectors` block from `_macro/<DATE>.json` (SPY market line + 11 SPDR ETF rows; per-row `error` possible)
+- `{REGIME_JSON}` — the `regime` block from `_macro/<DATE>.json` (FRED M2 + Buffett Indicator + the §7 note; each gauge may carry its own `error`)
 - `{COUNTRY_TABLE_FRESH}` — `yes` if the previous country-macro table is <=7 days old, else `no`
 - `{PREVIOUS_MACRO_MD}` — full contents of the most recent `_macro/*.md`, or `none`
 
@@ -26,6 +29,9 @@ BREADTH (ground truth — RSP/SPY, do not alter):
 
 SECTORS (ground truth — SPDR ETF tendencies, do not alter):
 {SECTORS_JSON}
+
+REGIME (ground truth — FRED M2 + Buffett Indicator, do not alter or re-source):
+{REGIME_JSON}
 
 COUNTRY TABLE FRESH: {COUNTRY_TABLE_FRESH}
 PREVIOUS MACRO FILE:
@@ -102,23 +108,35 @@ SECTION 5 — Country macro (US, Euro Area, China, Japan)
   and keep its country_table_date. Do not re-fetch.
 
 SECTION 6 — Liquidity & the Buffett Indicator
-- **Buffett Indicator** (US total market cap / GDP): current value + its long-run trend
-  line / fair-value band, source + as-of (WebFetch longtermtrends.net or
-  currentmarketvaluation.com).
-- **M2 liquidity regime**: US M2 level and YoY direction (WebFetch FRED series `M2SL`,
-  https://fred.stlouisfed.org/series/M2SL) plus, if sourceable, global-CB M2
-  (Fed/ECB/PBOC/BOJ). Give a one-word regime label (expanding / flat / contracting) —
-  you MAY mark the label `(inferred)` since it is a reading of the sourced levels, but
-  the underlying levels themselves must be sourced, never invented.
-- Any figure not sourceable → "not available".
+**GROUND TRUTH — `{REGIME_JSON}`. Do NOT WebFetch this section, and do not recompute
+anything in it.** Both gauges come from `macro_fred.py` (FRED `M2SL`, and
+`NCBEILQ027S` ÷ `GDP`), which is why they finally have numbers: this section rendered
+"not available" for its whole life because it asked an LLM to fetch what a pinned API
+already serves. Format the block; never alter it. (Roadmap R2.)
+
+- **Buffett Indicator** — print `ratio_pct` with its `as_of` **quarter** and the
+  `source` string. Say plainly that it is a quarterly series and therefore lags: the
+  equities leg trails GDP by a quarter, and the ratio is taken on the latest quarter
+  both cover.
+- **M2 liquidity regime** — print `level_usd_bn`, `yoy_pct`, the
+  `three_month_annualised_pct` and the `regime` label. The label is **computed from
+  published bands** (see `macro_fred.M2_BANDS`), so do NOT mark it `(inferred)` — it is
+  as much ground truth as the level. Where the 3-month rate and the YoY point different
+  ways, say so in a clause: the 3-month turns first.
+- A gauge carrying a non-null `error` renders **"not available"** with the error's own
+  wording. Each degrades alone; one failure never blanks the section.
+- Global-CB M2 (Fed/ECB/PBOC/BOJ) is **not** in the block and must not be sourced
+  elsewhere for this section — one pinned source or nothing.
 
 SECTION 7 — Forward profit horizons (index level)
-- S&P 500 forward earnings / EPS trajectory at 3m / 6m / 1Y / 2Y / 3Y from consensus
-  (WebFetch FactSet Earnings Insight, Yardeni, or S&P DJI), each horizon with source +
-  as-of. Per-ticker forward earnings are handled in each stock's own report (Phase B
-  forward-target valuation) — keep this section index-level only.
-- If no forward consensus is sourceable → "not available" (do not estimate).
-- 1–2 sentences: is aggregate profit growth accelerating or decelerating across the horizons.
+**This section is expected to say "not available", and that is a finding, not a gap.**
+Index-level forward earnings are a licensed product (FactSet, LSEG, S&P) and no free,
+pinnable API publishes them; a page that reprints them is not a pinned source. Print the
+`forward_profit_note` from `{REGIME_JSON}` so the reason travels with the gap. Recorded
+as roadmap **N6**.
+- Do **not** WebFetch a number for this section. Do **not** estimate one.
+- Per-ticker forward earnings are handled in each stock's own report (Phase B
+  forward-target valuation) and are unaffected — this section is index-level only.
 
 SECTION 8 — Read-through for equities
 - 4–6 sentences maximum. Tie directly to the numbers in Sections 1–7: what the tape,
