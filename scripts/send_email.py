@@ -1068,6 +1068,73 @@ def build_full_report_html(row: dict) -> str:
     )
 
 
+# --- Deep-report HTML attachment (v4.3, delivery decision "a + b") -----------
+#
+# Nothing is REMOVED from the digest: the summary cards and the inlined markdown
+# reports stay exactly as they were. What the inline render cannot carry is the HTML
+# artifact itself — the one-page cover, the Sankey money engine, the SWOT quadrants,
+# the ⭐ ratings and the eleven charts are produced by render_report.py and live only
+# in the .html. Pointing at that file with a `file://` link is useless on a phone,
+# which is where this digest is read, so the file travels with the mail instead.
+#
+# Only the DEEP name is attached. A screen is a one-minute read that the summary card
+# already covers, and attaching three ~1.5 MB artifacts to a daily mail is how a
+# digest starts getting refused by the receiving MTA.
+ATTACH_BUDGET_BYTES = 8 * 1024 * 1024
+
+
+def deep_report_attachments(rows: list[dict], out_dir: Path = OUT_DIR,
+                            budget: int = ATTACH_BUDGET_BYTES) -> list[tuple[Path, str]]:
+    """[(path, filename)] for today's deep-report HTML(s), inside a size budget.
+
+    Returns [] — never raises — when there is no deep row, when the renderer produced
+    no HTML, or when the file would blow the budget. Every skip logs its reason: an
+    attachment that silently vanishes is worse than one that was never promised.
+    """
+    picked: list[tuple[Path, str]] = []
+    spent = 0
+    for row in rows or []:
+        if (row.get("mode", "") or "").strip().lower() != "deep":
+            continue
+        path = Path(out_dir) / f"{report_filename(row)}.html"
+        if not path.exists():
+            log(f"deep report HTML not found ({path.name}); nothing to attach")
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            log(f"deep report unreadable ({path.name}, non-fatal): {exc}")
+            continue
+        if spent + size > budget:
+            log(f"deep report {path.name} ({size} B) skipped — over the "
+                f"{budget} B attachment budget")
+            continue
+        picked.append((path, path.name))
+        spent += size
+    return picked
+
+
+def attachment_notice_html(names: list[str]) -> str:
+    """Tell the reader the artifact is in the mail. An attachment nobody is told about
+    is an attachment nobody opens."""
+    if not names:
+        return ""
+    items = " · ".join(html.escape(n) for n in names)
+    return (
+        "<p style='font-size:13px;color:#444;background:#eef5fb;border-left:3px solid "
+        "#1f77b4;padding:8px 12px;margin:12px 0;'>📎 <strong>Attached:</strong> "
+        f"{items} — the full rendered report (cover, charts, Sankey, SWOT, ⭐). "
+        "Open it from the mail; it needs no network and no vault.</p>"
+    )
+
+
+def attachment_notice_text(names: list[str]) -> str:
+    if not names:
+        return ""
+    return ("ATTACHED: " + " | ".join(names) +
+            "\n  Full rendered report — cover, charts, Sankey, SWOT, ratings.\n\n")
+
+
 def build_card_text(row: dict) -> str:
     """Plain-text version of a card for the multipart/alternative text part."""
     score = float(row.get("score", 0) or 0)
@@ -1194,6 +1261,11 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     cards_html = "\n".join(build_card_html(r, bundle_meta(bundle, r)) for r in rows)
     growth_section_html = build_growth_section_html(target_date)  # Phase 7 — "" when no growth data
     reports_html = "\n".join(build_full_report_html(r) for r in rows)
+    # Recomputed in main() when the MIME parts are assembled. Two stat() calls on one
+    # file is cheaper than widening this function's return tuple, which six email tests
+    # and one caller unpack positionally.
+    attach_names = [name for _p, name in deep_report_attachments(rows)]
+    attach_html = attachment_notice_html(attach_names)
     html_body = f"""
     <html>
       <head>
@@ -1215,6 +1287,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         <p style="color: #666; font-size: 13px;">
           Auto-generated. Not investment advice. Verify all figures before acting.
         </p>
+        {attach_html}
         {buy_today_html}
         {watchlist_html}
         {adviser_take_html}
@@ -1250,6 +1323,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         f"StocksDaily — {target_date}\n"
         f"{'=' * 40}\n"
         f"Auto-generated. Not investment advice. Verify all figures before acting.\n\n"
+        f"{attachment_notice_text(attach_names)}"
         f"{buy_today_text}"
         f"{watch_text}"
         f"SUMMARY\n-------\n{cards_text}\n\n"
@@ -1531,6 +1605,21 @@ def main() -> int:
                 log(f"dashboard not found at {DASHBOARD}; sending without attachment")
         except Exception as e:
             log(f"attach dashboard FAIL (non-fatal): {type(e).__name__}: {e}")
+
+        # Attach the deep report's rendered HTML (delivery decision "a + b", v4.3).
+        # Non-fatal by the same rule as the dashboard: the digest going out matters
+        # more than any one attachment reaching it.
+        try:
+            from email.mime.application import MIMEApplication
+            for path, filename in deep_report_attachments(rows):
+                blob = path.read_bytes()
+                part = MIMEApplication(blob, _subtype="octet-stream")
+                part.add_header("Content-Disposition", "attachment", filename=filename)
+                part.add_header("Content-Type", "text/html; charset=utf-8")
+                msg.attach(part)
+                log(f"attached deep report {filename} ({len(blob)} bytes)")
+        except Exception as e:
+            log(f"attach deep report FAIL (non-fatal): {type(e).__name__}: {e}")
 
         with smtplib.SMTP_SSL("mail.ist.utl.pt", 465, timeout=20) as smtp:
             smtp.login(sender, pwd)

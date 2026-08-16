@@ -153,11 +153,12 @@ def test_recommendation_flip_small_vs_large():
 def test_yaml_parses_every_broker_including_the_unverified_ones():
     data = load_brokers_yaml(YAML_PATH)
     brokers = data["brokers"]
-    # v4.3 wave 4.5 added Bankinter, eToro and Trading 212. They parse like any other
-    # broker and are then EXCLUDED from the cost matrices by `verified: false` — see
-    # test_unverified_brokers_never_enter_a_cost_matrix.
+    # v4.3 wave 4.5 added Bankinter, eToro and Trading 212 as schema-only entrants.
+    # Trading 212 was verified against its own help centre on 2026-08-16 and now carries
+    # real tariffs; the other two stay excluded from every cost matrix by
+    # `verified: false` — see test_unverified_brokers_never_enter_a_cost_matrix.
     assert len(brokers) == 12
-    assert sum(1 for b in brokers.values() if b.get("verified") is False) == 3
+    assert sum(1 for b in brokers.values() if b.get("verified") is False) == 2
     expected = {"IBKR", "DEGIRO", "TradeRepublic", "Robinhood", "Revolut",
                 "XTB", "BancoBIG", "BancoCTT", "BancoBEST",
                 "Bankinter", "eToro", "Trading212"}
@@ -213,9 +214,46 @@ class TestWave45:
         'cheapest' row on numbers nobody checked — the worst failure available in a file
         used to decide where to place real money."""
         unverified = {u["id"] for u in bundle["unverified"]}
-        assert unverified == {"Bankinter", "eToro", "Trading212"}
+        assert unverified == {"Bankinter", "eToro"}
         for market in bundle["markets"]:
             assert not (unverified & {r["broker"] for r in market["rows"]})
+
+    def test_trading212_earned_its_way_into_the_matrices(self, bundle):
+        """Verified 2026-08-16 against Trading 212's own help centre — commission Free,
+        FX 0.15%, custody Free, stated verbatim. The gate is the SOURCE, not the age of
+        the entry: it moved because a primary page was read, and Bankinter did not
+        because its tariff PDF refuses automated fetch."""
+        t212 = bundle["broker_profiles"]["Trading212"]
+        assert t212["verified"] is True
+        assert t212["fx_fee_pct"] == 0.15
+        appearing = {m["key"] for m in bundle["markets"]
+                     if "Trading212" in {r["broker"] for r in m["rows"]}}
+        assert {"US", "PT", "NL", "FR", "DE", "UK"} <= appearing
+
+    def test_trading212_is_absent_from_asia_rather_than_free_there(self, bundle):
+        """It offers no Asian venue. An empty `markets` entry would have read as zero
+        cost and won every Asian row outright."""
+        for mk in ("TW", "HK", "JP", "CN_SZ"):
+            market = next(m for m in bundle["markets"] if m["key"] == mk)
+            assert "Trading212" not in {r["broker"] for r in market["rows"]}
+
+    def test_a_zero_commission_broker_still_carries_its_real_cost(self, bundle):
+        """Zero commission is not zero cost: on a foreign-currency trade the 0.15% FX
+        conversion IS the price, and a comparator that reported 0.00 would be wrong in
+        the one direction that matters."""
+        us = next(m for m in bundle["markets"] if m["key"] == "US")
+        row = next(r for r in us["rows"] if r["broker"] == "Trading212")
+        assert row["fx_applies"] is True
+        assert row["small"] > 0 and row["large"] > 0, row
+
+    def test_a_zero_commission_broker_really_is_free_in_its_own_currency(self, bundle):
+        """The mirror of the test above, and the reason the FX number matters: on
+        Euronext Lisbon there is no conversion, so the cost genuinely is zero. If both
+        rows read the same, the comparator is not modelling FX at all."""
+        pt = next(m for m in bundle["markets"] if m["key"] == "PT")
+        row = next(r for r in pt["rows"] if r["broker"] == "Trading212")
+        assert row["fx_applies"] is False
+        assert row["small"] == 0.0 and row["large"] == 0.0, row
 
     def test_an_unverified_broker_says_what_is_missing(self, bundle):
         for u in bundle["unverified"]:

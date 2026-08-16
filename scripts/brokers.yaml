@@ -481,7 +481,8 @@ brokers:
     fx_fee_pct: null
     custody_fee: "Custody fee applies on securities accounts — value NOT verified."
     verified: false
-    pending_verification: "commission_pct / commission_min per market (PT, ES, US) — Bankinter tarifario · custody fee schedule and any minimum per semester · fx conversion spread on non-EUR settlement"
+    pending_verification: "commission_pct / commission_min per market (PT, ES, US) · custody fee schedule and any per-semester minimum · FX conversion spread on non-EUR settlement. SOURCE TO READ: the 'Precario de Titulos, Fundos e Seguros de Investimento' at banco.bankinter.pt/particulares/pdfs/precario/ptfs_c.pdf, mirrored at clientebancario.bportugal.pt. Both refuse automated fetch (403 / encoded streams) as of 2026-08-16 — this needs a human with a browser, which is why it is still empty rather than guessed."
+    partial_unverified: "A manual-processing commission of 0.1%, minimum EUR 5, on executed share and ETF orders appears in search summaries of the tariff. NOT confirmed against the PDF and therefore NOT used anywhere."
     cash_interest: "Not verified. Bank current-account rates apply, typically near zero."
     investor_compensation:
       scheme: "Sistema de Indemnização aos Investidores (CMVM, PT) / FOGAIN (ES)"
@@ -502,9 +503,10 @@ brokers:
     profile: "Social/CFD-first platform; real-stock offering with FX-heavy USD base."
     base_currency: "USD"
     fx_fee_pct: null
-    custody_fee: "No custody fee; INACTIVITY fee applies after 12 months — value NOT verified."
+    custody_fee: "No custody fee. No inactivity fee — the official fee page states 'Inactivity fee: Free' (read 2026-08-16), correcting the earlier note here that one applied after 12 months."
     verified: false
-    pending_verification: "per-market commission (eToro advertises 0% commission on real stocks — CONFIRM, and confirm what replaces it) · USD conversion fee on EUR deposits and withdrawals (the real cost centre for a EUR investor) · withdrawal fee · inactivity fee amount and trigger"
+    pending_verification: "the CURRENCY CONVERSION FEE — eToro publishes it as 'varies by location, payment method and Club tier' and gives no figure, which for a USD-base account funded in EUR is the dominant cost and the one number that decides whether this broker is competitive · the per-exchange commission table, which the site renders only after selecting a country and exchange"
+    verified_partial: "etoro.com/trading/fees (2026-08-16): withdrawal free from EUR/GBP/DKK accounts, USD 5 from a USD account (min withdrawal USD 30); no deposit fee; no inactivity fee; a commission of USD 1 or USD 2 MAY apply per open and per close depending on residence and exchange — so the '0% commission' framing is not unconditional."
     cash_interest: "Not verified."
     investor_compensation:
       scheme: "Depends on the contracting entity (eToro (Europe) Ltd, CySEC — ICF)"
@@ -522,13 +524,13 @@ brokers:
 
   Trading212:
     name: "Trading 212"
-    profile: "Zero-commission retail broker; revenue from FX and spread."
+    profile: "Zero-commission retail broker; the FX conversion fee IS the price."
     base_currency: "EUR"
-    fx_fee_pct: null
-    custody_fee: "No custody fee advertised — NOT verified."
-    verified: false
-    pending_verification: "FX conversion fee percentage (the headline cost on a zero-commission broker) · which markets are actually offered to a PT resident · interest paid on uninvested cash and on what balance · any deposit fee above a monthly threshold"
-    cash_interest: "Advertised on uninvested cash — rate and cap NOT verified."
+    fx_fee_pct: 0.15
+    custody_fee: "Free — no custody fee, no account fee, no inactivity fee."
+    verified: true
+    verified_source: "helpcentre.trading212.com — 'What are the fees in the Invest, ISAs, and SIPP?' + 'What is the FX fee?' (read 2026-08-16). Commission Free · FX fee 0.15% · Custody Free, stated verbatim."
+    cash_interest: "Paid daily on uninvested cash, no minimum balance; the rate TRACKS CENTRAL-BANK RATES and is not a fixed published figure, so no number is pinned here. Check the app before relying on it."
     investor_compensation:
       scheme: "Depends on the contracting entity (Trading 212 Markets Ltd, CySEC — ICF; or UK entity, FSCS)"
       cover_eur: 20000
@@ -539,9 +541,81 @@ brokers:
       mechanism: "segregated client money (partly placed in qualifying money-market funds)"
       note: "Not a bank deposit, so the EUR 100,000 deposit guarantee does not apply. Where cash is swept into a money-market fund it is an investment, not cash."
       as_of: "2026-08"
-    dividend_handling: "Not verified."
-    fx_spread_note: "Zero commission means the FX leg IS the price. Unverified and material."
-    markets: {}
+    dividend_handling: "Dividends and other corporate actions are EXEMPT from the FX fee (help centre, 2026-08-16). Withholding tax still applies at source."
+    fx_spread_note: "Zero commission means the FX leg IS the price: spot + 0.15% on every conversion. A multi-currency account holds balances per currency and avoids the conversion on repeat trades in the same currency — which is the difference between 0.15% per trade and 0.15% once."
+    deposit_fee: "Bank transfer free, unlimited. Card / Google Pay / Apple Pay / Sofort free to a CUMULATIVE EUR 2,000 lifetime, then 0.7%. The free allowance does not reset."
+    markets:
+      # One tariff for all of them: commission is Free everywhere, so the only
+      # broker-charged cost is the 0.15% FX conversion where the currency differs.
+      # Exchange- and state-levied costs are NOT the broker's and are listed as such.
+      US:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: 0.0
+        flat_fee: 0.0
+        market_data_fee: "Free."
+        dividend_fee: "No handling fee; FX-exempt. US withholding 15% with W-8BEN."
+        other_costs: "0.15% FX on EUR->USD conversion. SEC fee USD 0.00206 of sell value + FINRA USD 0.000195/share on sales — exchange/regulator levies, not Trading 212's."
+        as_of: "2026-08"
+        source: "Trading 212 help centre, 'What are the fees in the Invest, ISAs, and SIPP?'"
+        approx: false
+      PT:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: 0.0
+        flat_fee: 0.0
+        market_data_fee: "Free."
+        dividend_fee: "No handling fee; FX-exempt."
+        other_costs: "EUR-denominated: no FX leg, so genuinely zero broker cost."
+        as_of: "2026-08"
+        source: "Trading 212 help centre; Euronext Lisbon is in the supported venue list."
+        approx: false
+      NL:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: 0.0
+        flat_fee: 0.0
+        market_data_fee: "Free."
+        dividend_fee: "No handling fee; FX-exempt."
+        other_costs: "EUR-denominated: no FX leg."
+        as_of: "2026-08"
+        source: "Trading 212 help centre; Euronext Amsterdam supported."
+        approx: false
+      FR:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: 0.0
+        flat_fee: 0.0
+        market_data_fee: "Free."
+        dividend_fee: "No handling fee; FX-exempt."
+        other_costs: "EUR-denominated. French FTT 0.4% on purchases of French companies above EUR 1bn market cap — a STATE tax, not a broker fee, and it dwarfs anything Trading 212 charges."
+        as_of: "2026-08"
+        source: "Trading 212 help centre, exchange/tax-authority fee table."
+        approx: false
+      DE:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: 0.0
+        flat_fee: 0.0
+        market_data_fee: "Free."
+        dividend_fee: "No handling fee; FX-exempt."
+        other_costs: "EUR-denominated: no FX leg. Xetra and Gettex both supported."
+        as_of: "2026-08"
+        source: "Trading 212 help centre; Deutsche Boerse Xetra/Gettex supported."
+        approx: false
+      UK:
+        commission_pct: 0.0
+        commission_min: 0.0
+        commission_max: 0.0
+        flat_fee: 0.0
+        market_data_fee: "Free."
+        dividend_fee: "No handling fee; FX-exempt."
+        other_costs: "0.15% FX on EUR->GBP. UK Stamp Duty Reserve Tax 0.5% on purchases (ETFs, gilts and AIM exempt) + PTM levy GBP 1.50 per trade over GBP 10,000 — state and exchange levies, not Trading 212's."
+        as_of: "2026-08"
+        source: "Trading 212 help centre, exchange/tax-authority fee table."
+        approx: false
+      # NOTE: no Asian venues. TW/HK/JP/CN_SZ are not offered, so those markets are
+      # absent rather than zero-cost — the comparator must not read the gap as free.
 
 markets_meta:
   US:    { label: "NYSE / Nasdaq (US)", currency: "USD", region: "US" }
