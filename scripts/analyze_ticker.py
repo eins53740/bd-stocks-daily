@@ -57,6 +57,7 @@ import yfinance as yf  # noqa: E402
 # Phase 6 — global-market metadata + free Stooq price cross-check.
 import listings  # noqa: E402
 import markets  # noqa: E402
+import share_basis  # noqa: E402
 
 # Reuse BD_Finance's api_keys_reader for the FMP cross-validation key (Layer 1).
 BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
@@ -1561,6 +1562,18 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     # v4 Phase C: persist a 2-year raw statement snapshot for red_flags.py
     # (pure JSON consumer, no re-fetch). Additive, overlay-only.
     statements_raw = extract_statement_rows(fs, bs, cf)
+    # v4.3 R6: classify what basis the balance-sheet share count is on. Additive and
+    # overlay-only -- the extracted number is NOT rewritten, so no published composite,
+    # gate or verdict moves. Measured on 147 analyses: 86 agree with shares outstanding,
+    # 61 do not, and they fail in three different ways that used to look like one.
+    # See scripts/share_basis.py.
+    try:
+        statements_raw["balance"]["shares_basis"] = share_basis.classify(
+            (statements_raw.get("balance", {}).get("shares") or [None])[0],
+            fund.get("shares_out"),
+        )
+    except Exception as exc:                       # never fail an analysis over metadata
+        log(f"share-basis classification skipped (non-fatal): {type(exc).__name__}: {exc}")
 
     # --- Phase 6: local -> EUR conversion (local currency + EUR everywhere) ---
     eur_rate = fetch_eur_rate(currency)

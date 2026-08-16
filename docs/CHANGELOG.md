@@ -30,6 +30,69 @@ face of every report.
 
 ---
 
+## v4.3.1 — 2026-08-16 · schema 2.2 · **1567 tests**
+
+Post-release work: the delivery decision that v4.3 left open, and two roadmap items that
+were READY with nothing blocking them.
+
+### Email delivery — the digest now carries the deep report *(decision "a + b")*
+Nothing was removed. The summary cards and the inlined markdown reports stay exactly as
+they were, and the deep report's **rendered HTML travels as an attachment**. The cover, the
+Sankey, the SWOT quadrants, the ⭐ ratings and the eleven charts exist only in
+`render_report.py`'s output, and a `file://` link to the laptop is dead on a phone. Only
+the deep row is attached, under an 8 MB budget, with each skip logged; both MIME parts
+announce it.
+
+### Trading 212 verified · **R7** opened for the two that could not be
+Read off Trading 212's own help centre: commission **Free**, FX **0.15 %**, custody
+**Free**. It enters the cost matrices with six real markets.
+- **Zero commission is not zero cost.** On US/UK the 0.15 % conversion *is* the price; on
+  Euronext there is no leg and the cost is genuinely zero. A test asserts both — if the two
+  rows ever read alike, the comparator has stopped modelling FX.
+- **No Asian venue is offered**, so the markets map omits TW/HK/JP/CN_SZ rather than
+  leaving them empty. An empty entry reads as free and wins every Asian row outright.
+- eToro's entry corrected where the official page contradicted it: **no** inactivity fee,
+  and "0 % commission" is not unconditional. Bankinter and eToro stay excluded — see R7.
+
+### R6 — `statements_raw.balance.shares` is not always shares outstanding
+**The roadmap's hypothesis was wrong, and measuring is what showed it.** R6 blamed the
+`"Common Stock"` fall-through for being a par value in currency. Across **147** analyses
+checked against `fundamentals.shares_out`, 86 agree within ±5 % and the other 61 are off in
+a **continuous spectrum from 1.05× to 25.6×** — not the signature of a currency-vs-count
+confusion, which would be off by orders of magnitude or not at all.
+
+Three causes wearing one label:
+
+| Cause | Evidence |
+|---|---|
+| `"Share Issued"` includes **treasury stock** | IBM 2.43× · AMAT 2.52× · MCD 2.34× · P&G 1.72× · CTAS 1.95× (55 names) |
+| A different **share class or quote ratio** | TSM exactly **5.000×** — the ADR ratio · Roche 7.59× (equity certificates) · Samsung's Frankfurt line 25.6× · Atlas Copco 3.15× (A/B) |
+| **Staleness**, in the other direction | SMCI 0.918× · LYC.AX 0.929× — a fiscal-year-end count with shares issued since |
+
+- **`scripts/share_basis.py`** classifies and does **not** rewrite. The extraction is
+  untouched, so no published composite, gate or verdict moves — the condition R6 was held
+  open for. `CLASS_MISMATCH_RATIO = 3.0` sits in the corpus's own empty band between AMAT
+  at 2.524 and Atlas Copco at 3.151.
+- **`category_lens`** uses shares outstanding where the basis is correctable, and refuses
+  outright where it is not. Measured before/after: **58 statement-P/B corrections**
+  (IBM 16.44 → 6.76, AMAT 48.75 → 19.32, KLAC 115.53 → 53.67, MCO 40.84 → 20.63) and **2
+  names newly refused** — Roche and Atlas Copco, whose basis mismatch cleared the 5 % P/B
+  tolerance untouched. The tolerance was a proxy for the basis; now the basis is known.
+- **`red_flags.book_value_trend` deliberately unchanged**, with the reason written into the
+  code: it compares BVPS year over year on the *same* basis, and a constant basis cancels
+  in the ratio. Substituting a current-day count into a prior-year figure would make it
+  worse.
+- The early exit on a refusal has its own test. The first attempt omitted it and the
+  refusal was undone three lines later by tangible-book code; only the corpus replay showed
+  it (TSM `detected` went `None` → `False`).
+
+### R8 — `bd-stocks-monitor` put under version control
+The only one of the eight finance skills with no repository, and a live weekly task
+executes it. No remote yet: whether the eight become eight repos or one `bd-finance` repo
+is Wave 5's open question, and choosing now would prejudge it.
+
+---
+
 ## v4.3 — 2026-08-15 · tag `v4.3` · schema 2.2 · **1516 tests**
 
 Wave-based upgrade. See `~/.claude/plans/` for the master plan. Waves land one at a time.

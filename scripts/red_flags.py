@@ -252,6 +252,14 @@ def balance_checks(fund: dict, bal: dict) -> list:
                         "warn" if ar_days > 60 else "pass", _round(ar_days, 0), "> 60d"))
 
     # book value / share declining YoY (warn)
+    #
+    # R6 note, deliberate: `shares` is often NOT shares outstanding — 61 of 147 measured
+    # analyses carry an issued count including treasury, an ADR ratio or a stale filing
+    # count (see scripts/share_basis.py). This check is unaffected, and that is a property
+    # rather than luck: it compares BVPS(t) against BVPS(t-1) on the SAME basis, and a
+    # constant basis cancels in the ratio. Swapping in shares_out here would mix a
+    # current-day count into a prior-year figure and make the trend worse, not better.
+    # The invariant it rests on is that the basis is STABLE year to year.
     eq_t, eq_p = _yr(bal, "stockholders_equity", 0), _yr(bal, "stockholders_equity", 1)
     sh_t, sh_p = _yr(bal, "shares", 0), _yr(bal, "shares", 1)
     bvps_t, bvps_p = _div(eq_t, sh_t), _div(eq_p, sh_p)

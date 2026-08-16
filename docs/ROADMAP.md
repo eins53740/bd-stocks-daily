@@ -44,24 +44,19 @@ this quarter may pass the next. Names that keep ERRORING are still handled by RE
 A test asserts the promotion happens before the wipe — reversed, it would promote nothing.
 See `CHANGELOG.md` v4.3 wave 4.)*
 
-### R6. The balance sheet's `shares` row can be a currency amount — **S**
-
-`analyze_ticker._STMT_ROWS["balance"]["shares"]` resolves
-`("Share Issued", "Ordinary Shares Number", "Common Stock")` in order, and **"Common Stock"
-is a par value in currency on some filers**, not a share count.
-
-- **Found** 2026-08-15 by the v4.3 §3.1 audit (finding D2) while building the asset-play
-  test. Measured: across 122 reports where book value per share is computable two ways, all
-  but five sit within 3×, but a middle band of **1.7–2.9×** is this fall-through — IBM 6.41
-  vs 16.44, AMAT 16.49 vs 48.75, plus LRCX, DE, UNP, CTAS, PG, EMR.
-- **Why it was not fixed with the finding**: the row feeds `red_flags`' balance checks,
-  whose sub-score feeds the financial-quality star rating. Changing the extraction silently
-  re-rates published reports, so it needs its own change with its own before/after.
-- **Mitigated meanwhile**: `category_lens` treats a >5× disagreement between the two book-value
-  paths as *unreliable* and refuses to publish an asset-play claim.
-- **Plan**: add a share-count plausibility check (market cap / price, or the prior year's
-  count) and drop the `"Common Stock"` fallback when it fails; re-render the affected
-  reports deliberately.
+*(R6 removed 2026-08-16 — **shipped** as `scripts/share_basis.py`, and the entry's own
+hypothesis was wrong. It blamed the `"Common Stock"` fall-through for being a par value in
+currency. Measured against `fundamentals.shares_out` across **147** analyses: 86 agree
+within ±5 % and the other 61 are off in a **continuous spectrum from 1.05× to 25.6×**,
+which is not what a currency-vs-count confusion looks like. Three distinct causes wore one
+label — `"Share Issued"` including treasury stock (IBM 2.43×, AMAT 2.52×, P&G 1.72×), a
+different share class or quote ratio (TSM exactly 5.000× = the ADR ratio, Roche 7.59×,
+Samsung's Frankfurt line 25.6×), and stale filings below 1× (SMCI 0.918×). The extraction
+is **unchanged**, so no composite moved; the basis is classified into an additive
+`shares_basis` block and consumers act on it. Measured before/after over the corpus: **58
+statement-P/B corrections** (IBM 16.44 → 6.76, AMAT 48.75 → 19.32, KLAC 115.53 → 53.67)
+and **2 names newly refused** — Roche and Atlas Copco, whose basis mismatch cleared the 5×
+P/B tolerance untouched. See `CHANGELOG.md`.)*
 
 ### R7. Two broker tariffs that need a human with a browser — **S**
 

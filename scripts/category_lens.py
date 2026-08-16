@@ -51,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from markets import normalize_gbx  # noqa: E402  (stdlib-only module; see test_asset_play)
+import share_basis  # noqa: E402  (stdlib-only; R6 -- which count `shares` actually is)
 
 for _name in ("stdout", "stderr"):
     _s = getattr(sys, _name, None)
@@ -577,6 +578,26 @@ def test_asset_play(analysis: dict) -> dict:
     equity = _first(bal.get("stockholders_equity"))
     shares = _first(bal.get("shares"))
 
+    # R6: `shares` is not always shares OUTSTANDING. 61 of 147 measured analyses carry a
+    # count that is not, and the 1.05-3x band -- 'Share Issued' including treasury stock --
+    # passes PB_CROSSCHECK_TOL untouched and publishes a P/B wrong by up to 2.5x on the one
+    # metric an asset-play claim rests on. IBM 2.43x, AMAT 2.52x, MCD 2.34x, P&G 1.72x.
+    # Use the count the basis block prefers; above 3x it prefers nothing and the
+    # cross-check below refuses the name, which is the behaviour that was already correct.
+    basis = bal.get("shares_basis")
+    basis_kind = None
+    if basis:
+        basis_kind = basis.get("basis")
+        f["metrics"]["shares_basis"] = basis_kind
+        if basis.get("ratio") is not None and not basis.get("trustworthy"):
+            f["metrics"]["shares_basis_ratio"] = basis.get("ratio")
+        # Treasury stock and stale filings are CORRECTABLE: shares outstanding is the
+        # right denominator and it is already on the analysis. A class or quote-ratio
+        # mismatch is not — there is nothing to correct TO — so the raw count is left in
+        # place on purpose, because the P/B cross-check below needs it to disagree loudly.
+        if basis_kind in (share_basis.BASIS_ISSUED, share_basis.BASIS_STALE):
+            shares = share_basis.preferred_shares(basis, fallback=shares)
+
     # CROSS-CHECK THE PER-SHARE BOOK VALUE AGAINST THE BALANCE SHEET. yfinance's
     # `bookValue` is not always on the same basis as the quote: BRK-B priced against an
     # A-share book value printed 0.001x, and TSM's USD ADR against TWD book printed 82x.
@@ -590,7 +611,22 @@ def test_asset_play(analysis: dict) -> dict:
             and shares > 0 and equity > 0):
         pb_stmt = price / (equity / shares)
         f["metrics"]["price_to_book_from_statements"] = round(pb_stmt, 3)
-    if pb is not None and pb_stmt is not None:
+    # R6: a share-class or quote-ratio mismatch is known DIRECTLY from the basis, so it no
+    # longer has to be inferred from a 5x P/B disagreement it might not produce. Atlas
+    # Copco's A/B structure sits at 3.15x on the share count and would clear
+    # PB_CROSSCHECK_TOL untouched; the tolerance was never a test for this, it was a proxy.
+    if basis_kind == share_basis.BASIS_CLASS_MISMATCH:
+        f["metrics"]["price_to_book_unreliable"] = True
+        f["not_computable"].append(
+            f"the balance sheet's share count is {basis.get('ratio')}x shares "
+            f"outstanding — a different share class, an ADR ratio or a depositary line, "
+            f"so book value per share has no single basis; no asset-play claim is made")
+        f["detected"], f["confidence"] = None, "none"
+        f["catalyst"] = None
+        f["catalyst_note"] = CATALYST_NOTE
+        return f          # same early exit as the cross-check below: nothing downstream
+                          # may re-derive a verdict from a book value with no single basis
+    elif pb is not None and pb_stmt is not None:
         ratio = max(pb, pb_stmt) / min(pb, pb_stmt) if min(pb, pb_stmt) > 0 else None
         if ratio is not None and ratio > PB_CROSSCHECK_TOL:
             f["metrics"]["price_to_book_unreliable"] = True
