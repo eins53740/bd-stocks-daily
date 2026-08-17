@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import sqlite3
 import sys
 from datetime import UTC, datetime
@@ -38,7 +39,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import markets  # noqa: E402 — sibling module (suffix -> currency, EUR FX)
 
 # --- Reuse canon() / classify_nonequity() from the gap script (locked decision) ---
-_GAP = Path(r"C:\Github\.scripts\portfolio_deepdive_gap.py")
+#
+# Resolved, not hardcoded (2026-08-17). vmhost1 -- the machine that actually runs the
+# pipeline since the cutover -- has NO C:\Github at all; its scripts live on D:. A single
+# absolute C: path here made `tests/test_portfolio.py` fail at COLLECTION on vmhost1, and a
+# collection error aborts the whole run, so the production machine's suite could not be run
+# at all. Verifying the laptop and calling that "both machines green" is precisely the kind
+# of claim this resolution exists to stop.
+#
+# Order matches scripts/skills_root.py: an explicit env var, then the known roots. Note this
+# is one of ten C:\Github paths still hardcoded in this skill's scripts; the rest are a
+# Wave-5 path-refactor item, not a drive-by fix.
+_GAP_CANDIDATES = (
+    Path(os.environ["BD_SCRIPTS_ROOT"]) / "portfolio_deepdive_gap.py"
+    if os.environ.get("BD_SCRIPTS_ROOT") else None,
+    Path(r"C:\Github\.scripts\portfolio_deepdive_gap.py"),
+    Path(r"D:\Github\.scripts\portfolio_deepdive_gap.py"),
+)
+_GAP = next((p for p in _GAP_CANDIDATES if p and p.exists()),
+            Path(r"C:\Github\.scripts\portfolio_deepdive_gap.py"))
 
 
 def _load_gap_helpers():

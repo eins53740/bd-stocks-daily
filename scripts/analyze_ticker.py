@@ -1126,7 +1126,10 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         core_missing = core_fetches_missing(info, fs, bs, hist)
         if core_missing < CORE_MISSING_LIMIT or attempt == THROTTLE_ATTEMPTS:
             break
-        log(f"  {ticker}: {core_missing}/4 core fetches empty — throttle? retrying in "
+        # ASCII hyphen, not an em dash: this line goes to a .log the bat opens under the
+        # console codepage, and the em dash arrived in production as `\xef\xbf\xbd?"`.
+        # Observed live 2026-08-17 17:24 in stocks-prefilter_20260817_1716.log.
+        log(f"  {ticker}: {core_missing}/4 core fetches empty - throttle? retrying in "
             f"{THROTTLE_BACKOFF_S}s (attempt {attempt}/{THROTTLE_ATTEMPTS})")
         time.sleep(THROTTLE_BACKOFF_S)
 
@@ -1158,7 +1161,7 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
         raise ThrottleSuspected(
             f"insufficient yfinance data for {ticker} "
             f"({core_missing}/4 core fetches empty after {THROTTLE_ATTEMPTS} attempts "
-            f"— rate-limited?)"
+            f"- rate-limited?)"
         )
 
     # --- Basics ---
