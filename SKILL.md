@@ -50,6 +50,20 @@ O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de car
 1. **Revenue segments** (Phase 2.5 step 7b) — nenhuma API free tem segment data; o LLM extrai a tabela oficial de segmentos do annual report para `_segments/{TICKER}.json`, sempre marcado "company filings (LLM-extracted)" + `source_url`.
 2. **Macro valuation/country data** (Phase 2.6) — S&P 500 P/E/P/S/EV/EBITDA e macro por país via WebFetch (multpl/WSJ/gurufocus/fontes oficiais), cada valor com fonte + as-of date; "not available" antes de estimar.
 
+## Skills-sync rule (CRITICAL)
+
+**Este skill corre em produção no `vmhost1`, não neste portátil.** Desde 2026-08-17 as tarefas `Stocks*` agendadas (growth 12:45, daily 13:30, prefilter seg 14:30, earnings, strategy) correm no **vmhost1**; este portátil é a **fonte de verdade do código** e o caminho de failover. Consequências:
+
+- **Uma edição que não seja empurrada NÃO chega à produção.** O relatório de amanhã sai do vmhost1, com a cópia que lá estiver — não com esta.
+- **Depois de editar qualquer ficheiro deste skill, empurra:** `powershell -NoProfile -ExecutionPolicy Bypass -File C:\Github\.scripts\stocks-skills-push.ps1` (`-VerifyOnly` compara sem escrever). **«Em sync» = hash de manifesto** (`relpath:size` de cada ficheiro, ordenado, SHA-256) idêntico nos dois lados — não é "copiei os ficheiros".
+- **NUNCA editar o skill no vmhost1.** É uma réplica: o push apaga órfãos (e **recusa** acima de `-MaxOrphans 20`, porque um lote grande de órfãos aponta para a origem ou para o tar, não para o vmhost1).
+- **Não empurrar com um job a correr.** O push toma o lock global (`job_lock.ps1`, `-OnTimeout Abort`), mas **`stocks-prefilter.bat` não toma esse lock** — e é o job mais longo (timeout 2 h, segundas desde as 14:30) e importa `analyze_ticker` **in-process** a partir de `scripts/`. Trocar ficheiros debaixo dele corrompe o run em silêncio.
+- Redes de segurança, **não** substitutos da regra: `StocksSkillsPush` (portátil, **seg 09:00**) e uma re-verificação **diária às 15:00** dentro do `StocksFailoverWatchdog`, que **cura sozinha** e só manda email se não conseguir.
+
+**Porque existe (incidente 2026-08-17):** o `ClaudeConfigSync` quinzenal do vmhost1 aplica um zip do OneDrive por cima dos skills e, às 01:00 do dia do cutover, instalou uma cópia **pré-v4.3** (49 scripts em vez de 61, sem `version.py`) sobre a v4.3.1 — um *downgrade* silencioso da produção. A causa raiz continua de pé (o `bd-claude-sync` não tem mecanismo de exclusão), por isso é a cura automática que a torna auto-corretiva em vez de fatal. Detalhe operacional: `C:\Github\.scripts\STOCKS-VMHOST1-RUNBOOK.md` §4b.
+
+**A memória é MERGE, não mirror.** O ledger de defeitos é legitimamente escrito nos **dois** lados, e o Claude indexa-o pelo cwd **resolvido** — a junction do vmhost1 (`C:\Github\BD\Finance\BD_Finance` → `D:\Github\BD\BD_Finance`) abriu um segundo ledger vazio e a primeira corrida lá redescobriu de zero um defeito já registado. `stocks-memory-merge.ps1` faz união nos dois sentidos e **nunca apaga**; corre como 2.ª acção do `StocksSkillsPush`. Um mirror-com-eliminação destruiria o lado que corresse a seguir.
+
 ## Composite score v2.2 (weights)
 
 Schema `2.2`. **Weights are unchanged from v2.1** — v2.2 adds *structural* improvements only (no weight-magnitude shift; magnitude changes stay gated on the item-12 backtest, see `docs/SCORING_REVIEW_v3.md`):
