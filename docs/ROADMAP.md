@@ -77,16 +77,106 @@ matrix until filled.
   minimum, but it tracks central-bank rates and is not a published constant, so no number
   is pinned. Do not let a review site's figure become one.
 
-### R8. `bd-stocks-monitor` is the only skill not under version control — **S**
+*(R8 removed 2026-08-17 — **shipped, and it was worse than the entry said**. R8 named
+`bd-stocks-monitor` as "the only skill not under version control". An audit of all eight found
+**five**: `bd-stocks-prefilter`, `bd-stocks-portfolio`, `bd-stocks-earnings-review`,
+`bd-strategy-monthly` and the `bd-finance` plugin wrapper — while `bd-stocks-monitor` had in
+fact been given a repo in the meantime. The entry was written from memory of one directory
+rather than from a sweep, which is why it undercounted by four.
+The blocker it recorded is also resolved: the packaging question ("one repo per skill vs one
+`bd-finance` repo for all eight") is now settled as **one repo per skill**, with `bd-finance`
+holding only `.claude-plugin/`. All five were initialised with `bd-stocks-daily`'s
+`.gitignore` verbatim, key guard included, and each first commit records the working state
+unedited so the NEXT diff means something. Verified no secrets in any of them before staging.
+The immediate cost of the gap, for the record: the Y1 throttle fix — a suspected 429 must
+never advance the pause counter — went into production on vmhost1 **uncommittable**, because
+`bd-stocks-prefilter` had nothing to commit to. See `CHANGELOG.md`.)*
 
-`bd-stocks-daily` is a git repo with a remote; `bd-stocks-monitor` is a bare directory.
-It now holds `monitor_report.py`, `send_monitor_email.py` and a SKILL.md that a **live
-weekly scheduled task** executes, so an edit that breaks it has no diff and no way back.
+### R9. `C:\Github\.scripts` is not a git repository — **S, needs Bruno's OK**
 
-- **Found** 2026-08-16, immediately after the `StocksMonitor` task was registered.
-- **Trigger**: none needed; this is only unscheduled because Wave 5's packaging question
-  (one repo per skill vs one `bd-finance` repo for all eight) should be settled first —
-  giving it a repo now and moving it in a fortnight is churn.
+Every `stocks-*.bat`, `job_lock.ps1`, `run_with_timeout.ps1`, `stocks-skills-push.ps1` and
+`stocks_failover_watchdog.py` lives there, and none of it has a diff or a way back. The
+2026-08-17 work on the lock and on the drift alert is on disk and verified, with **no
+history behind it** — the same defect R8 just closed for the skills, one directory over.
+
+- **Found** 2026-08-17 while looking for somewhere to commit the S1/S3 changes.
+- **Not done deliberately**: it is a shared 70-file, 15-directory folder spanning UNS, AWS,
+  Ignition and finance, not a finance repo. `git init` there is a structural decision about
+  someone else's work as well, so it needs an explicit yes. No `.env` or key files were
+  found at the top two levels, so the guard would be the same `.gitignore` as the skills.
+- **Trigger**: Bruno's go-ahead.
+
+### R10. The bats are two divergent copies, and vmhost1's still have no lock — **M**
+
+`C:\Github\.scripts\stocks-*.bat` (laptop) and `D:\Github\.scripts\stocks-*.bat` (vmhost1)
+are **separately maintained files that have drifted**. vmhost1's copies use
+`cd /d "D:\Github\BD\BD_Finance"` and `D:\Github\.scripts\run_with_timeout.ps1`; the
+laptop's use the C: equivalents. So the 2026-08-17 `job_lock` additions **cannot be deployed
+by copying** — a verbatim copy would break vmhost1's paths, and the machine that actually
+runs the pipeline is therefore still running seven heavy jobs unserialised.
+
+This is the ten-week frozen-bat incident (`SCHEDULING.md`) in a new form: two copies, one
+edited, no mechanism to notice.
+
+- **Partly mitigated 2026-08-17**: the 14 `job_lock.ps1` references in the laptop's bats now
+  resolve via `%~dp0`, which is correct on **both** machines with no configuration, and
+  `job_lock.ps1` itself was deployed to vmhost1 (hash-verified identical). The remaining
+  divergence is `cd /d` and `run_with_timeout.ps1`.
+- **The work**: make `run_with_timeout.ps1` `%~dp0`-relative too, move the one genuinely
+  per-machine value (the BD_Finance directory) into an environment variable, then the bats
+  become a single source and a push mechanism becomes possible. ~11 bats, two machines.
+- **Trigger**: none; it is unscheduled only because doing it mid-session with a two-hour
+  prefilter running was the wrong moment.
+
+### R11. Nine hardcoded `C:\Github\...` paths remain in the skill's scripts — **M**
+
+`analyze_ticker.py`, `financial_history.py`, `llm_client.py`, `macro_fred.py`,
+`portfolio_sync.py` (DEFAULT_DB), `send_email.py`, `_run_and_save.py` and
+`technical_score.py` all name `C:\Github\BD\Finance\BD_Finance` or similar. vmhost1 has no
+`C:\Github` **at all**. The pipeline demonstrably works there anyway — those paths are
+`sys.path` inserts and config lookups that degrade — but two of them did NOT degrade and
+were live production bugs, found 2026-08-17 by running the suite on vmhost1 rather than on
+the laptop:
+
+- `technical_score.py` — Phase 3.5 raised `ModuleNotFoundError` on all five indicator
+  imports, so the technical score and GO/NO-GO were **never computed on vmhost1**.
+- `portfolio_sync.py` — read its gap script at import time, so `tests/test_portfolio.py`
+  failed at **collection**, and a collection error aborts the whole suite. The production
+  machine's tests could not be run at all.
+
+Both are fixed, plus `run_daily.py`'s launch directory, each with its own env-var → C: → D:
+resolution and a *positive* existence probe (the file actually imported, not just a
+directory). That makes **three** near-identical resolution lists in one skill — deliberate
+for now, because each probes a different target, but it is duplication that wants collapsing.
+
+- **The work**: one `bd_paths.py` beside `skills_root.py`, then convert the remaining nine.
+- **Trigger**: none; scoped with the Wave-5 path refactor, which the packaging notes already
+  size at ~30 files across the family.
+
+### R12. A deep report reached the inbox with no `_log.csv` row — **S**
+
+2026-08-17: `2026-08-17_ROVI.MC_review.html` was rendered (736 KB), attached, and mailed at
+13:56 — and vmhost1's `_log.csv` has **no row for 2026-08-17**, its last entry being
+`HEIA.AS` on 08-16. So today's evaluation is invisible to the 6-month dedupe, to the
+dashboard's All Evaluations, and to `report_history`. ROVI can be picked again tomorrow as
+though never seen.
+
+- The same run logged `SCREENS: none - pool exhausted (0 of 222 prefiltered names eligible)`,
+  so the deep was the only pick.
+- **Not diagnosed**: whether Phase 6 was skipped, failed, or wrote elsewhere. Worth one look
+  at `stocks-daily_20260817_1330.log` around Phase 6 before assuming a cause — the last time
+  a cause was assumed here (the drift alert's hardcoded "Most likely cause") it was wrong.
+- **Trigger**: none; it is a data-integrity gap and should not wait long.
+
+### R13. vmhost1's task descriptions still describe the pre-migration layout — **S**
+
+`\BD\Finance\StocksDaily`'s own Description reads `Trigger : daily 17:00` and
+`Script : wscript.exe C:\Github\BD\Finance\.scripts\run_hidden.vbs ...`. The live trigger is
+**13:30** and the live script is `D:\Github\.scripts\stocks-daily.bat`. Cosmetic, but it is
+the first thing anyone reads in Task Scheduler when something breaks, and it points at a
+path that does not exist on that machine.
+
+- **Trigger**: none; bundle it with R10, which will be editing the same nine tasks.
 
 ---
 

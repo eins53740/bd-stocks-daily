@@ -30,6 +30,176 @@ face of every report.
 
 ---
 
+## v4.3.2 — 2026-08-17 · schema 2.2 · **1662 tests** (daily) · **1796** across the family
+
+Post-cutover hardening. Every item here was approved as an id from a proposed action table,
+so the entry is organised by those ids rather than by theme. Closes roadmap **R8**; opens
+**R9–R13**, all five found by doing this work.
+
+### E1 — the digest body carries the cover, not the whole markdown
+Measured on the canonical 1-deep + 2-screen day (2026-08-14): body **136,413 B**, of which
+the three inlined markdown reports were **100,989 B — 74 %**. Gmail clips above ~102,400 B,
+so the largest thing in the mail was also the part being hidden, and it was the *worst*
+rendering available: inlining markdown drops the cover, the charts, the Sankey, the SWOT and
+the stars, all of which live in the `.html` that already travels as an attachment. After:
+**36,260 B** on a real deep day, **0.35×** the clip.
+
+The report's own stylesheet could not be copied along — it lays the cover out with CSS grid,
+which Outlook renders with the Word engine and ignores entirely. `inline_cover_styles()`
+maps the cover's class names to inline, block-level CSS, preserving the cascade so
+`cv-line cv-bear` keeps its red border. A report with no cover section (anything before wave
+2.4) falls back to the inlined markdown — the only reason `build_full_report_html` survives.
+
+**Correction to the original proposal**: E1 also called for dropping the 14 KB inline
+dashboard. The measurement says removing the markdown alone lands the body at ~35 KB, so
+that headroom was never needed, and removing content for no benefit is not a saving. The
+inline dashboard stays.
+
+### E2 — the Sankey travels as an image, not as source code
+The money engine is a ```mermaid `sankey-beta` fence, and python-markdown renders a fence as
+literal `<pre><code>`, so what reached the inbox was the diagram's **source**.
+`mermaid_render.py` already writes the PNG for the HTML report, so the mail points at it and
+`inline_image_refs` rewrites that to a `cid:` attachment.
+
+### S1 — the "global" lock, and who is deliberately outside it
+Five of ten `stocks-*.bat` did not take `job_lock.ps1`. Two of the five are heavy and now do:
+**StocksPrefilter** (the worst omission — `run_prefilter.py` imports `analyze_ticker`
+*in-process*, and its ~1,700-ticker sweep is the largest rate-limit consumer on the machine)
+and **StocksPortfolioMonthly**. `MaxHoldMinutes` 90 → **135**, because the prefilter's own
+wrapper cap is 120 min and a sibling would otherwise break its lock half an hour before it
+was allowed to finish — serialising nothing.
+
+The other three stay outside, and `job_lock.ps1` now says why in a "WHO TAKES IT" note:
+`StocksPortfolioWeekly` makes **zero network calls** (verified across all 474 lines of
+`portfolio_ingest.py`), and the two watchdogs are diagnostics — a watchdog holding this lock
+would **abort exactly when a heavy job is running**, i.e. skip the check precisely when the
+system is most likely broken.
+
+**The push's own guard was inert.** `stocks-skills-push.ps1` called `job_lock.ps1` at a `C:`
+path on a machine whose scripts live on `D:` — and `powershell -File <missing>` **exits 0**,
+so `if ($LASTEXITCODE -ne 0)` never fired and the script logged "lock released" as though it
+had held one. For as long as the guard existed, every push was unserialised. It now probes
+for the file and **refuses**; the probe uses a bare `Test-Path` reading stdout, because
+`arch-sim` is a WSL host and bash rejects the parentheses in `if (...) { }`.
+
+### S3 — the drift alert no longer asserts a cause it never measured
+`stocks_failover_watchdog.py` printed *"Most likely cause: ClaudeConfigSync applied an older
+OneDrive zip"* as a **hardcoded string**, whatever the real reason. The 2026-08-14 alert
+blamed it when the actual failure was a tar invocation and a leftover probe file — and acting
+on the stated cause would have re-applied a pre-v4.3 zip over v4.3.1, *causing* the downgrade
+the mail blamed. Now: the measured `detail` block is named as the only evidence, four
+candidates are listed as candidates, and re-running ClaudeConfigSync is called out as a
+non-remedy.
+
+### G1 — the two growth-lens scoring defects
+**Gross-margin trajectory** compared a TTM margin (yfinance, daily JSON) against a prior
+**fiscal-year** margin (Gross Profit / Total Revenue, income statement) and called any gap
+over 50 bp expansion or compression. Those differ in period *and* derivation, so the basis
+mismatch alone can clear the threshold — the trend term reported an artefact of mixing
+sources as a change in the business. Level still reads TTM (freshest); **direction** now
+reads adjacent fiscal years derived identically from one statement. Measured swing on a real
+shape (FY 78 % → 74 %, TTM 79 %): the trend term flips 0.5 → 4.0, **3.5 points on a
+0.12-weighted component**, from nothing but the change of basis. `gross_margin_trend_basis`
+records which comparison was made.
+
+**Rule of 40** preferred FCF margin unconditionally. Ro40 is a software heuristic; on a
+capex-heavy grower an FCF basis docks the score for the capacity being built. An industrial
+at FCF −12 % / EBITDA +22 % and 35 % revenue growth scored Ro40 = 23 (**4.6/10**); on the
+EBITDA basis it scores 57 (**9.7/10**). EBITDA-first for capital-intensive sectors,
+FCF-first (canonical) elsewhere, and **not computed** for financials, where the rule's
+operating quantities do not exist — neutral 5.0 beats a number nobody should act on. An
+unlabelled sector gets the canonical form, never the flattering one. Overlay-only.
+
+### A1 — the phase order became executable: `scripts/run_daily.py`
+26 nodes were orchestrated entirely in SKILL.md prose. Nothing stopped a run skipping a node,
+running 2.3 before the 2.2 whose output it reads, or — the 2026-08-15 failure — dying before
+Phase 6 with no record of how far it got. Three stages bracket the narrative work: `pre` runs
+what the LLM needs, `mid` what it feeds, `post` what the written report feeds. **It never
+calls a model.**
+
+Run-scoped and ticker-scoped nodes are mutually exclusive per invocation, because three
+per-ticker calls re-running Phase 1 would pick a new candidate set mid-analysis. A required
+failure stops the stage and reports how many nodes went unattempted. A required node that
+cannot run for want of an argument is **MISINVOKED, not a tidy SKIP that exits 0**. Phase 7
+stays opt-in — the only irreversible act in the pipeline.
+
+Three defects its own tests caught before it shipped: the "nodes not attempted" counter
+counted the *unfiltered* plan; scoping lived in `main()` where no test could reach it (now
+`plan_for()`); and `["--a", "", "--b", "v"]` dropped only the empty string, leaving
+`--a --b v` so argparse bound `--b` as `--a`'s value.
+
+### A2 — the 3-persona panel asks concurrently
+The personas are independent by design (same evidence, different system message, none sees
+another's answer — spec §10b, *"não eco"*) yet ran in a plain `for` loop: three serialised
+round-trips on the 30-minute path. `executor.map` preserves **input** order, which matters —
+the card list is the report's persona order and `consensus()` indexes into it.
+`PANEL_MAX_WORKERS = 1` serialises again with no code change.
+
+Safe here and **not** elsewhere, and SKILL.md now says which: the panel talks to Groq/Gemini
+and a refusal surfaces as an unavailable card, whereas a throttled yfinance returns an
+**empty frame that looks like success**. Fan-out is documented for SWOT + thesis duel
+(independent of each other, network-free) and explicitly forbidden for every node that
+fetches.
+
+### D1 — the version left the H1 rather than being corrected
+The heading said v4.2 while `version.py` said 4.3.1 — the **second** drift (it previously
+claimed v4.1 against a v4.2 body). A version in prose has no verifier, so the H1 no longer
+carries one and a test fails if any `vN.N` returns to it.
+
+### S5 — five skills were not git repositories *(closes R8, which undercounted by four)*
+R8 named one. A sweep found five: `bd-stocks-prefilter`, `bd-stocks-portfolio`,
+`bd-stocks-earnings-review`, `bd-strategy-monthly` and the `bd-finance` plugin wrapper. Each
+initialised with `bd-stocks-daily`'s `.gitignore` verbatim, key guard included; no secrets
+found before staging; each first commit records the working state unedited so the next diff
+means something. The packaging question R8 was waiting on is settled: **one repo per skill**.
+
+### S6 — uncommitted production code, committed *(and one red test found)*
+Work that the skills push had been replicating to vmhost1 while it had no history:
+- **growth**: `round` counted rows, so a same-day re-run bumped it and the growth log
+  disagreed with `_log.csv`; a same-day re-run stacked a duplicate digest card (now
+  supersedes, via temp file + `os.replace`); `rule_of_40` read a missing margin as
+  break-even, handing a cash-burner the score of a self-funding compounder.
+- **earnings-preview**: `cal_age` was computed and never used, so a calendar frozen for a
+  week produced "0 targets" indistinguishable from a quiet week; and a failed send returned
+  0, so a lost preview mail read as a **green** Task Scheduler run.
+
+The second of those had left its own guard test asserting `== 0  # non-fatal by design` —
+red on arrival. Its real subject was that a failure must not consume the fingerprint; both
+halves are now asserted.
+
+### Portability — two live production bugs on vmhost1, and a corrected claim
+Running the suite **on vmhost1** rather than on the laptop is what found these. vmhost1 has
+run the pipeline since the cutover and has **no `C:\Github` at all**.
+- `technical_score.py` added a hardcoded `C:\Github\BD\Finance` to `sys.path`; on vmhost1
+  `BD_Finance` lives at `D:\Github\BD`, so all five indicator imports raised
+  `ModuleNotFoundError` and **Phase 3.5 (technical score + GO/NO-GO) never computed there**.
+- `portfolio_sync.py` read its gap script at import time, so `tests/test_portfolio.py` failed
+  at **collection** — and a collection error aborts the run, meaning the production machine's
+  suite could not be executed at all. Consequently the *"1619 passed on vmhost1"* reported
+  earlier that day **cannot have come from vmhost1**.
+- `run_daily.py` would have failed every step there for the same reason: an orchestrator that
+  imposes an order by running nothing.
+
+All three now resolve env var → `C:` → `D:` with a **positive** existence probe (the file
+actually imported, not merely a directory). Nine such paths remain — roadmap **R11**.
+
+### Y1 verified in production, not only in tests
+The 17:16 prefilter run logged the retry firing and `error_type=ThrottleSuspected` being
+recorded — the exact string `next_retry_count` matches to refuse to advance a pause counter.
+**61 of the first 425 names (14 %)** were throttle-suspected; without Y1 each would have
+taken a step toward a 30-day pause. The two log lines were also the reason for an ASCII fix:
+the em dash reached the log as mojibake under the console codepage.
+
+### Operational
+- `StocksPortfolioWeekly` enabled — on the **laptop only**, because `portfolio_ingest.py`
+  reads the export from `~\Downloads`, which exists only there. Dry run: 20 lots → 12
+  holdings, export 18 days stale (the staleness marker is working as designed).
+- The Monday pool was a week old (`_prefiltered.yaml` dated 08-10) and the 13:30 run logged
+  `SCREENS: none - pool exhausted (0 of 222 prefiltered names eligible)`. Prefilter
+  re-triggered on vmhost1.
+
+---
+
 ## v4.3.1 — 2026-08-16 · schema 2.2 · **1611 tests**
 
 Post-release work: the delivery decision that v4.3 left open, and two roadmap items that
