@@ -128,7 +128,7 @@ edited, no mechanism to notice.
 - **Trigger**: none; it is unscheduled only because doing it mid-session with a two-hour
   prefilter running was the wrong moment.
 
-### R11. Nine hardcoded `C:\Github\...` paths remain in the skill's scripts — **M**
+### R11. Eight hardcoded `C:\Github\...` paths remain across the family — **M**
 
 `analyze_ticker.py`, `financial_history.py`, `llm_client.py`, `macro_fred.py`,
 `portfolio_sync.py` (DEFAULT_DB), `send_email.py`, `_run_and_save.py` and
@@ -149,7 +149,21 @@ resolution and a *positive* existence probe (the file actually imported, not jus
 directory). That makes **three** near-identical resolution lists in one skill — deliberate
 for now, because each probes a different target, but it is duplication that wants collapsing.
 
-- **The work**: one `bd_paths.py` beside `skills_root.py`, then convert the remaining nine.
+A **third** live failure surfaced the same evening, in a sibling skill: the weekly prefilter
+summary email could never send on vmhost1 --
+`ModuleNotFoundError: No module named 'api_keys_reader'` -- so a two-hour analysis succeeded
+and its notification failed every Monday, in silence. Fixed and verified sending
+(`{"email_sent": true}`), which makes **four** near-identical resolution lists.
+
+Worth recording *why* the safe ones are safe: `send_email.py` carries the identical line and
+works, because the daily bat `cd`s into the BD_Finance directory first. But cwd is **not** on
+`sys.path` when Python runs a script by path, so whether a script survives this bug is an
+accident of how it is invoked. Reasoning about which of the eight are fine is the wrong move.
+
+- **The work**: one `bd_paths.py` beside `skills_root.py`, then convert the remaining eight.
+- **Priority raised** 2026-08-17: no longer hygiene. This single pattern has now caused two
+  production failures (Phase 3.5 never computing; the suite unable to collect) and one
+  notification lost every week.
 - **Trigger**: none; scoped with the Wave-5 path refactor, which the packaging notes already
   size at ~30 files across the family.
 
