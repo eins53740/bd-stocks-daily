@@ -30,6 +30,65 @@ face of every report.
 
 ---
 
+## v4.3.3 — 2026-08-17 · schema 2.2 · **1674 tests** (daily) · **1813** across the family
+
+Broker reference refreshed against the brokers' own published schedules, and extended from 11
+markets to the 32 regions the universe actually holds. Opens roadmap **R14** (OpenBB).
+
+### The gap this closed
+`_prefiltered.yaml` covers **32 regions**; `brokers.yaml` described **11**. For an ASX, TSX,
+SIX, BME, Nasdaq-Nordic, KRX, Tadawul or B3 name — 21 regions, including AU's 200 pool
+candidates, JP's 122, CA's 62, IN's 54 — the comparator's answer was "no broker offers this",
+which is indistinguishable from "nobody checked". All 32 now price, and 30 of 32 have at least
+one broker with a tariff on file.
+
+### Read, not guessed
+Both sources were downloaded and parsed **by code**, because 51 fee blocks transcribed by eye
+is a guaranteed digit error in a file used to place real money:
+- **IBKR** — the published per-country stock-commission page, **30 markets**. It 403s under
+  WebFetch and answers a plain browser User-Agent: the same missing-header cause as the
+  SEC/EDGAR 403 wave 1.3 fixed. Parsed off the page's own `id="<Country>-01"` anchors after a
+  first proximity-based parse mis-assigned Hong Kong's numbers to India and Japan's to
+  Switzerland.
+- **DEGIRO** — the Fee Schedule PDF, *"Rates from: 01-01-2026"*, **23 markets**. Its exchange
+  list is exhaustive, which makes DEGIRO the one broker whose *absences* are facts.
+
+### Three errors found, all overstating cost
+1. **Local currency in a EUR field.** IBKR's Asian minimums had been written into
+   `commission_min` — defined by the schema as EUR — as the local figure: HK `18.0` when
+   HKD 18.00 is **EUR 1.98**, JP `8.0` when JPY 80 is **EUR 0.43**, TW `15.0` against
+   TWD 80 = **EUR 2.17**. Overstated **9×, 18× and 7×**, enough to hand "cheapest broker" to
+   someone else on every Asian name in the pool. Local minimums are now stored verbatim
+   beside the EUR value with the FX rate and its date, and a test asserts EUR == local ÷ rate
+   across all 15 non-EUR markets, so the class of bug cannot return silently.
+2. **Double-counted flat tariffs.** `leg_cost` computes `max(min, pct·notional) + flat_fee`, so
+   a flat fee in both fields is charged twice. DEGIRO Euronext Lisbon held 3.90 in each —
+   EUR 7.80 a leg for a EUR 4.90 tariff, **+59 %**; Trade Republic held 1.00 in each,
+   EUR 2.00 for a EUR 1.00 fee. Both pre-existing.
+3. **IBKR Taiwan was 0.15 %**; the published tariff is **0.08 %**. DEGIRO's Euronext Dublin
+   was 3.90; published is 2.00 + 1.00 handling.
+
+### Absence split into two states
+`markets` absent used to mean "not offered". Safe at 11 hand-checked markets, false at 32: it
+turned "nobody checked Helsinki" into "IBKR does not trade Helsinki", dropped the broker from
+that region and left nothing on the page to show a gap existed. Now `not_offered` (checked, a
+sourced no) and `coverage_unknown` (nobody checked) are separate, `support_matrix` returns
+**True / False / None**, and the dashboard renders three glyphs with the unknown one in amber.
+A test asserts `markets + not_offered + coverage_unknown` exhausts `markets_meta` for **every**
+broker, so a 33rd market cannot be added without placing all 12.
+
+Deliberately still empty: the four Portuguese banks and eToro. Their tariffs live in preçário
+PDFs that refuse automated fetch, so their new-market coverage is `coverage_unknown`, not
+filled in.
+
+**Files**: `scripts/brokers.yaml` (+~570 lines), `scripts/broker_compare.py`,
+`StocksDaily/_dashboard/template_brokers.html`, `tests/test_broker_market_coverage.py` (+12),
+`docs/ROADMAP.md` (**R14**), `Personal/Finance/00_Finance_Skills_Map.md` +
+`StocksDaily/IMG/finance_skills_map.png` (generated from
+`StocksDaily/_diagrams/finance_skills_map.mmd`).
+
+---
+
 ## v4.3.2 — 2026-08-17 · schema 2.2 · **1662 tests** (daily) · **1796** across the family
 
 Post-cutover hardening. Every item here was approved as an id from a proposed action table,

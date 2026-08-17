@@ -67,9 +67,36 @@ LARGE_EUR = 25_000.0
 # would be stale by the time anyone read the table.
 TRADE_SIZES_EUR = [500.0, 1_500.0, 2_000.0]
 
-# Display order. The four EU venues were added in v4.3 wave 4.5: most of the universe
-# trades on .AS/.PA/.DE/.L and none of them had a cost comparison at all.
-MARKET_ORDER = ["US", "IE", "PT", "NL", "FR", "DE", "UK", "TW", "HK", "JP", "CN_SZ"]
+# Display order: home market first, then the rest of Europe, the Americas, Asia-Pacific and
+# EMEA. Extended from 11 keys to 32 on 2026-08-17 to match the regions the weekly prefilter
+# actually reports coverage for -- 21 of them had no key at all, so the comparator's answer
+# for an ASX, TSX, SIX, BME, Nasdaq-Nordic or KRX name was "no broker offers this", which is
+# indistinguishable from "nobody checked". A test asserts this list and markets_meta agree.
+MARKET_ORDER = [
+    # home + Euronext
+    "PT", "IE", "NL", "FR", "BE", "IT", "ES",
+    # rest of Europe
+    "DE", "UK", "CH", "AT", "SE", "NO", "DK", "FI", "PL", "HU",
+    # Americas
+    "US", "CA", "BR", "MX",
+    # Asia-Pacific
+    "JP", "HK", "CN_SZ", "TW", "KR", "SG", "AU", "IN", "ID",
+    # EMEA
+    "IL", "SA",
+]
+
+
+def market_list(broker: dict, field: str) -> list[str]:
+    """Split a comma-separated `not_offered` / `coverage_unknown` string into keys.
+
+    The file stores these as strings rather than YAML lists because load_brokers_yaml is a
+    deliberately small purpose-built reader with no list support, and widening it for two
+    fields would be the wrong trade. Empty string -> empty list.
+    """
+    raw = (broker or {}).get(field) or ""
+    if isinstance(raw, (list, tuple)):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    return [p.strip() for p in str(raw).split(",") if p.strip()]
 
 # Fields that are statutory or structural rather than tariff, so they are reported for
 # every broker including the unverified ones.
@@ -211,12 +238,35 @@ def recommend(rows: list[dict]) -> dict:
 
 
 def support_matrix(brokers: dict, market_order: list[str]) -> dict:
-    """{broker -> {market -> bool}} coverage table for the dashboard."""
+    """{broker -> {market -> True | False | None}} coverage table for the dashboard.
+
+    TRI-STATE, deliberately. True = a fee block exists. False = the broker was checked and
+    does not reach the venue. **None = nobody has checked.** Collapsing the last two into one
+    `False` was safe while the file held 7 hand-verified markets; with 32 it turns "we never
+    looked at Helsinki" into "IBKR does not trade Helsinki", drops the broker from that
+    region's comparison, and leaves nothing on the page to show that a gap was ever there.
+    """
     out = {}
     for bid, b in brokers.items():
         markets = (b or {}).get("markets") or {}
-        out[bid] = {m: (m in markets) for m in market_order}
+        unknown = set(market_list(b, "coverage_unknown"))
+        out[bid] = {m: (True if m in markets else (None if m in unknown else False))
+                    for m in market_order}
     return out
+
+
+def coverage_gaps(brokers: dict, market_order: list[str]) -> dict:
+    """{market -> [broker ids nobody has checked]} -- the work list, not a verdict.
+
+    Surfaced in the bundle so the dashboard can say "3 of 12 brokers unchecked here" next to
+    a market whose comparison rests on one or two rows.
+    """
+    out: dict[str, list[str]] = {m: [] for m in market_order}
+    for bid, b in brokers.items():
+        for m in market_list(b, "coverage_unknown"):
+            if m in out:
+                out[m].append(bid)
+    return {m: v for m, v in out.items() if v}
 
 
 # ----------------------------------------------------------------------------
@@ -363,6 +413,12 @@ def build_bundle(data: dict, small_eur: float = SMALL_EUR, large_eur: float = LA
                          f"no broker in this file carries a verified tariff for {mk} — "
                          f"the market key exists so the gap is visible; fill the fee "
                          f"blocks from each broker's live schedule before comparing"),
+            # How much of the field is actually in the race. A market compared on two rows
+            # out of twelve brokers is a weaker answer than one compared on nine, and the
+            # reader cannot tell them apart from the winner alone.
+            "unchecked_brokers": sorted(
+                bid for bid, b in brokers.items()
+                if mk in market_list(b, "coverage_unknown")),
         })
 
     return {
@@ -380,6 +436,12 @@ def build_bundle(data: dict, small_eur: float = SMALL_EUR, large_eur: float = LA
         },
         "unverified": unverified_brokers(brokers),
         "support_matrix": support_matrix(brokers, MARKET_ORDER),
+        "coverage_gaps": coverage_gaps(brokers, MARKET_ORDER),
+        "coverage_legend": {
+            "yes": "a fee block exists for this venue",
+            "no": "checked, and the broker does not reach this venue",
+            "unknown": "NOBODY HAS CHECKED - not a no, and not a yes",
+        },
         "markets": markets_out,
         "structural_note": (
             "cash_interest / investor_compensation / cash_protection_100k / "
@@ -404,11 +466,15 @@ def print_summary(bundle: dict) -> None:
     print("=" * 72)
 
     # Support matrix
-    print("\nMarket-support matrix (broker × market):")
+    print("\nMarket-support matrix (broker × market)   ✓ offered · - checked, not offered "
+          "· ? nobody checked")
     hdr = "  {:<16}".format("broker") + "".join(f"{m:>7}" for m in MARKET_ORDER)
     print(hdr)
     for bid, cov in bundle["support_matrix"].items():
-        cells = "".join(("   ✓  " if cov[m] else "   -  ") for m in MARKET_ORDER)
+        # Three glyphs for three states. Printing `-` for both "checked, no" and "nobody
+        # checked" is what let 21 unresearched markets read as confirmed refusals.
+        cells = "".join(("   ✓  " if cov[m] is True else
+                         "   ?  " if cov[m] is None else "   -  ") for m in MARKET_ORDER)
         print("  {:<16}".format(bid) + cells)
 
     # Per-market cost matrix + recommendation

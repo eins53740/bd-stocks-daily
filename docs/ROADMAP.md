@@ -192,6 +192,54 @@ path that does not exist on that machine.
 
 - **Trigger**: none; bundle it with R10, which will be editing the same nine tasks.
 
+### R14. Evaluate OpenBB as a second data spine — macro first, fundamentals second — **M**
+
+Requested 2026-08-17. OpenBB is a **Python platform with a CLI on top** that normalises many
+providers behind one interface (`obb.equity.*`, `obb.economy.*`, `obb.fixedincome.*`). Free
+tier, open source.
+
+**The premise that has to be corrected before any work starts**: OpenBB is an *aggregator*,
+not a data source. It does not own numbers. On the free tier its equity fundamentals still
+resolve to yfinance and FMP-free, which means it does **not** by itself solve **N0**
+(non-US depth) any more than the Alpha Vantage key pool did in wave 1.0 — that failure came
+from assuming a wrapper changes the underlying entitlement. Judge it on what it *does* add.
+
+**Where it plainly wins — macro, and it closes a gap this roadmap already carries.** Wave 4.1
+specified portfolio benchmarks against **PT HICP inflation**, the **PT OT-10y** and the
+**UST-10y**, and had to record "yfinance has neither; no source ⇒ the row renders
+not-available". OpenBB's `economy` and `fixedincome` modules reach FRED, EconDB, IMF, OECD,
+the World Bank and the ECB, which is exactly those three series plus policy rates, yield
+curves, unemployment, PMI and debt/GDP. `api_key_fred` already exists.
+
+**Ranked by leverage, highest first:**
+
+| # | Use | Why it is worth it |
+|---|---|---|
+| 1 | **Macro country dashboards** — GDP, CPI/HICP, unemployment, policy rate, 10y yield, PMI, debt/GDP, FX, per country the portfolio is exposed to | The one genuinely new capability. Feeds the requested macro skill and the `MarketCtx` weight (0.05 of the composite) which is today the thinnest-sourced input in the score |
+| 2 | **Unblock 4.1's three benchmark rows** | Named, citable series instead of a blank row |
+| 3 | **Risk-free rate and yield curve for the DCF** | `intrinsic_value.py` CAPM needs `rf`; sourcing it from FRED/ECB per currency beats one number that ages |
+| 4 | **Cross-check layer on yfinance** | A second independent read of the same figure is exactly what the 3-layer validation stack wants; the 2026-08-15 `ADS.DE` incident was a *reference price* being wrong, not the data |
+| 5 | Earnings calendar / estimates | Overlaps what the two earnings skills already do — check before building |
+
+**Constraints to respect, from this skill's own history:**
+- **Python API in-process, not the CLI.** A subprocess parsing human-formatted CLI output is
+  the fragile pattern; `obb.*` returns typed objects. The ground-truth rule is satisfied
+  either way — these are numbers from a Python helper — but only the API is deterministic.
+- **Budget.** The 13:30 job runs at 22-24 min of a 30-min ceiling. Any macro call ships
+  **opt-in**, cached by content hash, exactly like every wave 1-2 addition.
+- **Dependency weight.** `openbb` pulls a large tree. Install it in its own venv and call it
+  from there, or take only the provider packages actually needed — do not add it to the
+  daily job's import path on a whim.
+- **Macro is one of the two documented LLM-narrative exceptions.** Structured macro series
+  arriving from OpenBB would make that exception *narrower*, not wider: the numbers become
+  ground truth and the LLM keeps only the commentary. Worth saying so in `SKILL.md` when it
+  lands.
+
+- **First step, cheap and decisive**: one venv, `obb.economy.cpi` and
+  `obb.fixedincome.government.treasury_rates` for PT/US, and confirm the free tier returns
+  the three series 4.1 needs. That answers "is this worth wiring in" in under an hour.
+- **Trigger**: none; item 1 is wanted for the macro skill and is independent of the rest.
+
 ---
 
 ## Next — AGREED-DEFERRED

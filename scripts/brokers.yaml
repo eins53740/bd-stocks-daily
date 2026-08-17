@@ -6,7 +6,38 @@
 # below carries an `as_of` date and a `source` note. Values marked
 # `approx: true` are reasonable estimates, NOT quoted tariffs — verify on the
 # broker's live fee page before acting. This file needs a PERIODIC MANUAL
-# REFRESH. Last full review: 2026-06.
+# REFRESH. Last full review: 2026-08-17.
+#
+# ---------------------------------------------------------------------------
+# 2026-08-17 REFRESH — what changed and why it mattered
+#
+# The market list went from 11 keys to 32: the 32 regions the weekly prefilter actually
+# reported coverage for. Twenty-one regions of the live pool had NO market key at all, so the
+# comparator's honest answer for an ASX, TSX, SIX, BME, Nasdaq-Nordic or KRX name was "no
+# broker offers this" — indistinguishable from "nobody checked".
+#
+# Two brokers were re-read from their own published schedules, in full, and parsed by code
+# rather than transcribed by eye:
+#   * IBKR   — the per-country stock-commission page, 30 markets. It refuses automated
+#              fetch (403) but answers a plain browser User-Agent, the same missing-header
+#              cause as the SEC/EDGAR 403 this skill already fixed.
+#   * DEGIRO — the Fee Schedule PDF, "Rates from: 01-01-2026", 23 markets. Its exchange list
+#              is EXHAUSTIVE, which is why DEGIRO is the one broker whose absences are facts.
+#
+# THREE ERRORS THIS REFRESH CORRECTED, all in the same direction and all material:
+#   * IBKR's Asian minimums had been entered as LOCAL-CURRENCY numbers into a field the
+#     schema defines as EUR. HK read 18.0 EUR when HKD 18.00 is EUR 1.98; JP read 8.0 EUR
+#     when JPY 80 is EUR 0.43; TW read 15.0 EUR against TWD 80 = EUR 2.17. IBKR's cost in
+#     Asia was overstated by 9x, 18x and 7x — enough to hand a "cheapest broker" verdict to
+#     someone else on every Asian name in the pool. Local minimums are now stored verbatim
+#     BESIDE the EUR value, with the FX rate and its date, so the conversion is auditable.
+#   * IBKR's Taiwan commission was 0.15%; the published tariff is 0.08%.
+#   * DEGIRO's Euronext Dublin was 3.90; the published fee is 2.00 (+1.00 handling).
+#
+# NOT fabricated, and still open: the four Portuguese banks (BIG, CTT, BEST, Bankinter) and
+# eToro. Their tariffs live in preçário PDFs that refuse automated fetch, so their new-market
+# coverage is recorded as UNKNOWN rather than filled in. See `coverage_unknown` below.
+# ---------------------------------------------------------------------------
 #
 # Scope (v4.3 wave 4.5): 10 brokers — the 9 held plus Bankinter:
 #   IBKR, DEGIRO, Trade Republic, Robinhood, Revolut, XTB,
@@ -45,8 +76,17 @@
 #                      institution) vs segregated client money (not a deposit)
 #   dividend_handling: how dividends arrive (auto-credit, FX applied, fees)
 #   fx_spread_note:    the spread ON TOP of any quoted fx_fee_pct
-#   markets:           map of MARKET_KEY -> per-market fee block, OR absent =>
-#                      broker does NOT offer that market (excluded from compare)
+#   markets:           map of MARKET_KEY -> per-market fee block
+#   not_offered:       comma-separated MARKET_KEYs the broker was CHECKED against and does
+#                      not reach. A sourced no.
+#   coverage_unknown:  comma-separated MARKET_KEYs NOBODY HAS CHECKED. Absence used to mean
+#                      "not offered", which was safe with 7 checked markets and false with
+#                      32: an unresearched market would read as a confirmed no, silently
+#                      dropping a broker from a whole region with nothing to show the gap.
+#                      markets + not_offered + coverage_unknown == every key in markets_meta,
+#                      and a test asserts exactly that so a new market cannot be added to
+#                      markets_meta without every broker being placed in one of the three.
+#   coverage_note:     why the split above falls where it does, per broker.
 #
 #   Per-market fee block:
 #     commission_pct:  variable commission as % of notional (per leg)
@@ -59,172 +99,717 @@
 #     as_of:           "YYYY-MM" the figure was last verified
 #     source:          where the figure came from
 #     approx:          true if the number is an estimate, not a quoted tariff
+#     commission_min_local / commission_max_local / fx_rate_eur_local / fx_as_of:
+#                      the tariff as the broker actually publishes it, in the venue's own
+#                      currency, plus the rate used to reach the EUR figure above and the day
+#                      that rate was read. The EUR number is what the comparator arithmetic
+#                      needs; these four are what make it checkable and refreshable, instead
+#                      of a converted figure that ages with nothing to show for it.
+#     pricing_basis:   set where the tariff is NOT a percentage of notional — IBKR prices US
+#                      and Canadian stocks PER SHARE. At every ticket size compared here the
+#                      per-order minimum is what actually gets paid, so commission_pct is 0
+#                      and the per-share rate is stated in other_costs rather than faked as a
+#                      percentage that would only be right at one share price.
+#     sell_to_close_only: the venue can be sold but not bought (DEGIRO/Budapest).
 #
-# MARKET_KEY values used by broker_compare.py (the spec's 7 example markets):
-#   US        NYSE / Nasdaq (USD)
-#   IE        Euronext Dublin / ISEQ (EUR)
-#   PT        Euronext Lisbon (EUR)
-#   TW        Taiwan Stock Exchange (TWD)
-#   HK        Hong Kong Stock Exchange (HKD)
-#   JP        Tokyo Stock Exchange (JPY)
-#   CN_SZ     Shenzhen Stock Exchange (CNY, via Stock-Connect where offered)
+# MARKET_KEY values: see markets_meta at the foot of this file — 32 keys, one per region the
+# universe actually holds, each with its label, currency and the Yahoo suffix the pipeline
+# uses. That block is the authority; MARKET_ORDER in broker_compare.py must agree with it.
 # =============================================================================
 
 brokers:
 
   # ---------------------------------------------------------------------------
   IBKR:
+    not_offered: ""
+    coverage_unknown: "FI, ID"
+    coverage_note: "Nothing is ruled out: the published page simply has no table for FI or ID."
     name: "Interactive Brokers"
     profile: "Widest global reach; tiered/fixed pricing; pro-grade."
     base_currency: "EUR"
     fx_fee_pct: 0.03            # 0.002% of notional, min USD 2 -> ~0.03% on small tickets, effectively spread
     custody_fee: "No custody fee; no inactivity fee since 2021."
     markets:
-      US:
+      AT:
         commission_pct: 0.05
-        commission_min: 0.35
+        commission_min: 1.25
+        commission_max: 29.0
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated: no FX leg."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Austria (Vienna/VSE)."
+        approx: false
+      AU:
+        commission_pct: 0.08
+        commission_min: 3.07
         commission_max: null
         flat_fee: 0.0
-        market_data_fee: "US securities snapshot free; streaming ~USD 1.5-4.5/mo per bundle."
-        dividend_fee: "No handling fee; withholding tax applies (US 15% w/ W-8BEN)."
-        other_costs: "FX auto-conversion ~0.002% min USD 2 if funding in EUR."
-        as_of: "2026-06"
-        source: "IBKR Fixed pricing schedule (US stocks/ETFs)."
+        commission_min_local: "AUD 5"
+        fx_rate_eur_local: 1.62992
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->AUD. Tier I minimum; falls to AUD 1.00 at Tier V volumes."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Australia (ASX)."
         approx: false
+      BE:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: 29.0
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated: no FX leg."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Belgium (Euronext Brussels)."
+        approx: false
+      BR:
+        commission_pct: 0.07
+        commission_min: 0.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->BRL. NO minimum per order is published for Brazil."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Brazil (B3)."
+        approx: false
+      CA:
+        commission_pct: 0.0
+        commission_min: 0.62
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "CAD 1"
+        fx_rate_eur_local: 1.60653
+        fx_as_of: "2026-08-17"
+        pricing_basis: "per share, not per cent of notional"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->CAD. Per-share pricing: CAD 0.008/share, capped at 0.5% of trade value. Below ~125 shares the minimum is what you pay, which is the case at every ticket size compared here."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Canada (TSX/TSXV/CSE)."
+        approx: false
+      CH:
+        commission_pct: 0.05
+        commission_min: 1.6
+        commission_max: 52.19
+        flat_fee: 0.0
+        commission_min_local: "CHF 1.5"
+        fx_rate_eur_local: 0.93895
+        fx_as_of: "2026-08-17"
+        commission_max_local: "CHF 49"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->CHF. Swiss stamp duty 0.15% on Swiss securities is a STATE tax, not IBKR's."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Switzerland (SIX)."
+        approx: false
+      DE:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: 29.0
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated: no FX leg."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Germany (Xetra)."
+        approx: false
+      DK:
+        commission_pct: 0.05
+        commission_min: 1.34
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "DKK 10"
+        fx_rate_eur_local: 7.47533
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->DKK (pegged, so the spread is small)."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Denmark (Nasdaq Copenhagen)."
+        approx: false
+      ES:
+        commission_pct: 0.05
+        commission_min: 3.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated. Spanish FTT 0.2% on purchases of large Spanish issuers is a STATE tax. NOTE: Spain has NO tiered schedule - 0.05% is the Fixed rate, min EUR 3.00."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Spain (BME Madrid) - Fixed only."
+        approx: false
+      FR:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: 29.0
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated. French FTT 0.4% on purchases of French issuers above EUR 1bn is a STATE tax."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - France (Euronext Paris)."
+        approx: false
+      HK:
+        commission_pct: 0.05
+        commission_min: 1.98
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "HKD 18"
+        fx_rate_eur_local: 9.08164
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->HKD. HK stamp duty 0.1% per side is exchange/state-levied. Tier I minimum; falls to HKD 4.00 at Tier V."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Hong Kong (SEHK)."
+        approx: false
+      HU:
+        commission_pct: 0.05
+        commission_min: 0.55
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "HUF 200"
+        fx_rate_eur_local: 363.359009
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->HUF. The FIXED schedule charges 0.55% on BUYS in Hungary; the Tiered schedule used here does not."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Hungary (BSE Budapest)."
+        approx: false
+      IL:
+        commission_pct: 0.05
+        commission_min: 1.53
+        commission_max: 35.0
+        flat_fee: 0.0
+        commission_min_local: "ILS 5.25"
+        fx_rate_eur_local: 3.4284
+        fx_as_of: "2026-08-17"
+        commission_max_local: "ILS 120"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->ILS."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Israel (TASE)."
+        approx: false
+      IN:
+        commission_pct: 0.01
+        commission_min: 0.05
+        commission_max: 0.18
+        flat_fee: 0.0
+        commission_min_local: "INR 6"
+        fx_rate_eur_local: 110.7061
+        fx_as_of: "2026-08-17"
+        commission_max_local: "INR 20"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->INR. India is Fixed-only at 1 bps; no tiered schedule. Access route and eligibility restrictions apply."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - India (NSE/BSE) - Fixed only, 1 bps."
+        approx: false
+      IT:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: 29.0
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated. Italian FTT 0.1% on purchases of Italian issuers is a STATE tax."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Italy (Euronext Milan)."
+        approx: false
+      JP:
+        commission_pct: 0.05
+        commission_min: 0.43
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "JPY 80"
+        fx_rate_eur_local: 184.623001
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->JPY."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Japan (TSE)."
+        approx: false
+      KR:
+        commission_pct: 0.06
+        commission_min: 2.44
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "KRW 4000"
+        fx_rate_eur_local: 1639.0
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->KRW. Tier I minimum; falls to KRW 2700 at Tier IV. Foreign-investor registration required."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - South Korea (KRX)."
+        approx: false
+      MX:
+        commission_pct: 0.1
+        commission_min: 3.04
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "MXN 60"
+        fx_rate_eur_local: 19.72427
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->MXN. Mexico is Fixed-only: 0.1% of trade value, min MXN 60.00; no tiered schedule."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Mexico (BMV) - Fixed only."
+        approx: false
+      NL:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: 29.0
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated: no FX leg."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Netherlands (Euronext Amsterdam)."
+        approx: false
+      NO:
+        commission_pct: 0.05
+        commission_min: 0.92
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "NOK 10"
+        fx_rate_eur_local: 10.90546
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->NOK."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Norway (Oslo Bors)."
+        approx: false
+      PL:
+        commission_pct: 0.05
+        commission_min: 1.16
+        commission_max: 28.98
+        flat_fee: 0.0
+        commission_min_local: "PLN 5"
+        fx_rate_eur_local: 4.31379
+        fx_as_of: "2026-08-17"
+        commission_max_local: "PLN 125"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->PLN."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Poland (GPW Warsaw)."
+        approx: false
+      PT:
+        commission_pct: 0.05
+        commission_min: 1.25
+        commission_max: 29.0
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "EUR-denominated: no FX leg."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Portugal (Euronext Lisbon)."
+        approx: false
+      SA:
+        commission_pct: 0.05
+        commission_min: 0.0
+        commission_max: null
+        flat_fee: 0.0
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->SAR (pegged to USD). NO minimum per order is published for Tadawul."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Saudi Arabia (Tadawul)."
+        approx: false
+      SE:
+        commission_pct: 0.05
+        commission_min: 0.91
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "SEK 10"
+        fx_rate_eur_local: 11.01715
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->SEK."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Sweden (Nasdaq Stockholm)."
+        approx: false
+      SG:
+        commission_pct: 0.08
+        commission_min: 1.69
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "SGD 2.5"
+        fx_rate_eur_local: 1.4794
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->SGD. Tier I minimum; falls to SGD 0.90 at Tier IV."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Singapore (SGX)."
+        approx: false
+      TW:
+        commission_pct: 0.08
+        commission_min: 2.17
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "TWD 80"
+        fx_rate_eur_local: 36.924
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->TWD. Taiwan transaction tax 0.3% on SELLS is state-levied and dwarfs the commission. Tier I minimum; falls to TWD 30.00 at Tier IV."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - Taiwan (TWSE)."
+        approx: false
+      UK:
+        commission_pct: 0.05
+        commission_min: 1.17
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "GBP 1"
+        fx_rate_eur_local: 0.85489
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->GBP. UK Stamp Duty Reserve Tax 0.5% on purchases is a STATE tax; PTM levy GBP 1.50 above GBP 10,000."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - United Kingdom (LSE)."
+        approx: false
+      US:
+        commission_pct: 0.0
+        commission_min: 0.3
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "USD 0.35"
+        fx_rate_eur_local: 1.158212
+        fx_as_of: "2026-08-17"
+        pricing_basis: "per share, not per cent of notional"
+        market_data_fee: "Exchange data bundle billed separately; not part of a round trip."
+        dividend_fee: "No handling fee; local withholding tax applies."
+        other_costs: "FX EUR->USD. Per-share pricing: USD 0.0035/share, capped at 1% of trade value. Below ~100 shares the minimum is what you pay, which is the case at every ticket size compared here."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - United States (NYSE/Nasdaq)."
+        approx: false
+      # CN A-shares reach IBKR through Stock Connect, which the page prices inside the Hong
+      # Kong section as a CNH-denominated table rather than as a China section of its own --
+      # hence the HK-style tier structure and a CNH minimum.
+      CN_SZ:
+        commission_pct: 0.05
+        commission_min: 1.92
+        commission_max: null
+        flat_fee: 0.0
+        commission_min_local: "CNH 15.00"
+        fx_rate_eur_local: 7.8041
+        fx_as_of: "2026-08-17"
+        market_data_fee: "Stock-Connect (SZSE/SSE) data billed separately."
+        dividend_fee: "No handling fee; PRC withholding applies."
+        other_costs: "FX EUR->CNH. Connect stamp duty 0.05% on sells is state-levied. Tier I minimum; falls to CNH 3.00 at Tier V."
+        as_of: "2026-08"
+        source: "IBKR published stock commissions (Tiered), read 2026-08-17 - China Connect, priced in the Hong Kong section (CNH-denominated table)."
+        approx: false
+      # IE is the ONE market kept as an inference rather than a reading. IBKR's published
+      # page carries no Euronext Dublin table at all -- which cannot mean the venue is
+      # unavailable, since the contracting entity IS Interactive Brokers Ireland. The figures
+      # are the ones every other Euronext venue on that page carries; the max is left null
+      # because it is the part that varies. Flagged `approx: true` so it can never be mistaken
+      # for a quoted tariff.
       IE:
         commission_pct: 0.05
         commission_min: 1.25
         commission_max: null
         flat_fee: 0.0
-        market_data_fee: "Euronext bundle ~EUR 3/mo."
+        market_data_fee: "Euronext data bundle billed separately."
         dividend_fee: "No handling fee."
-        other_costs: "EUR-denominated, no FX."
-        as_of: "2026-06"
-        source: "IBKR Europe tiered/fixed (Euronext)."
+        other_costs: "EUR-denominated: no FX leg. Irish Stamp Duty 1.0% on purchases of Irish shares is a STATE tax and dwarfs the commission."
+        as_of: "2026-08"
+        source: "INFERRED from IBKR's other Euronext venues (AT/BE/FR/IT/NL/PT all 0.05%, min EUR 1.25); no Euronext Dublin table is published."
         approx: true
-      PT:
-        commission_pct: 0.05
-        commission_min: 1.25
-        commission_max: null
-        flat_fee: 0.0
-        market_data_fee: "Euronext bundle ~EUR 3/mo."
-        dividend_fee: "No handling fee."
-        other_costs: "EUR-denominated, no FX."
-        as_of: "2026-06"
-        source: "IBKR Europe fixed (Euronext Lisbon)."
-        approx: true
-      TW:
-        commission_pct: 0.15
-        commission_min: 15.0      # ~TWD 500 min
-        commission_max: null
-        flat_fee: 0.0
-        market_data_fee: "TWSE data ~USD 3/mo."
-        dividend_fee: "No handling fee; TW withholding applies."
-        other_costs: "FX EUR->TWD ~0.03%; TW gov transaction tax 0.3% on sells (large)."
-        as_of: "2026-06"
-        source: "IBKR Asia (Taiwan) tiered; tax is exchange-mandated."
-        approx: true
-      HK:
-        commission_pct: 0.08
-        commission_min: 18.0      # ~HKD 18 min
-        commission_max: null
-        flat_fee: 0.0
-        market_data_fee: "HKEX data ~USD 2/mo."
-        dividend_fee: "No handling fee."
-        other_costs: "FX EUR->HKD ~0.03%; HK stamp duty 0.1% per side."
-        as_of: "2026-06"
-        source: "IBKR Asia (HK) tiered + HKEX stamp duty."
-        approx: true
-      JP:
-        commission_pct: 0.05
-        commission_min: 8.0       # ~JPY 80-100 min equiv
-        commission_max: null
-        flat_fee: 0.0
-        market_data_fee: "TSE data ~USD 3/mo."
-        dividend_fee: "No handling fee; JP withholding applies."
-        other_costs: "FX EUR->JPY ~0.03%."
-        as_of: "2026-06"
-        source: "IBKR Asia (Japan) tiered."
-        approx: true
-      CN_SZ:
-        commission_pct: 0.08
-        commission_min: 12.0
-        commission_max: null
-        flat_fee: 0.0
-        market_data_fee: "Stock-Connect (SZSE) data ~USD 2/mo."
-        dividend_fee: "No handling fee."
-        other_costs: "FX EUR->CNH ~0.03%; Connect stamp duty 0.05% on sells."
-        as_of: "2026-06"
-        source: "IBKR China A via Stock-Connect (Shenzhen)."
-        approx: true
-
+      # Regions in the universe with NO answer here: FI (Nasdaq Helsinki) and ID (IDX
+      # Jakarta). Neither has a table on the page, and unlike Dublin there is no sibling
+      # venue to infer from, so they go to `coverage_unknown` -- absence from a fee page is
+      # not proof a venue is unavailable, and reading it as "not offered" would quietly drop
+      # IBKR from the comparison for every Finnish name in the pool.
   # ---------------------------------------------------------------------------
   DEGIRO:
+    not_offered: "BR, CN_SZ, ID, IL, IN, KR, MX, SA, TW"
+    coverage_unknown: ""
+    coverage_note: "SOURCED and exhaustive - the DEGIRO Fee Schedule (01-01-2026) enumerates every exchange it offers, so anything not in it is genuinely unavailable."
     name: "DEGIRO"
     profile: "Low-cost EU retail; broad reach but Asia access is partial."
     base_currency: "EUR"
     fx_fee_pct: 0.25            # AutoFX 0.25% per conversion
     custody_fee: "EUR 2.50/yr per non-home exchange (connectivity fee)."
     markets:
-      US:
-        commission_pct: 0.0
-        commission_min: 1.0
-        commission_max: 1.0
-        flat_fee: 1.0           # EUR 1 flat handling fee per US order
-        market_data_fee: "Free real-time on core; some exchanges paywalled."
-        dividend_fee: "No explicit handling fee on most US names."
-        other_costs: "AutoFX 0.25% EUR->USD per leg; EUR 2.50/yr exchange connectivity."
-        as_of: "2026-06"
-        source: "DEGIRO fee schedule (US flat EUR 1)."
-        approx: false
-      IE:
+      AT:
         commission_pct: 0.0
         commission_min: 3.9
         commission_max: null
-        flat_fee: 3.9           # EUR ~3.90 core EU
-        market_data_fee: "Free real-time on core EU."
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
         dividend_fee: "No explicit handling fee."
-        other_costs: "EUR 2.50/yr exchange connectivity."
-        as_of: "2026-06"
-        source: "DEGIRO core EU flat (Euronext Dublin)."
-        approx: true
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Vienna Stock Exchange."
+        approx: false
+      AU:
+        commission_pct: 0.0
+        commission_min: 5
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 5 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Australian Stock Exchange."
+        approx: false
+      BE:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Euronext Brussels."
+        approx: false
+      CA:
+        commission_pct: 0.0
+        commission_min: 1
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 1 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Toronto (TSX/TSXV) / CSE."
+        approx: false
+      CH:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Swiss Stock Exchange."
+        approx: false
+      DE:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - XETRA."
+        approx: false
+      DK:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Nasdaq Copenhagen."
+        approx: false
+      ES:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Bolsa de Madrid."
+        approx: false
+      FI:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Nasdaq Helsinki."
+        approx: false
+      FR:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Euronext Paris."
+        approx: false
+      HK:
+        commission_pct: 0.0
+        commission_min: 5
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 5 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Hong Kong Stock Exchange."
+        approx: false
+      HU:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        sell_to_close_only: true
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange. SELL-TO-CLOSE ONLY on this exchange - it cannot be bought."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Budapest Stock Exchange."
+        approx: false
+      IE:
+        commission_pct: 0.0
+        commission_min: 2
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 2 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. No connectivity fee on the Irish Stock Exchange (exempt by the schedule)."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Euronext Dublin."
+        approx: false
+      IT:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Euronext Milan."
+        approx: false
+      JP:
+        commission_pct: 0.0
+        commission_min: 5
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 5 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Tokyo Stock Exchange."
+        approx: false
+      NL:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Euronext Amsterdam."
+        approx: false
+      NO:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Oslo Bors."
+        approx: false
+      PL:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Warsaw Stock Exchange."
+        approx: false
       PT:
         commission_pct: 0.0
         commission_min: 3.9
         commission_max: null
-        flat_fee: 3.9
-        market_data_fee: "Free real-time on Euronext core."
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
         dividend_fee: "No explicit handling fee."
-        other_costs: "EUR 2.50/yr exchange connectivity."
-        as_of: "2026-06"
-        source: "DEGIRO Euronext Lisbon flat."
-        approx: true
-      HK:
-        commission_pct: 0.05
-        commission_min: 10.0
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. EUR-denominated: no AutoFX leg. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Euronext Lisbon."
+        approx: false
+      SE:
+        commission_pct: 0.0
+        commission_min: 3.9
         commission_max: null
-        flat_fee: 5.0           # EUR ~5 base + variable on HK
-        market_data_fee: "HK data paywalled."
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
         dividend_fee: "No explicit handling fee."
-        other_costs: "AutoFX 0.25% EUR->HKD; HK stamp duty 0.1%/side; EUR 2.50/yr connectivity."
-        as_of: "2026-06"
-        source: "DEGIRO HK (estimate; tariff varies)."
-        approx: true
-      JP:
-        commission_pct: 0.05
-        commission_min: 10.0
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Nasdaq Stockholm."
+        approx: false
+      SG:
+        commission_pct: 0.0
+        commission_min: 5
         commission_max: null
-        flat_fee: 5.0
-        market_data_fee: "JP data paywalled."
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
         dividend_fee: "No explicit handling fee."
-        other_costs: "AutoFX 0.25% EUR->JPY; EUR 2.50/yr connectivity."
-        as_of: "2026-06"
-        source: "DEGIRO Japan (estimate; tariff varies)."
-        approx: true
-      # NOTE: DEGIRO does not offer Taiwan (TW) or China A-shares (CN_SZ) to retail.
-
+        other_costs: "EUR 5 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - Singapore Stock Exchange."
+        approx: false
+      UK:
+        commission_pct: 0.0
+        commission_min: 3.9
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 3.9 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - London Stock Exchange."
+        approx: false
+      US:
+        commission_pct: 0.0
+        commission_min: 1
+        commission_max: null
+        flat_fee: 1.0
+        market_data_fee: "Free real-time on core venues; some exchanges paywalled."
+        dividend_fee: "No explicit handling fee."
+        other_costs: "EUR 1 commission + EUR 1.00 handling. AutoFX 0.25% per conversion applies. EUR 2.50/yr connectivity per non-home exchange."
+        as_of: "2026-08"
+        source: "DEGIRO Fee Schedule PDF, Rates from 01-01-2026 - NASDAQ / NYSE / NYSE Arca."
+        approx: false
+      # The list above is EXHAUSTIVE: DEGIRO's Fee Schedule enumerates every exchange it
+      # offers, so a region missing here is genuinely NOT AVAILABLE, not merely unresearched.
+      # Absent by that schedule: BR, CN, ID, IL, IN, KR, MX, SA, TW.
   # ---------------------------------------------------------------------------
   TradeRepublic:
+    not_offered: "TW, HK, JP, CN_SZ"
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, DE, DK, ES, FI, FR, HU, ID, IL, IN, IT, KR, MX, NL, NO, PL, SA, SE, SG, UK"
+    coverage_note: "Asia sourced from the file's existing review; the EU venues have never been checked one by one, and Trade Republic routes through LS Exchange / Xetra rather than each local venue, so local-venue access is a real open question."
     name: "Trade Republic"
     profile: "EU mobile-first; flat EUR 1/order; US + core EU only."
     base_currency: "EUR"
@@ -233,7 +818,7 @@ brokers:
     markets:
       US:
         commission_pct: 0.0
-        commission_min: 1.0
+        commission_min: 0.0
         commission_max: 1.0
         flat_fee: 1.0           # EUR 1 external settlement fee
         market_data_fee: "Free in-app."
@@ -244,7 +829,7 @@ brokers:
         approx: false
       IE:
         commission_pct: 0.0
-        commission_min: 1.0
+        commission_min: 0.0
         commission_max: 1.0
         flat_fee: 1.0
         market_data_fee: "Free in-app."
@@ -255,7 +840,7 @@ brokers:
         approx: true
       PT:
         commission_pct: 0.0
-        commission_min: 1.0
+        commission_min: 0.0
         commission_max: 1.0
         flat_fee: 1.0
         market_data_fee: "Free in-app."
@@ -268,6 +853,9 @@ brokers:
 
   # ---------------------------------------------------------------------------
   Robinhood:
+    not_offered: "AT, AU, BE, BR, CA, CH, CN_SZ, DE, DK, ES, FI, FR, HK, HU, ID, IE, IL, IN, IT, JP, KR, MX, NL, NO, PL, PT, SA, SE, SG, TW, UK"
+    coverage_unknown: ""
+    coverage_note: "SOURCED - Robinhood offers no non-US market at all, so there is nothing unknown."
     name: "Robinhood"
     profile: "US-only commission-free; no foreign exchanges."
     base_currency: "USD"
@@ -289,6 +877,9 @@ brokers:
 
   # ---------------------------------------------------------------------------
   Revolut:
+    not_offered: "TW, HK, JP, CN_SZ"
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, DE, DK, ES, FI, FR, HU, ID, IL, IN, IT, KR, MX, NL, NO, PL, PT, SA, SE, SG, UK"
+    coverage_note: "Asia sourced; PT access was already flagged unreliable rather than absent, so it is unknown, not a no."
     name: "Revolut"
     profile: "EU app; US equities + limited EU; commission tied to plan tier."
     base_currency: "EUR"
@@ -321,6 +912,9 @@ brokers:
 
   # ---------------------------------------------------------------------------
   XTB:
+    not_offered: "TW, HK, JP, CN_SZ"
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, DE, DK, ES, FI, FR, HU, ID, IL, IN, IT, KR, MX, NL, NO, PL, SA, SE, SG, UK"
+    coverage_note: "Asia sourced (CFD-only on indices, out of scope). The EU venue list has not been checked market by market."
     name: "XTB"
     profile: "EU broker; commission-free stocks under EUR 100k/mo turnover; US + EU."
     base_currency: "EUR"
@@ -364,6 +958,9 @@ brokers:
 
   # ---------------------------------------------------------------------------
   BancoBIG:
+    not_offered: "TW, HK, JP, CN_SZ"
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, DE, DK, ES, FI, FR, HU, ID, IL, IN, IT, KR, MX, NL, NO, PL, SA, SE, SG, UK"
+    coverage_note: "Asia sourced. EU coverage beyond Euronext Lisbon has not been checked."
     name: "Banco BIG"
     profile: "PT bank-broker; strong PT/Euronext, limited foreign-market access."
     base_currency: "EUR"
@@ -407,6 +1004,9 @@ brokers:
 
   # ---------------------------------------------------------------------------
   BancoCTT:
+    not_offered: "US, IE, TW, HK, JP, CN_SZ"
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, DE, DK, ES, FI, FR, HU, ID, IL, IN, IT, KR, MX, NL, NO, PL, SA, SE, SG, UK"
+    coverage_note: "SOURCED - essentially Euronext Lisbon only."
     name: "Banco CTT"
     profile: "PT retail bank; very PT-centric, minimal foreign-market reach."
     base_currency: "EUR"
@@ -428,6 +1028,9 @@ brokers:
 
   # ---------------------------------------------------------------------------
   BancoBEST:
+    not_offered: "TW, HK, JP, CN_SZ"
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, DE, DK, ES, FI, FR, HU, ID, IL, IN, IT, KR, MX, NL, NO, PL, SA, SE, SG, UK"
+    coverage_note: "Asia sourced. EU coverage beyond the three listed has not been checked."
     name: "Banco BEST"
     profile: "PT online bank; PT + some US/EU; Asia not offered."
     base_currency: "EUR"
@@ -475,6 +1078,9 @@ brokers:
   # cost matrix until a human fills the tariffs in from the live fee page. The
   # statutory fields are filled because they come from law, not from a tariff.
   Bankinter:
+    not_offered: ""
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, CN_SZ, DE, DK, ES, FI, FR, HK, HU, ID, IE, IL, IN, IT, JP, KR, MX, NL, NO, PL, PT, SA, SE, SG, TW, UK, US"
+    coverage_note: "Tariffs never confirmed at all (verified: false), so every market is unknown."
     name: "Bankinter"
     profile: "Portuguese/Spanish retail bank brokerage; branch-grade service, bank pricing."
     base_currency: "EUR"
@@ -499,6 +1105,9 @@ brokers:
     markets: {}
 
   eToro:
+    not_offered: ""
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, CN_SZ, DE, DK, ES, FI, FR, HK, HU, ID, IE, IL, IN, IT, JP, KR, MX, NL, NO, PL, PT, SA, SE, SG, TW, UK, US"
+    coverage_note: "Tariffs never confirmed at all (verified: false), so every market is unknown."
     name: "eToro"
     profile: "Social/CFD-first platform; real-stock offering with FX-heavy USD base."
     base_currency: "USD"
@@ -523,6 +1132,9 @@ brokers:
     markets: {}
 
   Trading212:
+    not_offered: "TW, HK, JP, CN_SZ"
+    coverage_unknown: "AT, AU, BE, BR, CA, CH, DK, ES, FI, HU, ID, IE, IL, IN, IT, KR, MX, NO, PL, SA, SE, SG"
+    coverage_note: "Asia sourced. The remaining venues are not in the help centre's published list, but that list is not stated to be exhaustive."
     name: "Trading 212"
     profile: "Zero-commission retail broker; the FX conversion fee IS the price."
     base_currency: "EUR"
@@ -617,17 +1229,52 @@ brokers:
       # NOTE: no Asian venues. TW/HK/JP/CN_SZ are not offered, so those markets are
       # absent rather than zero-cost — the comparator must not read the gap as free.
 
+# =============================================================================
+# markets_meta — one entry per REGION THE UNIVERSE ACTUALLY HOLDS.
+#
+# The list is not a wish list: it is the 32 regions the weekly prefilter reported coverage
+# for on 2026-08-17. Before this refresh the file described 11 of them, so 21 regions of the
+# pool — including every name in AU (200 candidates), JP (122), CA (62), IN (54) and CH (24)
+# — had no cost comparison at all, and the comparator answered "no broker offers this"
+# because the market key simply did not exist.
+#
+# `yahoo_suffix` is the ticker suffix the pipeline itself uses, so a report can look its own
+# market up without a second mapping table. Deliberately NOT stored here: the pool pass/total
+# counts. Those live in `_prefilter_stats.json`, are rewritten every Monday, and copying them
+# into a reference file would only create a number that silently ages.
+# =============================================================================
 markets_meta:
-  US:    { label: "NYSE / Nasdaq (US)", currency: "USD", region: "US" }
-  IE:    { label: "Euronext Dublin / ISEQ (Ireland)", currency: "EUR", region: "IE" }
-  PT:    { label: "Euronext Lisbon (Portugal)", currency: "EUR", region: "PT" }
-  TW:    { label: "Taiwan Stock Exchange", currency: "TWD", region: "TW" }
-  HK:    { label: "Hong Kong Stock Exchange", currency: "HKD", region: "HK" }
-  JP:    { label: "Tokyo Stock Exchange (Japan)", currency: "JPY", region: "JP" }
-  CN_SZ: { label: "Shenzhen Stock Exchange", currency: "CNY", region: "CN" }
-  # v4.3 wave 4.5 — the four EU venues most of the universe actually trades on were
-  # missing entirely, so `.AS/.PA/.DE/.L` names had no cost comparison at all.
-  NL:    { label: "Euronext Amsterdam (.AS)", currency: "EUR", region: "NL" }
-  FR:    { label: "Euronext Paris (.PA)", currency: "EUR", region: "FR" }
-  DE:    { label: "Xetra (.DE)", currency: "EUR", region: "DE" }
-  UK:    { label: "London Stock Exchange (.L)", currency: "GBP", region: "UK" }
+  US:    { label: "NYSE / Nasdaq (US)", currency: "USD", region: "US", yahoo_suffix: "" }
+  IE:    { label: "Euronext Dublin / ISEQ (Ireland)", currency: "EUR", region: "IE", yahoo_suffix: ".IR" }
+  PT:    { label: "Euronext Lisbon (Portugal)", currency: "EUR", region: "PT", yahoo_suffix: ".LS" }
+  TW:    { label: "Taiwan Stock Exchange", currency: "TWD", region: "TW", yahoo_suffix: ".TW" }
+  HK:    { label: "Hong Kong Stock Exchange", currency: "HKD", region: "HK", yahoo_suffix: ".HK" }
+  JP:    { label: "Tokyo Stock Exchange (Japan)", currency: "JPY", region: "JP", yahoo_suffix: ".T" }
+  CN_SZ: { label: "Shenzhen / Shanghai via Stock Connect", currency: "CNY", region: "CN", yahoo_suffix: ".SS" }
+  # v4.3 wave 4.5 — the four EU venues most of the universe trades on.
+  NL:    { label: "Euronext Amsterdam", currency: "EUR", region: "NL", yahoo_suffix: ".AS" }
+  FR:    { label: "Euronext Paris", currency: "EUR", region: "FR", yahoo_suffix: ".PA" }
+  DE:    { label: "Xetra (Deutsche Boerse)", currency: "EUR", region: "DE", yahoo_suffix: ".DE" }
+  UK:    { label: "London Stock Exchange", currency: "GBP", region: "UK", yahoo_suffix: ".L" }
+  # 2026-08-17 — the 21 regions of the pool that had no market key at all until now.
+  AT:    { label: "Wiener Boerse (Vienna)", currency: "EUR", region: "AT", yahoo_suffix: ".VI" }
+  AU:    { label: "Australian Securities Exchange", currency: "AUD", region: "AU", yahoo_suffix: ".AX" }
+  BE:    { label: "Euronext Brussels", currency: "EUR", region: "BE", yahoo_suffix: ".BR" }
+  BR:    { label: "B3 Sao Paulo", currency: "BRL", region: "BR", yahoo_suffix: ".SA" }
+  CA:    { label: "Toronto (TSX / TSXV)", currency: "CAD", region: "CA", yahoo_suffix: ".TO" }
+  CH:    { label: "SIX Swiss Exchange", currency: "CHF", region: "CH", yahoo_suffix: ".SW" }
+  DK:    { label: "Nasdaq Copenhagen", currency: "DKK", region: "DK", yahoo_suffix: ".CO" }
+  ES:    { label: "BME Bolsa de Madrid", currency: "EUR", region: "ES", yahoo_suffix: ".MC" }
+  FI:    { label: "Nasdaq Helsinki", currency: "EUR", region: "FI", yahoo_suffix: ".HE" }
+  HU:    { label: "Budapest Stock Exchange", currency: "HUF", region: "HU", yahoo_suffix: ".BD" }
+  ID:    { label: "Indonesia Stock Exchange (IDX)", currency: "IDR", region: "ID", yahoo_suffix: ".JK" }
+  IL:    { label: "Tel Aviv Stock Exchange", currency: "ILS", region: "IL", yahoo_suffix: ".TA" }
+  IN:    { label: "NSE / BSE India", currency: "INR", region: "IN", yahoo_suffix: ".NS" }
+  IT:    { label: "Euronext Milan", currency: "EUR", region: "IT", yahoo_suffix: ".MI" }
+  KR:    { label: "Korea Exchange (KRX)", currency: "KRW", region: "KR", yahoo_suffix: ".KS" }
+  MX:    { label: "Bolsa Mexicana de Valores", currency: "MXN", region: "MX", yahoo_suffix: ".MX" }
+  NO:    { label: "Oslo Bors", currency: "NOK", region: "NO", yahoo_suffix: ".OL" }
+  PL:    { label: "GPW Warsaw", currency: "PLN", region: "PL", yahoo_suffix: ".WA" }
+  SA:    { label: "Tadawul (Saudi Arabia)", currency: "SAR", region: "SA", yahoo_suffix: ".SR" }
+  SE:    { label: "Nasdaq Stockholm", currency: "SEK", region: "SE", yahoo_suffix: ".ST" }
+  SG:    { label: "Singapore Exchange", currency: "SGD", region: "SG", yahoo_suffix: ".SI" }
