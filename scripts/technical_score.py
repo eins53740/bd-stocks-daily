@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import types
 import warnings
@@ -118,7 +119,24 @@ def _import_bd_indicators():
     if _BD_INDICATORS is not None:
         return _BD_INDICATORS
 
-    bd_parent = Path(r"C:\Github\BD\Finance")
+    # RESOLVED by probing for the package itself, not hardcoded (2026-08-17). The layouts
+    # genuinely differ: the laptop keeps BD_Finance under C:\Github\BD\Finance\, vmhost1 under
+    # D:\Github\BD\ -- and vmhost1 has no C:\Github at all. With a single C: constant the five
+    # imports below raised ModuleNotFoundError on vmhost1, which is the machine that has run
+    # the pipeline since the cutover, so PHASE 3.5 (technical score + GO/NO-GO) was failing
+    # there in production. Found by running this skill's suite on vmhost1, not on the laptop.
+    #
+    # The probe is for BD_Finance/technical/rsi.py, i.e. the thing actually imported -- a
+    # directory that merely exists proves nothing.
+    _parents = (
+        Path(os.environ["BD_FINANCE_PARENT"]) if os.environ.get("BD_FINANCE_PARENT") else None,
+        Path(r"C:\Github\BD\Finance"),
+        Path(r"D:\Github\BD"),
+    )
+    bd_parent = next(
+        (p for p in _parents if p and (p / "BD_Finance" / "technical" / "rsi.py").exists()),
+        Path(r"C:\Github\BD\Finance"),
+    )
     if str(bd_parent) not in sys.path:
         sys.path.insert(0, str(bd_parent))
 

@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -66,7 +67,20 @@ except Exception:  # pragma: no cover - instrumentation must never block the pip
     node_timing = None
 
 OUT_DIR = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
-CWD = Path(r"C:\Github\BD\Finance\BD_Finance")
+
+# The working directory every node is launched from -- it is where api_keys.txt is found.
+# RESOLVED, not hardcoded: vmhost1 has no C:\Github at all (its repos live on D:), and with a
+# single C: constant here subprocess.run() failed on EVERY step there, making this orchestrator
+# a no-op on the one machine that actually runs the pipeline. Caught by run_daily's own tests
+# executing on vmhost1, which is the entire reason for running the suite on both machines.
+# Order matches scripts/skills_root.py: explicit env var, then the known roots.
+_CWD_CANDIDATES = (
+    Path(os.environ["BD_FINANCE_DIR"]) if os.environ.get("BD_FINANCE_DIR") else None,
+    Path(r"C:\Github\BD\Finance\BD_Finance"),
+    Path(r"D:\Github\BD\BD_Finance"),
+)
+CWD = next((p for p in _CWD_CANDIDATES if p and p.is_dir()),
+           Path(r"C:\Github\BD\Finance\BD_Finance"))
 
 # `required` is the whole point of the table: it says which failures make the REST of the
 # stage meaningless. valuation_bands reads the file financial_history writes, so 2.2 failing

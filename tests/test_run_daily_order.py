@@ -198,6 +198,14 @@ def test_a_flag_with_an_empty_value_is_dropped_as_a_PAIR():
     assert rd._clean_args(["pos.json", "--update"]) == ["pos.json", "--update"]
 
 
+def test_the_launch_directory_resolves_on_this_machine():
+    """Every node is launched with cwd=CWD, so a CWD that does not exist here fails EVERY
+    step. It was a single C: constant, and vmhost1 -- the machine that runs the pipeline --
+    has no C:\\Github at all, so the orchestrator was a no-op there. Found by this file
+    running on vmhost1, which is why the suite runs on both machines."""
+    assert rd.CWD.is_dir(), f"launch directory does not exist: {rd.CWD}"
+
+
 @pytest.mark.parametrize("stage", ["pre", "mid", "post"])
 def test_every_step_names_a_script_that_exists(stage):
     """A typo'd module name is a node that silently never contributes."""
