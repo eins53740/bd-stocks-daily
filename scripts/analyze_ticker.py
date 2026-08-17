@@ -37,6 +37,7 @@ import json
 import math
 import statistics
 import sys
+import time
 import warnings
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1065,16 +1066,69 @@ def compute_price_returns(hist) -> dict:
 
 
 # ------------------------- Main -------------------------
+class ThrottleSuspected(RuntimeError):
+    """Every core yfinance fetch came back empty — almost certainly a 429.
+
+    A distinct class rather than a bare RuntimeError because it crosses two process
+    boundaries as `error_type` (main()'s JSON for subprocess callers, and
+    run_prefilter's own except clause for the in-process path), which lets the caller
+    tell "this ticker has no data" from "we were throttled". They deserve opposite
+    treatment: the first is a fact about the ticker, the second is a fact about us.
+    """
+
+
+CORE_MISSING_LIMIT = 3
+
+
+def core_fetches_missing(info, fs, bs, hist) -> int:
+    """How many of the four core yfinance fetches came back empty (0-4).
+
+    One definition, used by both the retry loop and the gate that raises. When the two
+    computed it separately they could disagree, and the disagreement would be invisible:
+    the loop would stop retrying while the gate still rejected the ticker.
+    """
+    return sum([
+        not info,
+        fs is None or getattr(fs, "empty", True),
+        bs is None or getattr(bs, "empty", True),
+        hist is None or getattr(hist, "empty", True),
+    ])
+
+
+# One retry, then give up. Measured on 2026-08-17: the prefilter on vmhost1 rejected 76
+# `.AX` names with 4/4 empty fetches, and all 16 retested from another IP returned
+# complete data (price, AUD, market cap, history) on the FIRST call — so the failure is
+# transient and IP-scoped, not a property of the ticker or the exchange.
+# The cost is bounded on purpose: every retry is paid only for a ticker that would
+# otherwise have been discarded, but at ~76 throttled names a longer ladder would add
+# more than the prefilter's 2h cap can absorb. If the cap starts binding, the answer is
+# to stop the jobs competing for one IP's budget, not to shorten this.
+THROTTLE_ATTEMPTS = 2
+THROTTLE_BACKOFF_S = 15
+
+
 def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     log(f"Analyzing {ticker} (mode={mode})...")
 
-    tk = yf.Ticker(ticker)
-    # Use short calls with generous fallbacks
-    info = safe(lambda: tk.info, default={}) or {}
-    bs = safe(lambda: tk.balance_sheet)
-    fs = safe(lambda: tk.financials)
-    cf = safe(lambda: tk.cashflow)
-    hist = safe(lambda: tk.history(period="5y"), default=None)
+    # A throttled yfinance answers with an EMPTY FRAME, not an error, so `safe()` cannot
+    # see it and each fetch below merely looks "missing". Retrying is what separates a
+    # throttle from a dead symbol. A fresh yf.Ticker per attempt is required: the old one
+    # caches the empty frames it already received and would replay them for ever.
+    for attempt in range(1, THROTTLE_ATTEMPTS + 1):
+        tk = yf.Ticker(ticker)
+        # Use short calls with generous fallbacks
+        info = safe(lambda: tk.info, default={}) or {}
+        bs = safe(lambda: tk.balance_sheet)
+        fs = safe(lambda: tk.financials)
+        cf = safe(lambda: tk.cashflow)
+        hist = safe(lambda: tk.history(period="5y"), default=None)
+
+        core_missing = core_fetches_missing(info, fs, bs, hist)
+        if core_missing < CORE_MISSING_LIMIT or attempt == THROTTLE_ATTEMPTS:
+            break
+        log(f"  {ticker}: {core_missing}/4 core fetches empty — throttle? retrying in "
+            f"{THROTTLE_BACKOFF_S}s (attempt {attempt}/{THROTTLE_ATTEMPTS})")
+        time.sleep(THROTTLE_BACKOFF_S)
 
     warnings_ = []
     if not info:
@@ -1097,16 +1151,14 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     # Raising here is the correct outcome and is already handled downstream:
     # main() turns it into {"error": ...} + exit 1, and run_prefilter.classify()
     # routes "error" to the RETRY bucket instead of evicting the ticker.
-    core_missing = sum([
-        not info,
-        fs is None or getattr(fs, "empty", True),
-        bs is None or getattr(bs, "empty", True),
-        hist is None or getattr(hist, "empty", True),
-    ])
-    if core_missing >= 3:
-        raise RuntimeError(
+    # `core_missing` comes from the retry loop above — by the time we are here the
+    # fetches have already been retried, so reaching this line means the blackout
+    # survived a backoff and is worth reporting rather than retrying again.
+    if core_missing >= CORE_MISSING_LIMIT:
+        raise ThrottleSuspected(
             f"insufficient yfinance data for {ticker} "
-            f"({core_missing}/4 core fetches empty — rate-limited?)"
+            f"({core_missing}/4 core fetches empty after {THROTTLE_ATTEMPTS} attempts "
+            f"— rate-limited?)"
         )
 
     # --- Basics ---
