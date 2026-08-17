@@ -13,6 +13,7 @@ awkward bits: the threats cell that opens with the word "threat", the header row
 first cell is empty, and the mermaid block that opens with a YAML config preamble.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -534,6 +535,15 @@ class TestFooterWatermark:
     def test_host_and_user_are_both_stamped(self):
         html = rr.build_footer({}, {})
         assert "host:" in html and "user:" in html
+
+    def test_the_skill_md_h1_carries_no_version_at_all(self):
+        """D1, 2026-08-17: the H1 said "v4.2" while version.py said 4.3.1 -- the SECOND time
+        it drifted. A version in prose has no verifier, so the H1 stopped carrying one; this
+        test is the verifier. Fix by deleting the version from the heading, never by editing
+        the number, or the same drift returns on the next bump."""
+        h1 = next(ln for ln in (SCRIPTS.parent / "SKILL.md").read_text(
+            encoding="utf-8").splitlines() if ln.startswith("# "))
+        assert not re.search(r"\bv\d+\.\d+", h1), f"version string back in the H1: {h1!r}"
 
 
 # --- the cumulative index (2.6) ---------------------------------------------

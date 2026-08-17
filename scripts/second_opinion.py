@@ -23,6 +23,7 @@ import argparse
 import json
 import statistics
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -200,16 +201,40 @@ def build_prompt(evidence: dict) -> str:
             f"EVIDENCE (JSON):\n{json.dumps(evidence, ensure_ascii=False, default=str)}")
 
 
+# The three personas are INDEPENDENT: same evidence prompt, different system message, no
+# shared state, and none of them reads another's answer -- that independence is the point of
+# the panel (spec 10b: "não eco"). So they have no reason to be serialised, and A2 (2026-08-17)
+# stopped serialising them.
+#
+# This is safe here for a reason that does NOT generalise to the rest of the pipeline. The
+# 2026-08-15 concurrency incident and SKILL.md's "Phase 2 — sequential, to avoid yfinance rate
+# limits" are about YFINANCE, which throttles per IP and answers a throttled request with an
+# empty frame rather than an error. The panel talks to Groq/Gemini, three small JSON calls, and
+# a refused one surfaces as an unavailable card instead of as silently missing data. Do not
+# read this as a licence to parallelise the analysis phases.
+#
+# Set to 1 to serialise again -- useful if a provider starts refusing concurrent requests.
+PANEL_MAX_WORKERS = 3
+
+
 def run_panel(evidence: dict, keys: dict | None = None) -> list:
     prompt = build_prompt(evidence)
-    cards = []
-    for p in PERSONAS:
+
+    def ask(p: dict) -> dict:
         try:
             result = llm_client.complete_json(prompt, p["system"], keys=keys)
         except Exception as e:  # llm_client never raises, but be belt-and-braces
             result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        cards.append(validate_card(p["name"], result))
-    return cards
+        return validate_card(p["name"], result)
+
+    workers = max(1, min(PANEL_MAX_WORKERS, len(PERSONAS)))
+    if workers == 1:
+        return [ask(p) for p in PERSONAS]
+    # executor.map yields in INPUT order, not completion order. That matters: the card list
+    # is the report's persona order and consensus() indexes into it, so a completion-ordered
+    # result would shuffle the panel differently on every run.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(ask, PERSONAS))
 
 
 def run(analysis_json: str) -> dict:

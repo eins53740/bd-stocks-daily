@@ -1033,10 +1033,10 @@ def render_markdown_html(md: str) -> str:
     return f"<pre style='white-space:pre-wrap;font-family:monospace;font-size:12px;'>{html.escape(plain)}</pre>"
 
 
-def load_report_markdown(row: dict) -> tuple[str, str]:
+def load_report_markdown(row: dict, out_dir: Path = OUT_DIR) -> tuple[str, str]:
     """Return (filename, markdown_content). Empty content if file missing."""
     fn = report_filename(row)
-    path = OUT_DIR / f"{fn}.md"
+    path = Path(out_dir) / f"{fn}.md"
     if not path.exists():
         return fn, ""
     try:
@@ -1046,9 +1046,18 @@ def load_report_markdown(row: dict) -> tuple[str, str]:
         return fn, ""
 
 
-def build_full_report_html(row: dict) -> str:
-    """Render the full markdown report for one ticker as an HTML section."""
-    fn, md = load_report_markdown(row)
+def build_full_report_html(row: dict, out_dir: Path = OUT_DIR) -> str:
+    """Render the full markdown report for one ticker as an HTML section.
+
+    NOT in the digest body since v4.3 (E1) -- see build_cover_block_html for what replaced
+    it and why. It survives as build_cover_block_html's fallback for reports rendered before
+    the cover existed.
+
+    `out_dir` is threaded through rather than read off the module constant: without it the
+    fallback path silently read the LIVE report directory while its caller was pointed at a
+    fixture, which is exactly how a fallback ends up untested.
+    """
+    fn, md = load_report_markdown(row, out_dir)
     score = float(row.get("score", 0) or 0)
     _emoji, _tag, _label, color = verdict_style(row.get("verdict", ""), score)
     link = obsidian_link(fn)
@@ -1066,6 +1075,157 @@ def build_full_report_html(row: dict) -> str:
         f"<section style='margin:20px 0;padding:15px;border:1px solid #e0e0e0;"
         f"border-radius:6px;background:#fff;'>{header}{body}</section>"
     )
+
+
+# --- The cover, not the whole report (v4.3 E1/E2) ----------------------------
+#
+# MEASURED 2026-08-17 on the canonical 1-deep + 2-screen day (2026-08-14): the digest body
+# was 136,413 B, and the three inlined markdown reports were 100,989 B of it -- 74%. Gmail
+# clips a message above ~102,400 B behind "View entire message", so the single largest
+# thing in the mail was also the thing being truncated. Worse, it was the LEAST useful
+# rendering of it: markdown inlined through python-markdown loses the cover, the charts,
+# the Sankey, the SWOT and the star ratings, all of which exist only in the .html that
+# already travels as an attachment.
+#
+# So the body now carries each report's ONE-PAGE COVER -- the verdict band plus the six
+# key-financials groups, ~3.9 KB per ticker -- and the deep name's Sankey as a real image.
+# Dropping the markdown alone takes the body to ~35 KB; the covers put it near 47 KB, still
+# less than half the clip. The inline dashboard (14 KB) therefore STAYS: my own E1 proposal
+# had it removed to buy headroom that the measurement says is not needed, and removing
+# content for no benefit is not a saving.
+COVER_RE = re.compile(r'<section class="cover" id="cover">.*?</section>', re.S)
+
+# Inline styles keyed by the cover's own class names. The report's stylesheet is NOT in the
+# mail, and it could not be: report_template.html lays the cover out with CSS grid, which
+# Outlook renders with the Word engine and ignores completely. Everything here is inline and
+# block-level, so it survives Gmail, Yahoo and Outlook; `inline-block` is the only
+# progressive bit, and where it is ignored the groups simply stack vertically.
+COVER_STYLES = {
+    "cover": ("margin:16px 0;padding:14px 16px;border:1px solid #d5e3ef;"
+              "border-radius:6px;background:#fbfdff;"),
+    "cv-verb": "font-size:20px;font-weight:700;letter-spacing:.5px;color:#1f77b4;",
+    "cv-tk": "font-size:15px;font-weight:600;color:#222;margin:2px 0 10px 0;",
+    "sub": "font-weight:400;color:#777;font-size:12px;",
+    "cv-facts": "margin:0 0 10px 0;",
+    "cv-fact": ("display:inline-block;vertical-align:top;min-width:145px;"
+                "margin:0 14px 8px 0;"),
+    "k": "font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#8a8a8a;",
+    "v": "font-size:14px;font-weight:600;color:#222;",
+    "cv-stars": "font-size:12px;color:#555;margin:0 0 10px 0;",
+    "cv-line": ("font-size:13px;line-height:1.5;margin:6px 0;padding:6px 10px;"
+                "border-left:3px solid #ccc;background:#ffffff;"),
+    "cv-bull": "border-left-color:#2ca02c;",
+    "cv-bear": "border-left-color:#d62728;",
+    "cv-h": "font-size:13px;color:#1f77b4;margin:14px 0 6px 0;",
+    "cv-grp": ("display:inline-block;vertical-align:top;min-width:165px;"
+               "margin:0 18px 10px 0;"),
+    "cv-m": "font-size:12px;color:#444;",
+}
+
+_CLASS_TAG_RE = re.compile(r'<(\w+)((?:[^>]*?)\bclass="([^"]*)"(?:[^>]*?))>')
+
+
+def inline_cover_styles(fragment: str, styles: dict[str, str] | None = None) -> str:
+    """Add `style="..."` to every element whose class appears in `styles`.
+
+    Classes are applied in the order they are written on the element, so
+    `class="cv-line cv-bear"` puts the bear border-colour after the base rule and wins --
+    the same cascade the report's own stylesheet relies on. An element already carrying a
+    style attribute is left alone rather than having two `style=`s emitted.
+    """
+    table = COVER_STYLES if styles is None else styles
+
+    def repl(m: re.Match) -> str:
+        tag, attrs, classes = m.group(1), m.group(2), m.group(3)
+        if "style=" in attrs:
+            return m.group(0)
+        css = "".join(table[c] for c in classes.split() if c in table)
+        if not css:
+            return m.group(0)
+        return f'<{tag}{attrs} style="{css}">'
+
+    return _CLASS_TAG_RE.sub(repl, fragment)
+
+
+def report_cover_html(row: dict, out_dir: Path = OUT_DIR) -> str:
+    """The `<section class="cover">` block from this row's rendered report, email-styled.
+
+    "" when the report HTML is missing or predates the cover (v4.3 wave 2.4, 2026-08-15) --
+    the caller then falls back, rather than this printing an apology into the digest.
+    """
+    path = Path(out_dir) / f"{report_filename(row)}.html"
+    if not path.exists():
+        log(f"cover: {path.name} not found")
+        return ""
+    try:
+        m = COVER_RE.search(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        log(f"cover: {path.name} unreadable (non-fatal): {exc}")
+        return ""
+    if not m:
+        log(f"cover: no cover section in {path.name} (pre-v4.3 report?)")
+        return ""
+    return inline_cover_styles(m.group(0))
+
+
+def sankey_img_html(row: dict, out_dir: Path = OUT_DIR) -> str:
+    """An <img> for this row's money-engine Sankey, or "" when there is no PNG.
+
+    E2: the markdown carries the diagram as a ```mermaid `sankey-beta` fence, and
+    python-markdown renders a fence as literal `<pre><code>` -- so what reached the inbox
+    was the diagram's SOURCE CODE. mermaid_render.py already writes the PNG for the HTML
+    report, so the mail can simply point at it; inline_image_refs() rewrites this src to a
+    cid: reference and attaches the bytes, exactly as it does for the charts.
+    """
+    png = Path(out_dir) / "IMG" / f"{row.get('date', '')}_{row.get('ticker', '')}_sankey.png"
+    if not png.exists():
+        return ""
+    return (f'<h3 style="font-size:13px;color:#1f77b4;margin:14px 0 6px 0;">Money engine</h3>'
+            f'<img src="{html.escape(png.as_posix())}" alt="money engine (Sankey)" '
+            f'style="max-width:100%;height:auto;">')
+
+
+def build_cover_block_html(row: dict, out_dir: Path = OUT_DIR) -> str:
+    """One ticker's contribution to the digest body: cover + Sankey + a pointer.
+
+    Falls back to the inlined markdown when there is no cover, so a report rendered by an
+    older version still reaches the reader. That fallback is the reason
+    build_full_report_html survives.
+    """
+    fn = report_filename(row)
+    cover = report_cover_html(row, out_dir)
+    if not cover:
+        return build_full_report_html(row, out_dir)
+    score = float(row.get("score", 0) or 0)
+    _emoji, _tag, _label, color = verdict_style(row.get("verdict", ""), score)
+    header = (
+        f"<h2 style='color:{color};border-bottom:2px solid {color};padding-bottom:4px;"
+        f"margin-top:30px;'>{html.escape(row['ticker'])} — cover</h2>"
+        f"<p style='font-size:12px;color:#888;margin:0 0 10px 0;'>"
+        f"<a href='{obsidian_link(fn)}' style='color:#1f77b4;'>Open in Obsidian</a>"
+        f" · full report: {html.escape(fn)}.html</p>"
+    )
+    return (f"<section style='margin:20px 0;'>{header}{cover}"
+            f"{sankey_img_html(row, out_dir)}</section>")
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def cover_text(row: dict, out_dir: Path = OUT_DIR) -> str:
+    """The cover as plain text for the text/plain twin.
+
+    html.unescape AFTER stripping tags, not before: stripping first and unescaping never
+    would leave `&euro;40.82B` in the text part, which is the same entity mistake that once
+    made a heading comparison report five phantom missing sections.
+    """
+    cover = report_cover_html(row, out_dir)
+    if not cover:
+        return ""
+    txt = re.sub(r"</(div|section|h3|h4|p)>", "\n", cover, flags=re.IGNORECASE)
+    txt = html.unescape(_TAG_RE.sub(" ", txt))
+    lines = [" ".join(ln.split()) for ln in txt.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
 
 
 # --- Deep-report HTML attachment (v4.3, delivery decision "a + b") -----------
@@ -1260,7 +1420,8 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     adviser_take_html = build_adviser_take_html(rows, bundle)
     cards_html = "\n".join(build_card_html(r, bundle_meta(bundle, r)) for r in rows)
     growth_section_html = build_growth_section_html(target_date)  # Phase 7 — "" when no growth data
-    reports_html = "\n".join(build_full_report_html(r) for r in rows)
+    # E1: covers, not the whole markdown. See the COVER_RE block for the measurement.
+    reports_html = "\n".join(build_cover_block_html(r) for r in rows)
     # Recomputed in main() when the MIME parts are assembled. Two stat() calls on one
     # file is cheaper than widening this function's return tuple, which six email tests
     # and one caller unpack positionally.
@@ -1295,7 +1456,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         <h2 style="margin-top: 25px;">Today's reports — summary</h2>
         {cards_html}
         {growth_section_html}
-        <h2 style="margin-top: 35px;">Full reports ({len(rows)})</h2>
+        <h2 style="margin-top: 35px;">Covers ({len(rows)})</h2>
         {reports_html}
         {cost_html}
         <hr>
@@ -1309,13 +1470,19 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     """
 
     # Plain-text alternative — summary + raw markdown per ticker
+    # Mirrors the HTML part: covers, not whole reports. Gmail's ~102 KB clip is measured on
+    # the delivered message, so leaving the 85 KB markdown archive in the text twin would
+    # keep the mail clipped no matter what the HTML part does.
     cards_text = "\n".join(build_card_text(r) for r in rows)
     reports_text_parts = []
     for r in rows:
-        fn, md = load_report_markdown(r)
+        fn = report_filename(r)
+        ctext = cover_text(r)
+        if not ctext:
+            _fn, md = load_report_markdown(r)
+            ctext = _strip_frontmatter(md) if md else "[report file not found]"
         reports_text_parts.append(
-            f"\n{'=' * 60}\n{r['ticker']} — full report ({fn}.md)\n{'=' * 60}\n\n"
-            f"{_strip_frontmatter(md) if md else '[report file not found]'}\n"
+            f"\n{'=' * 60}\n{r['ticker']} — cover ({fn}.html)\n{'=' * 60}\n\n{ctext}\n"
         )
     reports_text = "".join(reports_text_parts)
     watch_text = f"⭐ WATCH-LIST: {n_watch} name(s) at buy target — see HTML block.\n\n" if n_watch else ""
@@ -1327,7 +1494,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         f"{buy_today_text}"
         f"{watch_text}"
         f"SUMMARY\n-------\n{cards_text}\n\n"
-        f"FULL REPORTS ({len(rows)})\n"
+        f"COVERS ({len(rows)})\n"
         f"{reports_text}\n"
         f"{cost_text}"
         f"--\n"

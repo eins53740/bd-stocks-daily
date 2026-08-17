@@ -4,12 +4,14 @@ description: Daily stock evaluation — picks 3 tickers (1 deep + 2 screens, 1 o
 argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] [--add-ticker SYMBOL] [--list-pending] — optional overrides for manual runs"
 ---
 
-# Daily Stock Evaluation (v4.2 — scoring schema 2.2)
+# Daily Stock Evaluation (scoring schema 2.2)
 
-> **Versão e histórico**: a versão corrente é sempre a do último tag git (`git describe --tags`)
-> e o histórico completo por versão vive em `docs/CHANGELOG.md`. Este H1 esteve desactualizado
-> uma versão inteira (dizia "v4.1 Phase H" enquanto o corpo já documentava a v4.2); não voltar
-> a escrever contagens de testes nem estado de wave aqui — pertencem ao changelog.
+> **Versão e histórico**: a versão corrente vive em **`scripts/version.py`** (`__version__`,
+> lido pelo watermark do footer e por `--version`) e o histórico por versão em
+> `docs/CHANGELOG.md`. **Não escrever a versão neste H1.** Já drift ou duas vezes: dizia
+> "v4.1 Phase H" enquanto o corpo documentava a v4.2, e depois "v4.2" enquanto `version.py`
+> dizia 4.3.1 — uma string de versão em prosa não tem quem a verifique, por isso o H1 deixou
+> de a ter. Contagens de testes e estado de wave também não pertencem aqui.
 
 Avaliação diária automática de 3 acções (1 deep-dive + 2 screens, dos quais 1 garantidamente de mercado não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 22 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.59 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
 
@@ -189,6 +191,40 @@ python "%SCRIPTS%\node_timing.py" --report
 precisam de wrapper — o custo do wrapper não compensa o sinal.
 
 ## Workflow (executar por esta ordem exacta)
+
+> **A ordem é executável, não só prosa (A1, 2026-08-17): `scripts/run_daily.py`.**
+>
+> Este documento continua a ser a especificação de cada nó — o *porquê*, os prompts, os
+> gates. O que mudou é que a **ordem** dos nós deterministas deixou de viver só aqui: vive
+> numa tabela que um programa lê, em três etapas que fazem de parêntesis à parte narrativa.
+>
+> ```bash
+> python "%SCRIPTS%\run_daily.py" pre  --date {date}                          :: abre o dia (Phase 1 + macro)
+> python "%SCRIPTS%\run_daily.py" pre  --date {date} --ticker T --mode deep   :: 2 → 2.4c + 1.5
+> ::   ... aqui corre a Phase 2.5 (LLM) e sai o mgmt_score + bear trigger ...
+> python "%SCRIPTS%\run_daily.py" mid  --date {date} --ticker T --mode deep \
+>          --mgmt-score {x} --bear-trigger "{y}"                              :: 2.5-end → 3.5
+> ::   ... aqui correm as Phases 2.58 / 4 / 5 (LLM escreve o report) ...
+> python "%SCRIPTS%\run_daily.py" post --date {date} --ticker T --mode deep --report "{md}"
+> python "%SCRIPTS%\run_daily.py" post --date {date} [--email]                :: fecha o dia
+> ```
+>
+> Regras que o script impõe e que a prosa não impunha:
+> - **`--dry-run` imprime o plano** sem executar nada — usar antes de mexer na tabela.
+> - **Sem `--ticker` corre só os nós de run** (Phase 1, macro, índice, dashboard, email);
+>   **com `--ticker` corre só os nós de ticker**. Os dois conjuntos são disjuntos porque três
+>   chamadas por ticker a re-correr a Phase 1 escolheriam candidatos novos a meio da análise
+>   do anterior.
+> - **Um nó `required` que falha PÁRA a etapa** e diz quantos nós ficaram por tentar. Um nó de
+>   overlay que falha (2.4, as lentes, news, EDGAR) só perde o seu cartão.
+> - **Um nó `required` que não pode correr por falta de argumento é erro (`MISINVOKED`), não
+>   skip** — `mid` sem `--mgmt-score` imprimia um SKIP arrumado, não fazia nada e saía 0.
+> - **A Phase 7 é opt-in mesmo aqui** (`--email`): é o único acto irreversível do pipeline.
+> - Cada nó grava o seu tempo via `node_timing`, logo `python node_timing.py --report` mostra
+>   o custo real por nó sem instrumentação extra.
+>
+> O script **nunca chama um modelo**. As ~6 phases narrativas continuam a ser trabalho do
+> skill; o `run_daily.py` só garante que as partes deterministas não acontecem fora de ordem.
 
 ### Phase 0.5 — Thesis check (only when `round > 1`)
 
@@ -422,6 +458,30 @@ python "%SCRIPTS%\roic_lens.py"     "%OUT_DIR%\_tmp\{date}_{ticker}.json" --upda
 ### Phase 2.5 — Qualitative LLM pass (deep only)
 
 Runs in Claude's orchestration context. Skipped entirely for screens.
+
+> **Fan-out — apenas nas chamadas narrativas SEM REDE (A2, 2026-08-17).**
+>
+> Os steps abaixo têm uma dependência real (7 alimenta 7c e 7e; 3 produz o `mgmt_score` que
+> o step 8 consome), mas **duas** delas são independentes **uma da outra**: o **SWOT** (7c) e
+> o **thesis duel** (7e) lêem o mesmo upstream — `{BULL_THESIS}`, o bear case, `{MOAT_JSON}`
+> — e nenhuma lê a outra. Correm portanto em **paralelo, em dois subagentes**, depois do
+> step 7 e antes do step 8. Ganho: uma chamada de latência em vez de duas, na phase mais
+> lenta do path de 30 min.
+>
+> **PROIBIDO fazer fan-out de:**
+> - **Phase 2 / 2.2 / 2.3** e qualquer nó que toque **yfinance** — o cabeçalho da Phase 2 diz
+>   *"sequential, to avoid yfinance rate limits"* e é literal. Em 2026-08-17 o prefilter
+>   perdeu 76 nomes `.AX` para um 429, e um yfinance throttled devolve uma **frame vazia, não
+>   um erro** — logo a corrida paralela não falha, *mente*.
+> - **Phase 4** e o `edgar.py --text` (WebFetch/SEC): o SEC pede ≤10 req/s e identificação;
+>   paralelizar WebFetch sobre o mesmo emitente é a forma mais rápida de ser bloqueado.
+> - **Phase 2.59** (news) e **2.6** (macro): uma chamada cada, nada a paralelizar.
+> - Os steps **1→7** entre si: são uma cadeia, não um leque (o 03b consome o 03a, o 7 consome
+>   o §2.1 e o §2.9).
+>
+> O painel de 3 personas (Phase 2.58) **já** corre concorrente, mas dentro do Python
+> (`second_opinion.PANEL_MAX_WORKERS`) e contra Groq/Gemini — não são subagentes. Pôr esse
+> valor a `1` volta a serializá-lo sem alterar código.
 
 1. **Refresh industry cache if stale** (from Phase 1.5 directive). Substitute `{INDUSTRY}` = `deep.sector`. Run `industry_macro.md` first → use output as `{MACRO_OUTPUT}` for `industry_customer.md` → use both as context for `industry_architecture.md`. Write the combined result to `_industry/<slug>.md` with the frontmatter above. Use WebFetch over 3-5 credible sources (trade association reports, consulting-firm industry overviews, SEC filings for the sector's top-3 players).
 
