@@ -134,6 +134,50 @@ the lock holds the ordering.
 ticker.*
 
 
+## Wednesday is the token day — decision note (2026-08-17)
+
+Bruno's **Claude weekly quota resets on Wednesday**, so by Wednesday the remainder is
+use-it-or-lose-it. Standing rule: a **weekly or monthly** job that spends Claude tokens
+belongs on a Wednesday. Daily jobs are not movable and dominate the weekly spend anyway.
+
+**First question, always: does the job actually spend tokens?** Only a bat that invokes
+`claude -p` does. Checked task by task on 2026-08-17:
+
+| Job | Spends tokens? | Day |
+|---|---|---|
+| `StocksMonitor` | yes | **moved Fri 18:00 → Wed 18:00** |
+| `ClaudeConfigSync` (vmhost1, biweekly 01:00) | yes | **moved Mon → Wed** |
+| `WikiReadNow` | yes (`--max-budget-usd 25`) | already Wed 13:00 |
+| `StocksPortfolioMonthly` · `StocksStrategyMonthly` | yes (15 / 30 USD) | already land on Wednesdays |
+| **`StocksPrefilter`** | **NO** | stays **Mon 14:30** |
+| `StocksPortfolioWeekly` (ingest) · `StocksSkillsPush` · `StocksMirrorPull` · watchdogs | no | unchanged |
+
+**`StocksPrefilter` is the one worth spelling out**, because it is the job most likely to be
+proposed for the move: since the prefilter rework it runs `python run_prefilter.py` under
+`run_with_timeout`, not `claude -p`, so moving it saves nothing — and it would cost something.
+Monday is deliberate: the pool it writes has to serve the whole week, and a Wednesday refresh
+would leave Monday and Tuesday screening against a seven-day-old pool.
+
+**Two Monday jobs were deliberately NOT moved**, because their day carries meaning and a
+silent move would break what they are for:
+- **`BD Claude Weekly`** (Mon 10:00) is a retrospective of *the past week*. Running it
+  mid-week changes the window it reports on.
+- **`Claude-SprintReview-UNS-OT`** (Mon 09:20, biweekly) is tied to a sprint boundary and a
+  meeting, not to a token budget.
+
+**Bonus from moving `ClaudeConfigSync`**, and the reason it was the easy one: it is the job
+that installed a **pre-v4.3 skill** on vmhost1 at 01:00 on 2026-08-17 (49 scripts instead of
+61). `StocksSkillsPush` repairs that drift, but it runs Wed 09:44 — so a Monday 01:00 sync left
+vmhost1 running regressed code for ~2.5 days and two daily runs. At Wednesday 01:00 the repair
+follows **8 h 43 m later the same morning**.
+
+**Gotcha**: `Set-ScheduledTask` needs `-TaskPath` (these live at `\BD\Finance\` and `\BD\Claude\`)
+or it fails with a misleading *"The system cannot find the file specified"*. And edit the
+existing trigger object in place rather than building a new one with
+`New-ScheduledTaskTrigger` — a rebuilt trigger silently drops `WeeksInterval`, turning a
+biweekly job into a weekly one.
+
+
 ## Traps
 
 - **`run_hidden.vbs` launches the bat non-waiting** (`.Run(..., 0, False)`), so wscript
