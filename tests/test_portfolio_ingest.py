@@ -221,17 +221,20 @@ def test_newest_export_wins(tmp_path):
     new = export(tmp_path, lot_row(), name="quotes.csv")
     past = time.time() - 86_400
     os.utime(old, (past, past))
-    assert find_export(downloads=tmp_path) == new
+    assert find_export(roots=(tmp_path,), archive=tmp_path / "empty") == new
 
 
 def test_an_explicit_source_is_honoured_over_the_downloads_scan(tmp_path):
     export(tmp_path, lot_row(), name="portfolio.csv")
     explicit = tmp_path / "elsewhere.csv"
-    assert find_export(explicit, downloads=tmp_path) == explicit
+    assert find_export(explicit, roots=(tmp_path,)) == explicit
 
 
 def test_no_export_found_returns_none(tmp_path):
-    assert find_export(downloads=tmp_path) is None
+    """Every source must be empty. `archive` defaults to the real `_exports\\` dir, so
+    passing only the roots left this test asserting against the live filesystem — it
+    failed the moment the archive gained its first export."""
+    assert find_export(roots=(tmp_path,), archive=tmp_path / "empty") is None
 
 
 def test_export_age_is_measured_in_days(tmp_path):

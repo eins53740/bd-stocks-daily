@@ -1,4 +1,4 @@
-"""
+r"""
 portfolio_ingest.py — Yahoo Finance portfolio export -> _portfolio_holdings.yaml.
 
 Bruno maintains his positions by hand in Yahoo Finance (My Portfolio -> "BD"). Yahoo
@@ -24,6 +24,22 @@ Two traps this export contains, both handled here:
   * `markets.currency_of` returns USD for a crypto pair like `BTC-EUR`. The quote
     currency of a crypto pair is its own suffix, so that is read from the symbol.
 
+Downloads is not storage, and there is no single blessed path. The export used to be
+found only by a non-recursive glob of `~\Downloads`, so when it was tidied into
+`~\Downloads\YF\` the weekly job started hard-failing (2026-08-17) with "no Yahoo
+export found" while the file sat right there. Three changes close that off:
+
+  * every folder in SEARCH_ROOTS is searched (Downloads, Downloads\StocksPortfolioWeekly
+    and the two OneDrive `##BD##\INVESTIMENTOS` folders), each SEARCH_DEPTH levels deep,
+    and the NEWEST valid file wins — so filing the export in any of them is correct;
+  * candidates are header-checked, so an unrelated `portfolio*.csv` from some unzipped
+    project cannot be picked up just for being newest;
+  * every export that parses is copied into `StocksDaily\_exports\` with its original
+    mtime, and that archive is searched too.
+
+A missing fresh export is therefore a STALENESS signal (old data, exit 0, marker file)
+rather than a total failure; only "no valid export anywhere" is a real error.
+
 Usage:
   python portfolio_ingest.py                     # dry run: show the diff
   python portfolio_ingest.py --write             # apply it
@@ -37,6 +53,7 @@ import csv
 import datetime as dt
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -46,9 +63,31 @@ OUT_DIR = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
 HOLDINGS_FILENAME = "_portfolio_holdings.yaml"
 
 # Where Yahoo drops the export. It names the file `quotes.csv`; Bruno's existing one is
-# `portfolio.csv` (the name portfolio_sync.py already defaults to). Newest wins.
+# `portfolio.csv` (the name portfolio_sync.py already defaults to).
 DOWNLOADS = Path(r"C:\Users\bsdias\Downloads")
 EXPORT_GLOBS = ("portfolio*.csv", "quotes*.csv")
+
+_ONEDRIVE = Path(r"C:\Users\bsdias\OneDrive - Secil - Companhia Geral de Cal de Cimento, S.A")
+
+# Every place the export may legitimately live. ALL are searched and the NEWEST valid
+# file wins, so filing it anywhere on this list works and moving it between them is
+# never a breakage. Missing folders are skipped silently — the OneDrive ones may not
+# exist on another machine.
+SEARCH_ROOTS = (
+    DOWNLOADS,
+    DOWNLOADS / "StocksPortfolioWeekly",
+    _ONEDRIVE / r"##BD##\INVESTIMENTOS",
+    _ONEDRIVE / r"##BD##\INVESTIMENTOS\YahooFinance",
+)
+# Each root is also searched a couple of levels down — bounded rather than a full
+# rglob, which would walk any unzipped project tree. This is what still finds the
+# file after it was tidied into `Downloads\YF\`.
+SEARCH_DEPTH = 2
+
+# Durable copy of every export that parsed, so a tidied Downloads folder cannot take
+# the source of truth with it. Kept next to the holdings file it feeds.
+ARCHIVE_DIR = OUT_DIR / "_exports"
+ARCHIVE_KEEP = 24
 
 # A Yahoo portfolio export must have these columns, or it is some other CSV.
 REQUIRED_COLUMNS = {"Symbol", "Quantity", "Purchase Price"}
@@ -66,18 +105,63 @@ def log(msg: str) -> None:
 # --------------------------------------------------------------------------
 # Locating the export
 # --------------------------------------------------------------------------
-def find_export(explicit: Path | None = None, downloads: Path = DOWNLOADS) -> Path | None:
-    """Newest Yahoo export. An explicit path is returned as-is (existence checked by
-    the caller) so a bad --source is a loud error, not a silent fallback."""
+def is_yahoo_export(path: Path) -> bool:
+    """Does this CSV have the Yahoo portfolio header? Cheap header-only read.
+    Searching subfolders means unrelated `portfolio*.csv` files (an unzipped
+    project, a sample dataset) can match the glob, and picking one of those by
+    mtime would turn a good run into a parse error."""
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            header = next(csv.reader(f), [])
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return False
+    return REQUIRED_COLUMNS.issubset({h.strip() for h in header})
+
+
+def find_export(explicit: Path | None = None, roots: tuple[Path, ...] = SEARCH_ROOTS,
+                archive: Path = ARCHIVE_DIR) -> Path | None:
+    r"""Newest *valid* Yahoo export across every SEARCH_ROOTS folder (each up to
+    SEARCH_DEPTH levels deep) plus the local archive. An explicit path is returned
+    as-is (existence checked by the caller) so a bad --source is a loud error, not
+    a silent fallback.
+
+    Several roots, newest wins, because where this file lives keeps changing: on
+    2026-08-17 the job failed purely because the export had been tidied into
+    `Downloads\YF\` and the old non-recursive glob of Downloads stopped seeing it.
+    Searching all the sanctioned locations makes filing it anywhere on the list
+    correct, instead of one blessed path that silently breaks when it moves."""
     if explicit is not None:
         return explicit
+    prefixes = [""] + ["*/" * d for d in range(1, SEARCH_DEPTH + 1)]
     candidates: list[Path] = []
-    for pattern in EXPORT_GLOBS:
-        candidates.extend(downloads.glob(pattern))
-    valid = [p for p in candidates if p.is_file()]
+    for folder in (*roots, archive):
+        for pattern in EXPORT_GLOBS:
+            for prefix in prefixes:
+                try:
+                    candidates.extend(folder.glob(prefix + pattern))
+                except OSError:
+                    continue  # unavailable root (offline OneDrive, missing drive)
+    valid = [p for p in candidates if p.is_file() and is_yahoo_export(p)]
     if not valid:
         return None
     return max(valid, key=lambda p: p.stat().st_mtime)
+
+
+def archive_export(source: Path, archive: Path = ARCHIVE_DIR,
+                   keep: int = ARCHIVE_KEEP) -> Path | None:
+    """Copy an export that parsed into the durable archive, preserving mtime so
+    `export_age_days` keeps reporting the true export age rather than the copy date.
+    Named by export date, so re-ingesting the same file is a no-op."""
+    if source.parent.resolve() == archive.resolve():
+        return None  # already the archived copy
+    archive.mkdir(parents=True, exist_ok=True)
+    stamp = dt.date.fromtimestamp(source.stat().st_mtime).isoformat()
+    dest = archive / f"portfolio_{stamp}.csv"
+    shutil.copy2(source, dest)
+    for old in sorted(archive.glob("portfolio_*.csv"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)[keep:]:
+        old.unlink()
+    return dest
 
 
 def export_age_days(path: Path, today: dt.date | None = None) -> int:
@@ -311,7 +395,9 @@ def main() -> int:
     out_dir = Path(args.out_dir)
     source = find_export(Path(args.source) if args.source else None)
     if source is None:
-        log(f"ERROR: no Yahoo export found in {DOWNLOADS} (looked for {', '.join(EXPORT_GLOBS)})")
+        log(f"ERROR: no Yahoo export ({', '.join(EXPORT_GLOBS)}) found in any of:")
+        for folder in (*SEARCH_ROOTS, ARCHIVE_DIR):
+            log(f"  - {folder}")
         log("Export it: Yahoo Finance -> My Portfolio -> BD -> Download -> Save as CSV")
         return 1
     if not source.exists():
@@ -357,15 +443,24 @@ def main() -> int:
         log("  changed: (none)")
 
     wrote = None
+    archived = None
     if args.write:
         document = build_document(holdings, source, dt.date.today().isoformat())
         wrote = str(write_holdings(out_dir, document))
         log(f"WROTE {wrote}")
+        # Only exports that parsed are worth keeping, so archive after the write.
+        try:
+            dest = archive_export(source)
+            if dest:
+                archived = str(dest)
+                log(f"ARCHIVED {dest}")
+        except OSError as e:
+            log(f"WARN: could not archive the export ({e}) — holdings file is still written")
     else:
         log("DRY RUN — nothing written. Re-run with --write to apply.")
 
     summary = {
-        "source": str(source), "age_days": age, "stale": stale,
+        "source": str(source), "age_days": age, "stale": stale, "archived": archived,
         "lots": len(lots), "holdings": len(holdings),
         "added": delta["added"], "removed": delta["removed"],
         "changed": delta["changed"], "warnings": warnings, "written": wrote,
