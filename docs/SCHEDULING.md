@@ -178,6 +178,49 @@ existing trigger object in place rather than building a new one with
 biweekly job into a weekly one.
 
 
+## Skills reach vmhost1 on CHANGE, not on a timer (2026-08-17)
+
+`StocksSkillsPush` still runs Wednesday 09:44 as the safety net, but it is no longer the primary
+path. A **Stop hook** — `~\.claude\hooks\bd-skills-autopush.py`, registered in
+`~\.claude\settings.json` — pushes as soon as any of the nine bd finance skills changes.
+
+Why event-driven and not a daily task: a daily task shortens the window, it does not close it.
+The event that matters is "a skill changed", and the end of the turn that changed it is exactly
+where that is observable. Before this, an edit made on any day but Wednesday did nothing in
+production until someone remembered.
+
+How it decides: it hashes `relpath:size` over the same nine directories with the same excludes as
+`stocks-skills-push.ps1`, so its notion of "changed" **is** the push script's notion of "in sync"
+— the two cannot disagree about whether work is outstanding. Verified: the hook and the push
+independently produced the same manifest `107234532962776E`.
+
+Four things this took to get right, each one a real failure first:
+
+1. **`Popen(..., DETACHED_PROCESS)` does not survive the hook returning.** It reported "pushing",
+   the child was alive when polled, and nothing ever ran — no push log, no stdout even after
+   stdout was redirected to a file. The launcher is now `schtasks /run /tn \BD\Finance\
+   StocksSkillsPush`: the Task Scheduler service owns the process, so it cannot be reaped with
+   the hook, and it reuses the task instead of inventing a second way in. Confirmed working —
+   `LastRunTime` advanced and a new push log appeared.
+2. **The push logs are UTF-16, not UTF-8.** PowerShell 5.1's `Tee-Object -Append` writes UTF-16LE,
+   so reading them as UTF-8 finds no verdict and the hook would have relaunched every turn.
+   (Anything else that greps these logs is affected the same way — plain `grep VERIFIED` finds
+   nothing in them.)
+3. **A verdict must be matched to ITS push.** The first version took the newest log's
+   `VERIFIED IN SYNC` at face value, so launching a push made the *previous* push's success
+   promote the new hash — marking the skills synced when vmhost1 had never received them. The
+   push prints the manifest it verified, so success now counts only when that manifest is the
+   one being waited for.
+4. **The failure markers were enumerated from the push script, not guessed.** The first list
+   missed `CANNOT READ REMOTE MANIFEST`, which is exactly what a sleeping vmhost1 produces, so a
+   real failure read as "still running".
+
+State lives in `~\.claude\skills\.bd-skills-autopush.json`. `--status` shows what it thinks
+without doing anything; `--seed` accepts the current tree as already pushed. A hash is promoted
+to `pushed` **only** after a later invocation reads a matching `VERIFIED IN SYNC`, so a failed
+push leaves the state stale, retries next turn, and says so.
+
+
 ## Traps
 
 - **`run_hidden.vbs` launches the bat non-waiting** (`.Run(..., 0, False)`), so wscript
