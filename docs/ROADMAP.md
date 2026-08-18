@@ -92,20 +92,6 @@ The immediate cost of the gap, for the record: the Y1 throttle fix — a suspect
 never advance the pause counter — went into production on vmhost1 **uncommittable**, because
 `bd-stocks-prefilter` had nothing to commit to. See `CHANGELOG.md`.)*
 
-### R9. `C:\Github\.scripts` is not a git repository — **S, needs Bruno's OK**
-
-Every `stocks-*.bat`, `job_lock.ps1`, `run_with_timeout.ps1`, `stocks-skills-push.ps1` and
-`stocks_failover_watchdog.py` lives there, and none of it has a diff or a way back. The
-2026-08-17 work on the lock and on the drift alert is on disk and verified, with **no
-history behind it** — the same defect R8 just closed for the skills, one directory over.
-
-- **Found** 2026-08-17 while looking for somewhere to commit the S1/S3 changes.
-- **Not done deliberately**: it is a shared 70-file, 15-directory folder spanning UNS, AWS,
-  Ignition and finance, not a finance repo. `git init` there is a structural decision about
-  someone else's work as well, so it needs an explicit yes. No `.env` or key files were
-  found at the top two levels, so the guard would be the same `.gitignore` as the skills.
-- **Trigger**: Bruno's go-ahead.
-
 ### R10. The bats are two divergent copies, and vmhost1's still have no lock — **M**
 
 `C:\Github\.scripts\stocks-*.bat` (laptop) and `D:\Github\.scripts\stocks-*.bat` (vmhost1)
@@ -128,7 +114,7 @@ edited, no mechanism to notice.
 - **Trigger**: none; it is unscheduled only because doing it mid-session with a two-hour
   prefilter running was the wrong moment.
 
-### R11. Eight hardcoded `C:\Github\...` paths remain across the family — **M**
+### R11. Fold the remaining path lists and vault constants into `bd_paths` — **M**
 
 `analyze_ticker.py`, `financial_history.py`, `llm_client.py`, `macro_fred.py`,
 `portfolio_sync.py` (DEFAULT_DB), `send_email.py`, `_run_and_save.py` and
@@ -167,20 +153,64 @@ accident of how it is invoked. Reasoning about which of the eight are fine is th
 - **Trigger**: none; scoped with the Wave-5 path refactor, which the packaging notes already
   size at ~30 files across the family.
 
-### R12. A deep report reached the inbox with no `_log.csv` row — **S**
 
-2026-08-17: `2026-08-17_ROVI.MC_review.html` was rendered (736 KB), attached, and mailed at
-13:56 — and vmhost1's `_log.csv` has **no row for 2026-08-17**, its last entry being
-`HEIA.AS` on 08-16. So today's evaluation is invisible to the 6-month dedupe, to the
-dashboard's All Evaluations, and to `report_history`. ROVI can be picked again tomorrow as
-though never seen.
+**Half of this shipped 2026-08-18** (commit `3e2702b`): `scripts/bd_paths.py` is now the single
+resolver — env var, then the known roots, probing for a file that *proves* the layout, with a
+stale env var **ignored rather than obeyed** so one wrong variable cannot take out ten scheduled
+jobs at once. The six dead `C:\Github\BD\...` constants were converted (`analyze_ticker`,
+`financial_history`, `llm_client`, `send_email`, `macro_fred` KEYS_PATH, `portfolio_sync`
+DEFAULT_DB), each keeping its previous literal as the fallback so the laptop resolves
+byte-identically and only vmhost1 changes behaviour. Suite: 1689 passed, 1 skipped.
 
-- The same run logged `SCREENS: none - pool exhausted (0 of 222 prefiltered names eligible)`,
-  so the deep was the only pick.
-- **Not diagnosed**: whether Phase 6 was skipped, failed, or wrote elsewhere. Worth one look
-  at `stocks-daily_20260817_1330.log` around Phase 6 before assuming a cause — the last time
-  a cause was assumed here (the drift alert's hardcoded "Most likely cause") it was wrong.
-- **Trigger**: none; it is a data-integrity gap and should not wait long.
+Why it stayed invisible so long: `api_keys_reader()` answers a missing file with an **empty dict
+and a printed warning**, never an exception. A dead BD_Finance path therefore yields no FRED key,
+no Alpha Vantage key and no SMTP password while the run keeps looking healthy.
+
+Two corrections to what this entry used to claim, both measured on 2026-08-18:
+
+- **`C:\Github\BD` really is absent on vmhost1** — confirmed from a LOCAL context there, not over
+  SSH. The distinction matters and cost a wrong first reading: a network logon cannot traverse that
+  machine's junctions ("the path cannot be traversed because it contains an untrusted mount
+  point"), so an SSH `Test-Path` returns False for paths a local process resolves fine. Probe via
+  WSL (`arch-sim`, `/mnt/c`, `/mnt/d`) before believing either answer.
+- **The ~35 `C:\BD_Obsidian` OUT_DIR constants are NOT broken.** `C:\BD_Obsidian\Personal` on
+  vmhost1 is a junction to `D:\BD_Obsidian\Personal` and resolves correctly for the locally-run
+  tasks — the `/mnt/c` view is the same file as the `D:` one, all 382 log files of it. Converting
+  them is regression risk with no defect to fix, so it was deliberately not done.
+  `bd_paths.vault_state()` exists for whoever needs it next.
+
+**What remains**: those OUT_DIR conversions (only worth doing alongside the Wave 5 packaging move,
+which changes the paths anyway), and folding `run_daily.py`'s and `technical_score.py`'s private
+resolution lists into `bd_paths` so there is genuinely one copy instead of three.
+**Trigger**: the Wave 5 cutover, or a third machine.
+
+### R12. Backfill the two orphan rows on vmhost1 — **S, one command**
+
+The defect is **diagnosed and guarded** (2026-08-18, commit `4cfbcd3`); what is left is one write
+on the machine that owns the state.
+
+The cause was measured, not assumed, from the run's own artefact timestamps on vmhost1: the
+2026-08-17 13:30 run executed **fully** — node timings 13:32, financial history and valuation
+bands 13:33, technical and macro 13:37, eight charts 13:40, markdown 13:52, HTML + sankey +
+archive 13:53 — and then stopped. Phase 6 never wrote a row; `_log.csv`'s mtime is still
+2026-08-16 23:29, verified on vmhost1's own `D:` copy and not only on the laptop mirror.
+
+Why it still reached the inbox is the durable lesson: `send_email.py` attaches report **files** by
+date glob, while the dedupe, the dashboard's All-Evaluations view and `report_history` read
+`_log.csv` **rows**. The two paths never consult each other. The bat's email gate did not catch it
+either — it counted 4 rows for that date, every one of them from `_growth_log.csv`. And Task
+Scheduler reported result 0, which proves nothing: the action is `run_hidden.vbs`, which does not
+wait.
+
+- **Shipped**: `scripts/log_orphan_check.py` (6 tests) exits 1 when any `*_review.md` has no
+  matching row, so the failover watchdog can call it; `--fix` backfills from each report's own
+  front matter, idempotently, with a backup.
+- **It found a second orphan on its first run**: `2026-08-13 CSCO`, deep, score 6.12. This was
+  never a one-off, which is why the guard closes the class rather than the instance.
+- **Left to do**: run it with `--fix` **on vmhost1** — the single writer. The laptop is a
+  read-only mirror that `stocks-mirror-pull` overwrites at 09:30 and 15:30, so a fix applied there
+  is discarded. Then wire the check into the 15:00 watchdog.
+- **Trigger**: none.
 
 ### R13. vmhost1's task descriptions still describe the pre-migration layout — **S**
 
@@ -190,7 +220,16 @@ though never seen.
 the first thing anyone reads in Task Scheduler when something breaks, and it points at a
 path that does not exist on that machine.
 
-- **Trigger**: none; bundle it with R10, which will be editing the same nine tasks.
+- **Shipped 2026-08-18**: `vmhost1-fix-finance-task-descriptions.ps1`, values measured on
+  vmhost1 that day rather than copied from a doc. StocksPrefilter lied too (claimed
+  `daily 16:45 ... has drifted; review`; real: **weekly Monday 14:30**), and
+  StocksPortfolioWeekly and StocksStrategyMonthly carried **no description at all** — so a task
+  disabled ON PURPOSE, because the laptop owns both (verified Ready there, Disabled here), reads
+  exactly like one someone switched off and forgot.
+- **Left to do**: run `pwsh -File D:\Github\.scripts\vmhost1-fix-finance-task-descriptions.ps1`
+  on vmhost1. Descriptions only; no trigger, action or principal touched; idempotent; a
+  COMPUTERNAME guard makes it refuse to run anywhere else (verified: exits 2 on the laptop).
+- **Trigger**: none.
 
 ### R14. Evaluate OpenBB as a second data spine — macro first, fundamentals second — **M**
 
@@ -241,6 +280,75 @@ curves, unemployment, PMI and debt/GDP. `api_key_fred` already exists.
 - **Trigger**: none; item 1 is wanted for the macro skill and is independent of the rest.
 
 ---
+### R15. Corrections found in the narrative never reach the JSON — **S, highest data-integrity value open**
+
+Found by the adversarial audit of `2026-08-17_ROVI.MC` (ReadNow 0319, 2026-08-18). The report's
+prose is exemplary: it names three vendor-data defects and corrects each one. The **machine
+artefact does not**. `_tmp/2026-08-17_ROVI.MC.json` still carries:
+
+| Key | Served | Real | How the real value is known |
+|---|---|---|---|
+| `operating_margin_ttm` | 0.0942 | **0.227** | quarterly Operating Income sum over TTM revenue |
+| `ebitda_ttm` | 175.96M | **272.80M** | 175.96M is TTM **EBIT**; the quarterly EBITDA rows sum to 272.8M, matching `_fin_history` exactly |
+| `ev_ebitda` | 16.82 | **10.85** | follows from the row above |
+
+…while `data_quality: "ok"`, `corrected_fields: []`, `consistency_issues: []`. The Layer-0
+consistency gate caught neither corruption, and **the corrupt EV/EBITDA already scored the peer
+rank (5 of 6) inside the composite** at 12% weight. Any consumer of the JSON — dashboard cards,
+the screener, future parsers — is served known-false numbers under a green stamp.
+
+Measured against the governing principle (false data is worse than no data) this is the most
+valuable open item in the file. It is not that a number was wrong: it is that **the system's own
+correction is unreachable by anything except a human reading prose.**
+
+- **The work**: a Layer-0 cross-check of `ebitda_ttm` against the quarterly EBITDA sum and of
+  `operating_margin_ttm` against statement-derived operating income — both series are already
+  persisted. On mismatch: write the derived value, name the key in `corrected_fields`, set
+  `data_quality: suspect`. No new fetch is needed.
+- **Trigger**: none.
+
+### R16. The one-off detector reads annual `unusual_items` only — **S**
+
+`red_flags.py:148` reads the **annual** statement snapshot, so ROVI's €62.4M Q2-2026 gain —
+**33.7% of TTM net income, 2.2x the 15% threshold** — printed a pass at "0.4%". The narrative
+caught it and quantified it correctly everywhere (normalized EPS 2.597, P/E 22.20, ROE 19.99%,
+all independently reproduced by the audit), but the deterministic scanner that exists for exactly
+this did not. Diligence is not a control.
+
+- **The work**: read `unusual_items` / `special_income_charges` from the quarterly statements too,
+  and compare the TTM sum against TTM net income.
+- **Trigger**: none.
+
+### R17. The report asserts side effects it never performed — **S**
+
+The same report states twice that ROVI is *"already in `_watchlist.csv`"*. It is not: that file's
+mtime is 2026-08-10 and it holds five rows, none of them ROVI. A reader waiting on the promised
+€50.82 entry alert would never get one.
+
+This is the most serious *class* the audit found — not a wrong number but a **stated action that
+did not happen** — and it is invisible to every numeric check, because there is no number in it.
+
+- **The work**: either have the phase actually write the row, or forbid the prompt from claiming a
+  side effect at all and let a deterministic step report what was written. The second is the safer
+  shape: the LLM should describe state, never assert changes to it.
+- **Trigger**: none.
+
+### R18. Three labelling defects in one report — **S**
+
+All from the 2026-08-18 audit. Individually cosmetic; jointly they are how a careful reader stops
+trusting labels.
+
+- **Two RSIs under one name.** `analyze_ticker.py:1454` computes **Cutler** RSI (rolling mean) ->
+  32.6 in the JSON; `technical_score.py` uses BD_Finance's **Wilder** RSI -> 48.7 in the report.
+  Both were recomputed and both are internally correct — they are different indicators wearing one
+  label, and 32.6 (near-oversold) versus 48.7 ("neutral") is not a rounding difference. Wilder is
+  the defensible one to print; one pipeline should not own two.
+- **Mixed margin-of-safety denominators.** The headline -13.4% is `(fair-price)/fair`; the
+  corrected "~-27%" in 2.11d is `(fair-price)/price`. On the model's own convention the corrected
+  figure is **-37.4%**, so the mix understates the deterioration.
+- **The history table mislabels the prior verdict** as WATCH where `_log.csv` records `review`.
+- **Trigger**: none.
+
 
 ## Next — AGREED-DEFERRED
 
