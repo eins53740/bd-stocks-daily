@@ -220,15 +220,20 @@ wait.
 the first thing anyone reads in Task Scheduler when something breaks, and it points at a
 path that does not exist on that machine.
 
-- **Shipped 2026-08-18**: `vmhost1-fix-finance-task-descriptions.ps1`, values measured on
+- **Shipped 2026-08-18**: `scripts/vmhost1_fix_task_descriptions.ps1`, values measured on
   vmhost1 that day rather than copied from a doc. StocksPrefilter lied too (claimed
   `daily 16:45 ... has drifted; review`; real: **weekly Monday 14:30**), and
   StocksPortfolioWeekly and StocksStrategyMonthly carried **no description at all** — so a task
   disabled ON PURPOSE, because the laptop owns both (verified Ready there, Disabled here), reads
   exactly like one someone switched off and forgot.
-- **Left to do**: run `pwsh -File D:\Github\.scripts\vmhost1-fix-finance-task-descriptions.ps1`
-  on vmhost1. Descriptions only; no trigger, action or principal touched; idempotent; a
-  COMPUTERNAME guard makes it refuse to run anywhere else (verified: exits 2 on the laptop).
+- **Left to do**: on vmhost1, run
+  `pwsh -File C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\vmhost1_fix_task_descriptions.ps1`.
+  Descriptions only; no trigger, action or principal touched; idempotent; a COMPUTERNAME guard
+  makes it refuse to run anywhere else (verified: exits 2 on the laptop).
+- **It lives in the skill, not in `.scripts`** — deliberately. The skills tree is the only one
+  with a hash-verified push to vmhost1; `.scripts` having none *is* R10. A fixer for vmhost1
+  parked only on the laptop is a script that can never reach the machine it was written for,
+  which is the mistake Bruno caught on 2026-08-18.
 - **Trigger**: none.
 
 ### R14. Evaluate OpenBB as a second data spine — macro first, fundamentals second — **M**
