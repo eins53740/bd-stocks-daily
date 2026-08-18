@@ -506,6 +506,10 @@ def enrich_from_tmp(ticker: str, date: str) -> dict:
         "roce": safe_float(f.get("roce_ttm")),
         "net_margin": safe_float(f.get("net_margin_ttm")),
         "operating_margin": safe_float(f.get("operating_margin_ttm")),
+        # N2: percentage-point change in annual operating margin over three fiscal years.
+        # Filterable, never scored -- wiring it into the Moat sub-score would move the
+        # composite and belongs to the G1 backtest.
+        "op_margin_3y_delta": safe_float(f.get("op_margin_3y_delta_pp")),
         "gross_margin": safe_float(f.get("gross_margin_ttm")),
         "ebitda_margin": ebitda_margin,
         "cf_ebitda": cf_ebitda,

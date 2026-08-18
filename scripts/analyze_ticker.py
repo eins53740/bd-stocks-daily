@@ -664,6 +664,11 @@ def _compact_fund(ticker: str, info: dict) -> dict:
     return {
         "ticker": ticker,
         "name": info.get("shortName") or info.get("longName"),
+        # N5: the peer's OWN industry/sector, captured from the info dict already in hand.
+        # Without it "how many of these are actually peers" is unanswerable, and the peer
+        # sub-score carries 12% of the composite whether or not the set is a peer set.
+        "industry": info.get("industry"),
+        "sector": info.get("sector"),
         "market_cap": mcap,
         "pe": info.get("trailingPE"),
         "ev_ebitda": info.get("enterpriseToEbitda"),
@@ -673,6 +678,66 @@ def _compact_fund(ticker: str, info: dict) -> dict:
         "fcf_yield": (fcf / mcap) if (fcf and mcap and mcap > 0) else None,
         "rev_growth_3y": info.get("revenueGrowth"),  # yoy proxy; not true 3y CAGR but good enough for ranking
     }
+
+
+# A curated set (by_ticker) or an industry set is trustworthy by construction. A SECTOR set
+# is not: "Consumer Cyclical" holds adidas, Amazon, McDonald's, Home Depot and Starbucks, and
+# only one of those is a footwear peer. This is the fraction that decides.
+PEER_SAME_INDUSTRY_MIN = 0.50
+
+
+def peer_set_quality(target_industry: str, source: str, peer_metrics: dict,
+                     target_ticker: str) -> dict:
+    """Is this peer set actually a peer set? (roadmap N5)
+
+    adidas was ranked against Amazon, McDonald's, Home Depot, Starbucks and Nike because
+    yfinance could not resolve a footwear industry set, and the resulting 7.33/10 carried the
+    full 12% peer weight with nothing marking it as a sector proxy. The `none` case already
+    gets honesty -- a neutral 5.0 and a warning -- and `by_sector` got none.
+
+    WHAT THIS DOES AND DELIBERATELY DOES NOT DO. It publishes a measured quality verdict, so
+    the report, the dashboard and the LLM all read the same number instead of each deciding
+    for itself (on 2026-08-18 the LLM noticed UPS's and RENT3's sector proxies by hand -- it
+    should not have had to). It does NOT damp the sub-score. Damping would move the composite
+    for a large share of all names and make today's scores incomparable with every score
+    already logged, which is a recalibration decision and belongs to the G1 backtest with the
+    gate work (G3), not to a data-quality fix.
+    """
+    peers = [m for tk, m in (peer_metrics or {}).items() if tk.upper() != (target_ticker or "").upper()]
+    n = len(peers)
+    known = [m for m in peers if m.get("industry")]
+    same = [m for m in known if m.get("industry") == target_industry]
+    pct = (len(same) / len(known)) if known else None
+
+    if source in ("by_ticker", "by_industry"):
+        return {"source": source, "n_peers": n, "n_same_industry": len(same),
+                "n_industry_known": len(known), "same_industry_pct": pct,
+                "trustworthy": True,
+                "note": f"{source} set -- curated for this name, not a sector proxy"}
+    if source == "none":
+        return {"source": source, "n_peers": 0, "n_same_industry": 0,
+                "n_industry_known": 0, "same_industry_pct": None, "trustworthy": False,
+                "note": "no peers configured -- sub-score is a neutral 5.0 placeholder"}
+
+    if pct is None:
+        note = (f"sector proxy ({source}) and no peer reported an industry, so the set could "
+                f"not be checked at all -- treat the peer rank as unverified")
+        ok = False
+    elif pct >= PEER_SAME_INDUSTRY_MIN:
+        note = (f"sector proxy ({source}) but {len(same)}/{len(known)} peers share the "
+                f"'{target_industry}' industry -- usable")
+        ok = True
+    else:
+        others = ", ".join(sorted({m.get("industry") for m in known
+                                   if m.get("industry") != target_industry})[:4])
+        note = (f"SECTOR PROXY, NOT PEERS: only {len(same)}/{len(known)} share the "
+                f"'{target_industry}' industry (others: {others}). The peer sub-score still "
+                f"carries its full weight -- do not present the rank at face value")
+        ok = False
+    return {"source": source, "n_peers": n, "n_same_industry": len(same),
+            "n_industry_known": len(known),
+            "same_industry_pct": round(pct, 3) if pct is not None else None,
+            "trustworthy": ok, "note": note}
 
 
 # Metric → (label, lower_is_better)
@@ -723,6 +788,7 @@ def fetch_peer_ranking(ticker: str, info: dict, ticker_fund: dict) -> dict:
             "rank_summary": {},
             "score_0_10": 5.0,
             "score_reason": "no peers configured for this industry/sector — neutral placeholder",
+            "peer_quality": peer_set_quality(industry, "none", {}, ticker),
         }
 
     # Build metrics for ticker (from already-computed ticker_fund) and each peer (yfinance info).
@@ -792,6 +858,7 @@ def fetch_peer_ranking(ticker: str, info: dict, ticker_fund: dict) -> dict:
         "rank_summary": rank_summary,
         "score_0_10": peer_score,
         "score_reason": f"avg across {len(tscores)} ranked metrics vs {len(fetched_peers)} peers ({peers_source})",
+        "peer_quality": peer_set_quality(industry, peers_source, metrics_by_ticker, ticker),
     }
 
 
@@ -910,6 +977,84 @@ def _stmt_two_years(frame, labels) -> list:
                     vals[i] = None
             return vals
     return vals
+
+
+def _stmt_n_years(frame, labels, n: int) -> list:
+    """[value_t, value_t-1, ... value_t-(n-1)] for the first matching row label.
+
+    The 2-year sibling above is deliberately fixed at two because that is what the red-flag
+    scanner needs. This one exists for `op_margin_3y_delta` (roadmap N2), which needs a third
+    column. It reads the SAME frame that is already in memory, so it costs no fetch.
+    Columns the frame does not provide degrade to None -- never fabricated, never
+    back-filled from an adjacent year.
+    """
+    vals = [None] * n
+    if frame is None or getattr(frame, "empty", True):
+        return vals
+    for lab in labels:
+        if lab in frame.index:
+            row = frame.loc[lab]
+            for i in range(n):
+                try:
+                    v = row.iloc[i]
+                    vals[i] = float(v) if (v is not None and v == v) else None
+                except (IndexError, TypeError, ValueError):
+                    vals[i] = None
+            return vals
+    return vals
+
+
+def op_margin_3y_delta(fs) -> dict:
+    """Operating-margin change over three fiscal years, in percentage points (N2).
+
+    The Scalable-Kings tie-breaker: it separates margin EXPANDERS from margin-stable names
+    that score the same on moat. Positive = expanding.
+
+    SHIPPED AS AN ADDITIVE FIELD ONLY, and the reason is written here so nobody "finishes"
+    it by accident. The roadmap describes it as a tie-breaker INSIDE the Moat sub-score --
+    and that would change the composite, which the v4.3 contract forbids, on a signal
+    `SCORING_REVIEW_v3.md` 2.1 already calls double-counted with an existing Moat component.
+    Wiring it into scoring belongs to the G1 backtest (~2026-10-17), where weight changes
+    are supposed to be decided against measured outcomes rather than against an argument.
+
+    Returns the delta plus the two margins and the two fiscal years it came from, because a
+    bare delta cannot be checked by a reader -- which is the R15 lesson applied at birth
+    instead of after the fact.
+    """
+    out = {"op_margin_3y_delta_pp": None, "op_margin_3y_basis": None}
+    oi = _stmt_n_years(fs, _STMT_ROWS["income"]["operating_income"], 3)
+    rev = _stmt_n_years(fs, _STMT_ROWS["income"]["revenue"], 3)
+    dates = _fiscal_dates_n(fs, 3)
+
+    def margin(i):
+        if oi[i] is None or not rev[i]:
+            return None
+        return oi[i] / rev[i]
+
+    latest, oldest = margin(0), margin(2)
+    if latest is None or oldest is None:
+        # Say WHICH year is missing rather than just going quiet: a non-US filer with two
+        # years of statements is a coverage fact, not a failure, and the reader of a blank
+        # field deserves to know which it is.
+        missing = [dates[i] or f"col{i}" for i in (0, 2) if margin(i) is None]
+        out["op_margin_3y_basis"] = f"not computable — no operating margin for {', '.join(missing)}"
+        return out
+    out["op_margin_3y_delta_pp"] = round((latest - oldest) * 100, 2)
+    out["op_margin_3y_basis"] = (f"{dates[0]} {latest*100:.2f}% vs {dates[2]} {oldest*100:.2f}% "
+                                 f"(annual operating income / revenue)")
+    return out
+
+
+def _fiscal_dates_n(frame, n: int) -> list:
+    out = [None] * n
+    if frame is None or getattr(frame, "empty", True):
+        return out
+    for i in range(min(n, len(frame.columns))):
+        try:
+            out[i] = str(frame.columns[i])[:10]
+        except Exception:
+            out[i] = None
+    return out
 
 
 def _fiscal_dates(frame) -> list:
@@ -1265,6 +1410,9 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
     else:
         fund["net_debt_ebitda"] = None
 
+    # --- N2: operating-margin trend, additive only (see op_margin_3y_delta's docstring) ---
+    fund.update(op_margin_3y_delta(fs))
+
     # FCF yield
     fund["fcf_yield"] = None
     if fund["fcf_ttm"] and fund["market_cap"] and fund["market_cap"] > 0:
@@ -1464,12 +1612,14 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
             # rounding difference. Nothing in the code consumed `rsi_14`; its only consumer
             # was the LLM writing the report, which saw two numbers under one name.
             #
-            # The formula is REPLICATED rather than imported on purpose. Importing
-            # BD_Finance.technical.rsi executes that module's top level, which calls
-            # yf.download() for AMZN, GOOG and MSFT at 5-minute resolution -- three network
-            # fetches as a side effect of an import, in a pipeline node and in a suite
-            # documented as network-free. That is a BD_Finance defect (roadmap R21), outside
-            # this skill's write scope; six lines of pandas here avoid depending on it.
+            # The formula is REPLICATED rather than imported on purpose. BD_Finance's
+            # technical modules call yf.download() at IMPORT time (demo loops in the file),
+            # so a naive import would fetch AMZN/GOOG/MSFT 5-minute data as a side effect.
+            # `technical_score.py` already defends against exactly this -- it swaps in a stub
+            # yfinance for the duration of the imports and restores the real one after -- so
+            # nothing in the pipeline actually makes those calls today. This node has no such
+            # stub, and adding one to compute a 14-day RSI would be six lines of defence
+            # around six lines of pandas. So: pandas, and one comment saying why.
             delta = close.diff()
             gain = delta.clip(lower=0)
             loss = -delta.clip(upper=0)
@@ -1564,6 +1714,13 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
             "peer ranking: no peers configured for this industry/sector — "
             "score is a neutral 5.0 placeholder, not a real ranking"
         )
+    else:
+        # N5: a sector proxy that is not a peer set must say so on the SAME channel, or the
+        # only thing standing between a 12%-weighted rank and the reader is whether the LLM
+        # happened to notice.
+        _pq = peer_info.get("peer_quality") or {}
+        if _pq.get("trustworthy") is False:
+            warnings_.append(f"peer ranking: {_pq.get('note')}")
 
     component_scores = {
         "fundamentals": fund_score,
