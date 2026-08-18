@@ -541,7 +541,8 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
 
 7. **Bear case** — derive `{BULL_THESIS}` from §2.1 + §2.9 + TL;DR thesis line; run `05_bear_case.md`. Parse the FINAL LINE `If {X} happens, the thesis is broken.` → `bear_case_trigger`. Full output → §2.16. **Keep the parsed trigger at hand — Phase 2.55 receives it via `--bear-trigger`.**
 
-7b. **Revenue segments (v3.1 — excepção documentada à ground-truth rule)** — se `_segments/{TICKER}.json` não existe ou tem >1 ano (`extracted_at`), extrair a tabela de segment revenue do annual report já fetched na Phase 4 (a nota de segmentos do 10-K traz 3 anos numa só tabela) e escrever:
+7b. **Revenue segments (v3.1 — excepção documentada à ground-truth rule · v4.3.4 OPT-IN,
+default OFF no path agendado — roadmap N1)** — se `BD_SEGMENTS=1` **e** `_segments/{TICKER}.json` não existe ou tem >1 ano (`extracted_at`), extrair a tabela de segment revenue do annual report já fetched na Phase 4 (a nota de segmentos do 10-K traz 3 anos numa só tabela) e escrever:
 
    ```json
    {"fiscal_years": ["FY2023","FY2024","FY2025"], "currency": "USD",
@@ -550,6 +551,26 @@ Runs in Claude's orchestration context. Skipped entirely for screens.
    ```
 
    para `%OUT_DIR%\_segments\{TICKER}.json`. **Esta é a ÚNICA situação em que números vêm do LLM** — porque nenhuma API free tem segment data. O chart e a §2.1 marcam sempre a origem ("company filings, LLM-extracted") + `source_url`. Sem filing disponível → não escrever JSON, chart skipped, `segments_available: false` + `⚠️ Segment data unavailable` na §2.1. Valores só da tabela oficial — nunca estimar nem interpolar.
+   - **`BD_SEGMENTS` — o default deriva do `STOCKSDAILY_SCHEDULED`**: `0` quando
+     `STOCKSDAILY_SCHEDULED=1` (o job agendado), `1` caso contrário (corrida manual ou
+     `--dry-run`). Deliberadamente **não** um segundo par de defaults para manter em sincronia:
+     o `STOCKSDAILY_SCHEDULED` já é posto pelo bat, já é verificado no run (o log de hoje diz
+     "verified, not assumed"), e um skill nunca deve ter de deduzir o seu próprio contexto de
+     execução — quem sabe é o processo pai. Um `BD_SEGMENTS` explícito, se posto, ganha sempre. Decisão do Bruno em 2026-07-30,
+     por três razões que continuam válidas: este é o **único** ponto do pipeline onde um
+     número vem de um LLM a ler um filing; acrescenta um WebFetch **e** uma extracção por
+     deep-dive a um job que já corre a 26 min de um tecto de 30; e a falha é silenciosa
+     (`segments_available: false` lê-se igual a "esta empresa não reporta segmentos").
+   - A decisão estava tomada e escrita no roadmap, mas **esta instrução não estava
+     condicionada** — o path agendado foi instruído a extrair durante todo esse tempo.
+     A medição diz quanto isso rendeu: **3 ficheiros em `_segments/`, o mais recente de
+     2026-07-21**, contra ~30 deep-dives desde então. Ou seja o custo era pago e o
+     resultado era zero, sem que nada o dissesse.
+   - Com `BD_SEGMENTS=0`: não fetch, não extracção, `segments_available: false` e a §2.1
+     escreve `⚠️ Segment data unavailable (opt-in: BD_SEGMENTS=1)` — o leitor fica a saber
+     que é uma **escolha**, não uma falta de dados da empresa. Essa distinção é o ponto.
+   - Para puxar segmentos de um nome que está a ser estudado a sério:
+     `set BD_SEGMENTS=1` antes da corrida manual.
 
 7c. **SWOT (v4 Phase C)** — run `06_swot.md` with `{RED_FLAGS_JSON}` = the `red_flags` block from Phase 2.4 and `{BULL_THESIS}` (same as step 7). Output → the SWOT card (§2.18a). The **Threats/Risks quadrant leads and gets double depth**, and must reconcile every `bad`/`warn` scanner flag + the Beneish verdict. Overlay-only narrative — no number enters the composite.
    - **Se a Phase 2.4b detectou uma categoria**, incluir a linha de evidência de `category_lens` no contexto do prompt: um SWOT de um cíclico no topo do ciclo que não menciona o ciclo, ou de um turnaround que não menciona a sobrevivência do balanço, está errado independentemente do que escreve. O mesmo vale para `roic_lens.leverage_manufactured_roe` quando disparada — é Weakness, não curiosidade.
@@ -983,7 +1004,7 @@ Frontmatter que acompanha: `listing_home`, `listing_alternatives`, `listing_reas
 ({300-500 palavras a partir de prompts\01_business_model.md})
 
 ![Revenue sources](IMG/{date}_{ticker}_segments.png)
-*Fontes de receita — 3 anos fiscais. Source: company filings (LLM-extracted) — verificar contra {source_url}. Omitir imagem + caption se `segments_available: false` (nesse caso escrever `⚠️ Segment data unavailable`).*
+*Fontes de receita — 3 anos fiscais. Source: company filings (LLM-extracted) — verificar contra {source_url}. Omitir imagem + caption se `segments_available: false`; nesse caso escrever `⚠️ Segment data unavailable (opt-in: BD_SEGMENTS=1)` quando a extracção não foi pedida, e `⚠️ Segment data unavailable (no segment table in the filing)` quando foi pedida e não havia tabela. **Nunca a mesma frase para os dois casos** — "não pedimos" e "a empresa não reporta" são leituras opostas do mesmo espaço em branco.*
 
 **Money-flow Sankey** (obrigatório, no fim de §2.1) — Mermaid `sankey-beta` com Revenue → COGS / Gross Profit → R&D / SG&A / Other OpEx / Operating Income → Interest & Tax / Net Income → Dividends / Buybacks / Retained Earnings. Valores TTM em milhões da moeda de reporte (arredondar à centena). Sub-linhas em falta (e.g. R&D não disclosed) ficam marcadas `(not disclosed)` e o ramo é omitido — nunca inventar. Caption de uma linha após o diagrama, do tipo *"Cada euro de receita transforma-se em ~X% de net income; o maior dreno é {bucket} ({Y}%)."* Ver template completo em `prompts\01_business_model.md`.
 

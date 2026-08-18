@@ -30,6 +30,138 @@ face of every report.
 
 ---
 
+## v4.3.4 — 2026-08-18 · schema 2.2 · **1750 tests** (daily)
+
+**The data-integrity release.** Nine roadmap items, all of them found by the 2026-08-17
+ROVI.MC audit or by the 2026-08-18 13:30 run on vmhost1 — i.e. by measurement, not by review.
+The theme is one sentence: *the system kept knowing things it never wrote down.*
+
+**Closed: R15** — corrections found in the narrative never reached the JSON. The ROVI report's
+prose named and corrected three vendor-data defects while `_tmp/2026-08-17_ROVI.MC.json` still
+served the wrong numbers under `data_quality: "ok"` and `corrected_fields: []` — and the
+corrupt `ev_ebitda` had already scored the peer sub-rank inside the composite. New node **2.2b
+`reconcile_ttm.py`**, placed after 2.2 because the quarterly series does not exist until then
+(node 2's own Layer-0 gate runs before it and structurally cannot see it). The load-bearing
+part is the **revenue identity**: EBITDA is corrected only when the four quarters' revenue
+reproduces `revenue_ttm` within 2%, proving the window is the vendor's own. Without that proof
+it corrects nothing. `ebitda_ttm` 175,964,992 → 272,798,000 and `ev_ebitda` 16.82 → 10.8497,
+both matching the audit independently. `operating_margin_ttm` is flagged and **removed**, never
+substituted — no quarterly operating-income series exists and writing an annual number into a
+TTM field is a basis break; `red_flags` already falls back to statement-derived operating
+income and now reports 25.0% instead of the false 9.42%.
+
+**Closed: R16** — the one-off detector read the ANNUAL statement only, and an annual statement
+cannot contain a gain booked in a quarter it does not cover. ROVI's €62.4M Q2-2026 gain, 33.7%
+of TTM net income and 2.2× the threshold, printed a clean "0.4%". Now reads TTM, at zero fetch
+cost: `_yf_records` was already extracting quarterly net income from the same frame and
+throwing it away, and `Total Unusual Items` is one more row from it. Verified LIVE before
+building on the assumption that the row exists — ROVI 2026Q2 = 62,352,000, TTM 62,393,000 over
+185,182,000 = **33.7%**, reproducing the audit to one decimal. The flag now names its basis,
+because a "pass" on annual data is a weaker statement than a "pass" on TTM.
+
+**Closed: R17** — the report asserted side effects it never performed. It told the reader TWICE
+that ROVI was "already in `_watchlist.csv`"; that file's mtime was 2026-08-10 and it held
+TSM/MSFT/TTEK/RMD. This is the most serious *class* found: a stated action that did not happen,
+invisible to every numeric check because there is no number in it. Root cause was the same
+silent shape as `finalize_score.py` — `watchlist.py` computed the whole verdict and printed it
+to stdout, where nothing read it, so the narrative had to guess. Fixed at all three layers: an
+additive `watchlist_action` block whose `reason` always names WHICH of the three predicates bit,
+a renderer that prints that block and prints **nothing** when it is absent, and a
+`_style_rules.md` ban on claiming that anything was written, added, recorded, scheduled, filed,
+sent or removed.
+
+**Closed: R18** — one RSI under one label, one MoS denominator. `analyze_ticker` computed
+**Cutler's** RSI and published it as `rsi_14` while `technical_score` published BD_Finance's
+**Wilder-style** value as `technical.rsi`: 32.6 versus 48.7 on ROVI, both internally correct.
+Now the Wilder EWM, verified against live prices at a 0.0000 gap on ROVI.MC (50.96), UPS
+(42.93) and MSFT (63.01) where the old form gave 30.77, **nan** and 77.33. Margin of safety:
+the code has exactly one convention, `(blend − price)/blend`; the contradictory "~−27%" was the
+prose re-deriving it against price (on the system's convention: −37.4%). `_style_rules.md` now
+bans re-deriving any metric the JSON already carries.
+*Retracted from that item*: "the history table mislabels `review` as WATCH". It does not —
+`review → WATCH` is the house style in `report_history`, `send_email` and `update_shortlist`.
+The audit read a deliberate presentation map as a data error and the roadmap copied it.
+
+**Closed: R12** — `log_orphan_check.py` now names the machine. Its `state :` line printed the
+probed root, and the probe tries C: then D:; on vmhost1 `C:\BD_Obsidian\Personal` is a
+junction, so it read `C:\...` on BOTH machines. In a tool whose premise is that only one
+machine may be written, the target's identity is the one thing it must not be silent about.
+Also wired into the **15:00 failover watchdog**, which now COMPARES reports to rows instead of
+counting rows against zero — on 2026-08-17 it saw 4 rows and stayed quiet, every one of them
+from `_growth_log.csv`. Orphans get their own subject, and the body names the single writer and
+the exact `--fix` command.
+
+**Closed: R10** — the Stocks* bats are a single source. The laptop's C: copies and vmhost1's D:
+copies had drifted, so the 2026-08-17 `job_lock` additions could not be deployed by copying and
+the machine that runs the pipeline went on running seven heavy jobs unserialised. Six absolute
+`run_with_timeout.ps1` references (plus the two watchdog pythons) are now `%~dp0`-relative, and
+the one genuinely per-machine value moved into new `_bd_env.bat`. A **probe, not just an env
+var**: a stale `BD_FINANCE_DIR` would silently redirect ten scheduled jobs, so it is honoured
+only when it proves out against a file — the same contract `bd_paths.py` uses, so the two
+layers cannot disagree. Verified end-to-end through the patched path:
+`stocks-failover-watchdog.bat` exit 0, "skills: healed (VERIFIED IN SYNC manifest
+7F6BC005E78D24E0)", "orphans: 0".
+
+**Closed: R11 (residual)** — one path resolver, and it closes a live fatal bug.
+`_run_and_save.py` passed a hardcoded `cwd=C:\Github\BD\Finance\BD_Finance` to
+`subprocess.run`; vmhost1 has no `C:\Github` at all, so **every deep and screen died at node
+2** until the 13:30 run worked around it by hand. `run_daily.py` and `technical_score.py` had
+already been fixed — the wrapper `run_daily` calls kept the constant. That is the argument for
+one resolver rather than three lists: the fix landed in two of three places and the third was
+the one that mattered.
+
+**Closed: B7** — the documented test command could not collect 13 test files. `uv run --with
+pytest` builds an isolated environment holding pytest and nothing else, so collection died on
+matplotlib, yfinance, yaml, pandas and numpy: **every test count ever published for this skill
+came from a different command than the documented one.** New `requirements-dev.txt`, and
+`uv run --with-requirements requirements-dev.txt pytest tests -q` verified at 1724 passed / 1
+skipped / exit 0. Making the nine obvious deps explicit surfaced a tenth: without `markdown`,
+`send_email.py` degrades to a `<pre>` instead of raising, so its absence produced 9 quiet test
+FAILURES rather than a collection error — the same silent-degradation shape as
+`api_keys_reader()` answering a missing file with `{}`.
+
+**Closed: N5** — peer-set quality is measured, not noticed. adidas was ranked against Amazon,
+McDonald's, Home Depot, Starbucks and Nike, and the resulting 7.33/10 carried the full 12% peer
+weight with nothing marking it a sector proxy. Peers now carry their own industry, so "how many
+of these are actually peers" is a number, and an untrustworthy set warns on the SAME channel the
+`none` case already used. Verified on the live case the LLM had caught by hand hours earlier:
+*"SECTOR PROXY, NOT PEERS: only 0/5 share the 'Integrated Freight & Logistics' industry (others:
+Aerospace & Defense, Conglomerates, Farm & Heavy Construction Machinery, Railroads)."* The
+sub-score is deliberately **not** damped — that would move the composite for a large share of
+names and make today's scores incomparable with every score already logged, which is a G1/G3
+recalibration decision.
+
+**Closed: N2** — `op_margin_3y_delta`, additive only. Percentage-point change in annual
+operating margin over three fiscal years, at zero fetch cost from the frame already in memory,
+published with the two margins and two fiscal years behind it because a bare delta cannot be
+checked. Live: ROVI −1.56pp, MSFT +2.14pp, UPS −1.18pp; ROVI's 24.99% matches what
+`reconcile_ttm` derives independently. A test asserts no scoring code references it — the Moat
+tie-breaker the roadmap describes would move the composite on a signal already called
+double-counted, and belongs to G1.
+
+**Closed: N1** — the segment extraction is finally gated. The chart, validator, chart-gate entry
+and §2.1 slot all shipped in v3.1; the 2026-07-30 decision to keep it out of the scheduled path
+was written in the roadmap but **the instruction was never conditioned**, so the 13:30 job was
+told to fetch and extract for a year. The measurement says what that bought: **3 files in
+`_segments/`, newest 2026-07-21**, against ~30 deep-dives since. Now gated on `BD_SEGMENTS`,
+whose default derives from the existing, already-verified `STOCKSDAILY_SCHEDULED` rather than a
+second pair of defaults to keep in sync. And the absent-data caption is now **two different
+sentences** — "we did not ask" and "the company does not report" are opposite readings of the
+same blank.
+
+**Also**: **N0 closed WON'T DO** with the probe's evidence (FinancialReports returns filing
+documents and metadata, no structured statements, no IPO endpoint — so it would add a third
+ground-truth exception, not a data source; the "500 free credits/month" figure is stale).
+**R14's evaluation recorded as complete** (ReadNow 0315) with a *derived* country list — the top
+14 markets cover 88% of all 385 logged evaluations — leaving only a go/no-go. **R19** diagnosed:
+`StocksStrategyMonthly` was HUNG, not merely stuck, and was the only Stocks* bat with neither a
+lock nor a timeout. **R20** opened: R10 makes a `.scripts` push possible; it does not make one
+exist.
+
+Suite: **1750 passed, 1 skipped** (from 1689 at v4.3.3). Schema stays **2.2** — untouched.
+
+---
+
 ## v4.3.3 — 2026-08-17 · schema 2.2 · **1674 tests** (daily) · **1813** across the family
 
 Broker reference refreshed against the brokers' own published schedules, and extended from 11

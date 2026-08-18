@@ -144,8 +144,14 @@ uv run python "C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\analyze_ti
 # Regenerate the dashboard
 uv run python "...\scripts\build_dashboard.py"
 
-# Tests (865: 864 pass + 1 opt-in Chromium skip, as of v4.3 wave 0)
-uv run --with pytest pytest "C:\Users\bsdias\.claude\skills\bd-stocks-daily\tests" -q
+# Tests (1751: 1750 pass + 1 opt-in Chromium skip, as of v4.3.4)
+# --with-requirements, NOT --with pytest: `uv run --with pytest` builds an env holding
+# pytest and nothing else, so it CANNOT COLLECT 13 of the test files (matplotlib,
+# yfinance, yaml, pandas, numpy). Every count published before 2026-08-18 came from a
+# different command than the documented one -- roadmap B7.
+uv run --with-requirements requirements-dev.txt pytest tests -q
+# ...or, faster, against the system interpreter the pipeline itself uses:
+python -m pytest tests -q
 ```
 
 Or invoke the whole pipeline as a Claude Code skill: **`/bd-stocks-daily`**.
