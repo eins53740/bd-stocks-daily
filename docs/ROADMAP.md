@@ -215,11 +215,19 @@ Three causes, all now understood:
   It also fixes a pre-existing cmd trap it inherited: `%ERRORLEVEL%` inside a parenthesised
   if/else is expanded when the BLOCK is parsed, so the old `echo send_strategy_email.py exit
   code %ERRORLEVEL%` printed the errorlevel from before the send, never the send's own.
-- **Why it is not installed yet**: a `cmd.exe` is still executing the current file, and cmd
-  reads a batch file by byte offset -- editing it mid-run can make it execute a truncated
-  line. It lands as soon as that instance ends.
-- **Left to do**: `Stop-Process -Id <the hung claude>` (Bruno's call -- killing PIDs is
-  confirm-first), swap the bat in, and drop `/ri 60 /du 02:00` from the trigger.
+- **INSTALLED 16:13** -- the hung instance ended on its own, so the swap went in and was
+  verified by running the real control flow with the claude and mail calls stubbed: lock
+  acquired, "exit code 124", the 124 NOTE, the email-retry branch firing, "send_strategy_email
+  exit code 0" (the real value, not a stale one), lock released, and `VERDICT strategy-monthly
+  claude=124 doc_updated_today=1 email=0`.
+- **One consequence worth recording**: the 11:24 log is STILL 57 bytes with the process gone,
+  so the bat never reached its own completion line -- `send_strategy_email.py` never ran and
+  **this month's digest never went out**, even though the document it announces was written at
+  11:47. That is the exact failure the VERDICT line now makes visible.
+- **Left to do, and it needs a human**: drop `/ri 60 /du 02:00` from the trigger. A monthly job
+  must not carry an hourly repetition, and until it is removed a late boot will still produce
+  up to three firings -- now serialised by the lock and bounded by the ceiling, but still
+  three.
 - **Trigger**: none.
 
 
