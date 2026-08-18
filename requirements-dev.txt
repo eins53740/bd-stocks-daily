@@ -1,0 +1,30 @@
+# Test-time dependencies for the bd-stocks-daily suite.
+#
+# WHY THIS FILE EXISTS (roadmap B7). Every doc in this skill told you to run the suite with
+#   uv run --with pytest pytest tests -q
+# and that command CANNOT COLLECT 13 of the test files. `uv run --with pytest` builds an
+# isolated environment containing pytest and nothing else, so it cannot see the system
+# interpreter's packages -- collection dies on matplotlib (4 files), yfinance (3), yaml (2),
+# pandas (2) and numpy (2). Every test count ever published for this skill therefore came
+# from a DIFFERENT command than the documented one. The suite itself was fine; the
+# instructions were not.
+#
+# The suite is network-free by design. These are import-time dependencies of the modules
+# under test, not fixtures that reach out.
+#
+# `markdown` is here for a subtler reason and it is worth reading. send_email.py DEGRADES
+# when markdown is unimportable -- it wraps the body in a <pre> instead of raising -- so its
+# absence produced 9 quiet test FAILURES rather than a collection error. That is the same
+# silent-degradation shape as api_keys_reader() answering a missing file with {}: the run
+# looks healthy and the output is wrong. It only surfaced because this file made the other
+# nine deps explicit first.
+#
+# Unpinned on purpose: this mirrors whatever the production interpreter has, and pinning it
+# here would create a second, silently diverging source of truth about the runtime.
+pytest
+PyYAML
+pandas
+numpy
+matplotlib
+yfinance
+markdown
