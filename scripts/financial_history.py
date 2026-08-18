@@ -348,11 +348,18 @@ def quarters_in_current_fy(revenue_by_fy: dict) -> int:
 
 
 def _quarter_series(records: list) -> dict:
+    # net_income and unusual_items via .get(): the AV path has no unusual-items row at all,
+    # and pre-R16 caches predate both keys -- a missing key must map to None, never KeyError.
+    # Both come out of the SAME quarterly frame that revenue/EBITDA already came from, so
+    # exposing them costs no fetch. `net_income` was in fact already being extracted by
+    # `_yf_records` and then thrown away here.
     return {
         "labels": [quarter_label_from_date(r["date"]) for r in records],
         "revenue": [r["revenue"] for r in records],
         "ebitda": [r["ebitda"] for r in records],
         "fcf": [r["fcf"] for r in records],
+        "net_income": [r.get("net_income") for r in records],
+        "unusual_items": [r.get("unusual_items") for r in records],
     }
 
 
@@ -715,6 +722,10 @@ def _yf_records(fin_df, cf_df) -> list:
     rev_row = _row(fin_df, ["Total Revenue"])
     ebitda_row = _row(fin_df, ["EBITDA", "Normalized EBITDA"])
     ni_row = _row(fin_df, ["Net Income", "Net Income Common Stockholders"])
+    # Same row labels analyze_ticker._STMT_ROWS uses for the annual view, so the quarterly
+    # and annual one-off figures are the same line item measured on two windows (roadmap R16).
+    unusual_row = _row(fin_df, ["Total Unusual Items", "Special Income Charges",
+                                "Total Unusual Items Excluding Goodwill"])
     fcf_row = _row(cf_df, ["Free Cash Flow"])
     ocf_row = _row(cf_df, ["Operating Cash Flow"])
     capex_row = _row(cf_df, ["Capital Expenditure"])
@@ -732,7 +743,8 @@ def _yf_records(fin_df, cf_df) -> list:
                 # so free cash flow = operating cash flow + capex.
                 fcf = ocf + capex
         records.append({"date": d, "revenue": rev, "ebitda": ebitda, "fcf": fcf,
-                        "net_income": _cell(ni_row, col)})
+                        "net_income": _cell(ni_row, col),
+                        "unusual_items": _cell(unusual_row, col)})
     records.sort(key=lambda r: r["date"])
     return records
 

@@ -443,6 +443,12 @@ funcionar. A 2.3 lê `ev_ebitda`, portanto tem de correr depois da correcção.
   trimestres chamados TTM.
 - Overlay-only: schema continua `2.2`; usa os canais de proveniência que já existem
   (`corrected_fields`, `consistency_issues`, `data_quality`) em vez de inventar outros.
+- **Dois canais distintos, de propósito**: `corrections` (um valor servido estava errado → move
+  o `data_quality`) e `additions` (uma key derivada sem contraparte do fornecedor → **não** o
+  move, senão toda a corrida limpa hasteava uma bandeira "corrected" falsa).
+- **Publica também os inputs TTM do R16** — `unusual_items_ttm` e `net_income_ttm_statements`,
+  somados dos trimestres sob a mesma identidade da receita. O veredicto é do `red_flags.py`,
+  que é consumidor puro de JSON por contrato; este nó só lhe entrega a base certa.
 - Standalone: corre contra qualquer JSON já em disco sem `--update` para auditar o corpus.
 
 ### Phase 2.3 — Valuation depth (deep only, v4 Phase B)

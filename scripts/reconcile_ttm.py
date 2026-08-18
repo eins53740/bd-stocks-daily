@@ -91,7 +91,10 @@ def ttm_from_series(series: dict, key: str, n: int = 4) -> tuple[float | None, l
 
 def reconcile(analysis: dict, cache: dict) -> dict:
     """Pure. Returns the verdict; the caller decides whether to write it."""
-    out = {"corrections": [], "issues": [], "checked": [], "skipped": []}
+    # `corrections` = a served value was wrong and is being replaced -> moves data_quality.
+    # `additions`   = a derived overlay key with no vendor counterpart -> must NOT move it,
+    #                 or every clean run would fly a false "corrected" flag.
+    out = {"corrections": [], "additions": [], "issues": [], "checked": [], "skipped": []}
     fund = analysis.get("fundamentals") or {}
     series = (cache or {}).get("series") or {}
 
@@ -133,6 +136,29 @@ def reconcile(analysis: dict, cache: dict) -> dict:
                 else:
                     out["checked"].append(f"ebitda_ttm within {gap*100:.1f}% of the quarterly sum")
 
+    # ---- TTM one-offs and net income, for the R16 earnings-quality check --------------
+    # Published as additive keys rather than acted on here: red_flags.py owns that verdict
+    # and is a pure JSON consumer by contract. Gated on the SAME revenue identity, because a
+    # 4-quarter one-off sum measured against a different window is the hollow-denominator
+    # defect wearing a new hat.
+    if rev_ttm_series is not None and rev_ttm_vendor is not None and \
+            abs(rev_ttm_vendor - rev_ttm_series) / max(rev_ttm_vendor, rev_ttm_series) <= REVENUE_BASIS_TOL:
+        unusual_ttm, uw = ttm_from_series(series, "unusual_items")
+        ni_ttm, _ = ttm_from_series(series, "net_income")
+        if unusual_ttm is not None and ni_ttm is not None:
+            out["additions"].append({
+                "field": "fundamentals.unusual_items_ttm", "new": round(unusual_ttm),
+                "source": f"sum of _fin_history quarterly unusual_items {'+'.join(uw)}",
+            })
+            out["additions"].append({
+                "field": "fundamentals.net_income_ttm_statements", "new": round(ni_ttm),
+                "source": f"sum of _fin_history quarterly net_income {'+'.join(uw)}",
+            })
+        else:
+            out["skipped"].append(
+                "one-off TTM: quarterly unusual_items and/or net_income incomplete "
+                "(the Alpha Vantage path has no unusual-items row at all)")
+
     # ---- Operating margin: flag and remove, never substitute a different basis --------
     om_vendor = _num(fund.get("operating_margin_ttm"))
     inc = ((analysis.get("statements_raw") or {}).get("income") or {})
@@ -169,7 +195,7 @@ def apply(analysis: dict, verdict: dict) -> list[str]:
     """Write the corrections into `analysis` in place. Returns the touched field names."""
     fund = analysis.setdefault("fundamentals", {})
     touched: list[str] = []
-    for c in verdict["corrections"]:
+    for c in verdict["corrections"] + verdict.get("additions", []):
         leaf = c["field"].split(".", 1)[1]
         fund[leaf] = c["new"]
         touched.append(c["field"])
@@ -237,8 +263,10 @@ def main() -> int:
         print(f"  ISSUE   {line}")
     for c in verdict["corrections"]:
         print(f"  CORRECT {c['field']}: {c['old']} -> {c['new']}  ({c['source']})")
+    for c in verdict["additions"]:
+        print(f"  ADD     {c['field']} = {c['new']}  ({c['source']})")
 
-    if args.update and (verdict["corrections"] or verdict["issues"]):
+    if args.update and (verdict["corrections"] or verdict["additions"] or verdict["issues"]):
         touched = apply(analysis, verdict)
         jp.write_text(json.dumps(analysis, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         print(f"reconcile_ttm: wrote {jp.name}; fields touched: {', '.join(touched) or 'none'}; "
@@ -247,6 +275,7 @@ def main() -> int:
         print("reconcile_ttm: nothing to correct")
     print(json.dumps({"ticker": ticker,
                       "corrections": len(verdict["corrections"]),
+                      "additions": len(verdict["additions"]),
                       "issues": len(verdict["issues"]),
                       "skipped": len(verdict["skipped"])}))
     return 0

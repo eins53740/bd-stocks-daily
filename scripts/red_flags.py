@@ -145,14 +145,31 @@ def income_checks(fund: dict, inc: dict) -> list:
                         "warn" if r > 0.30 else "pass", _round(r * 100, 1), "> 30%"))
 
     # one-time income > 15% of net income (warn — earnings-quality)
-    unusual = _yr(inc, "unusual_items", 0)
-    ni_t = _yr(inc, "net_income", 0)
+    #
+    # TTM FIRST, ANNUAL AS FALLBACK (roadmap R16). This check read the ANNUAL snapshot only,
+    # and an annual statement cannot contain a gain booked in a quarter it does not cover.
+    # ROVI.MC's EUR 62.4M Q2-2026 gain -- 33.7% of TTM net income, 2.2x this threshold --
+    # therefore printed a clean "0.4%" off FY2025's -608k. The narrative caught it and
+    # quantified it correctly; the deterministic scanner that exists for exactly this did not.
+    # Diligence is not a control.
+    #
+    # The TTM figures come from node 2.2b (reconcile_ttm), which sums the quarterly rows only
+    # after proving the 4-quarter window is the vendor's own via the revenue identity. The
+    # basis is always named in the note, because a "pass" on annual data is a weaker statement
+    # than a "pass" on TTM and the reader has to be able to tell them apart.
+    unusual_ttm = _num(fund.get("unusual_items_ttm"))
+    ni_ttm_stmt = _num(fund.get("net_income_ttm_statements"))
+    if unusual_ttm is not None and ni_ttm_stmt:
+        unusual, ni_t, basis = unusual_ttm, ni_ttm_stmt, "TTM (4 quarters)"
+    else:
+        unusual, ni_t = _yr(inc, "unusual_items", 0), _yr(inc, "net_income", 0)
+        basis = "annual only — a gain booked after the last fiscal year-end is invisible here"
     r = _div(abs(unusual) if unusual is not None else None, abs(ni_t) if ni_t else None)
     if r is None:
         out.append(flag("one_time_income", "One-time items / NI", "na", None, "> 15%", "no data"))
     else:
         out.append(flag("one_time_income", "One-time items / NI",
-                        "warn" if r > 0.15 else "pass", _round(r * 100, 1), "> 15%"))
+                        "warn" if r > 0.15 else "pass", _round(r * 100, 1), "> 15%", basis))
 
     # gross-margin YoY swing > 5 pts (warn)
     gm_t, gm_p = _div(gp_t, rev_t), _div(gp_p, rev_p)
