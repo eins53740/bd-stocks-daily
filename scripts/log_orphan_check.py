@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import csv
 import shutil
+import socket
 import sys
 from pathlib import Path
 
@@ -54,6 +55,29 @@ _CANDIDATES = (
 HEADERS = ["ticker", "date", "round", "mode", "verdict", "score", "gates_passed",
            "price_at_eval", "currency", "size", "notes", "management_score",
            "management_flag", "bear_case_trigger"]
+
+
+def describe_root(root: Path) -> str:
+    r"""`<host>  <path>` and, when the path is a junction, where it actually lands.
+
+    WHY (roadmap R12, found by Bruno on 2026-08-18). This line used to print just `root`,
+    and `root` is picked by probing C: then D:. On vmhost1 `C:\BD_Obsidian\Personal` is a
+    JUNCTION to `D:\BD_Obsidian\Personal`, so C: matches there too and the line printed
+    `C:\BD_Obsidian\...` on BOTH machines. In a tool whose whole premise is that only ONE
+    machine may be written -- the laptop is a read-only mirror that StocksMirrorPull
+    overwrites at 09:30 and 15:30 -- the identity of the target is precisely the thing it
+    must not be silent about. Establishing which machine had actually been fixed took
+    comparing line counts and a backup file's mtime on both boxes; the tool should have just
+    said so.
+    """
+    host = socket.gethostname()
+    try:
+        real = root.resolve()
+    except OSError:
+        return f"{host}  {root}  (could not resolve)"
+    if str(real).lower() != str(root).lower():
+        return f"{host}  {root}  ->  {real}  (junction)"
+    return f"{host}  {root}"
 
 
 def state_dir() -> Path:
@@ -104,7 +128,7 @@ def main() -> int:
         if (tic, date) not in logged:
             orphans.append((rep, fm))
 
-    print(f"state    : {root}")
+    print(f"state    : {describe_root(root)}")
     print(f"reports  : {len(list(root.glob('*_review.md')))} on disk, {len(rows)} rows in _log.csv")
     if not orphans:
         print("ORPHANS  : none - every report on disk has a _log.csv row")

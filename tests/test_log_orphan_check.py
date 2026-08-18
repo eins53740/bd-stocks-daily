@@ -120,3 +120,29 @@ def test_since_filter_excludes_older_reports(patched, capsys):
     assert MOD.main() == 1
     out = capsys.readouterr().out
     assert "ROVI.MC" in out and "OLD" not in out
+
+
+def test_describe_root_names_the_machine():
+    r"""R12 follow-up: the line used to print C:\ on BOTH machines (vmhost1 has a junction),
+    which is the one thing a single-writer tool must not be silent about."""
+    import socket
+    out = MOD.describe_root(Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily"))
+    assert socket.gethostname() in out
+    assert "StocksDaily" in out
+
+
+def test_describe_root_flags_a_junction(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+
+    # A plain directory resolves to itself -> no junction annotation.
+    assert "junction" not in MOD.describe_root(real)
+
+    # A path whose resolve() lands elsewhere must say so AND show the target, because the
+    # target is the answer to "which machine did I just write to".
+    class Redirected(type(real)):
+        def resolve(self, strict=False):
+            return real
+
+    out = MOD.describe_root(Redirected(tmp_path / "link"))
+    assert "junction" in out and str(real) in out
