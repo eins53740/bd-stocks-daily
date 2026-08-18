@@ -138,6 +138,40 @@ self-heals from the failover watchdog); `.scripts` has nothing.
   exactly the ten-week frozen-bat failure with a new mechanism.
 - **Trigger**: none; it is the natural next step after R10.
 
+### R21. Four orchestration defects the 13:30 run reported and nobody fixed — **S**
+
+The 2026-08-18 13:30 job on vmhost1 finished cleanly (26m 15s, exit 0, digest delivered) and
+its own report listed **five** defects in `run_daily.py`. Only the first was fixed that day, as
+part of R11 -- and it was the fatal one (`_run_and_save.py` passing a hardcoded
+`cwd=C:\Github\BD\Finance\BD_Finance` on a machine with no `C:\Github`). The other four are
+still live, and all four were **re-verified against the code on 2026-08-18 at 17:00**, not
+carried over on the report's word:
+
+| Node | Defect | Verified how | Shape |
+|---|---|---|---|
+| **2.5-end** | `finalize_score.py` prints the finalised composite to **stdout** and the runner throws it away | `finalize_score.py:67` is `print(json.dumps(result...))` -- there is no write path; `run_daily.py:269` captures stdout and, on `rc == 0`, **returns without reading it** | **SILENT** -- the node reports PASS while the management score never lands and the composite stays provisional |
+| **2.56** | passes `--ticker` to `alpha_beta.py`, which does not accept it | `alpha_beta.py:451-454` declares only `--analysis-json`, `--out-dir`, `--update` | Loud: argparse exits 2, so the return profile is simply absent |
+| **3.5** | omits `--fundamental-score`, which is **required** | `technical_score.py:531` -- `required=True`, no default | Loud: the GO/NO-GO never runs |
+| **2.6** | runs `macro_snapshot.py --check` and never `--fetch` | `run_daily.py:118` passes `["--check"]`; `macro_snapshot.py:217-218` are mutually exclusive modes and only `--fetch` writes | Half-silent: freshness is *asserted* on a file nothing in this path refreshes |
+
+**2.5-end is the one that matters, and it is the third instance of one shape.** R15 (corrections
+computed in prose, never written to the JSON) and R17 (a side effect announced but never
+performed) were the same defect: a helper that knows the answer, a channel that drops it, and a
+green status either way. That is now a named pattern, not three coincidences -- see
+`feedback_silent_success_antipatterns`.
+
+- **The fix is small and the risk is in the wiring, not the logic**: give `finalize_score.py`
+  an `--update` that writes back through the same path `exit_plan`/`alpha_beta`/`watchlist`
+  already use (do not invent a fourth), drop the bad flag at 2.56, thread the fundamentals
+  score into 3.5 from the JSON already on disk, and decide deliberately whether 2.6 should
+  fetch in the scheduled path or whether the prefilter/macro job owns that (a second
+  `--fetch` is known to clobber the merged breadth+sectors overlay, so this one is a
+  **decision**, not a typo).
+- **Why it was not done on 2026-08-18**: the 1-16 pass was scoped to the roadmap items the user
+  ordered, and these arrived from a run report rather than from the roadmap. Listing them here
+  is what makes them ordinary work instead of a memory.
+- **Trigger**: none.
+
 ### R14. OpenBB — evaluation DONE, Phase 1 awaiting a go/no-go — **M**
 
 **The evaluation this item asked for is complete**: ReadNow 0315
@@ -186,7 +220,7 @@ knowing before it is promised.
   so it ships alone with a measured before/after.
 - **Trigger**: that decision.
 
-### R19. `StocksStrategyMonthly` is stuck, unlocked, and has never completed — **S, live**
+### R19. `StocksStrategyMonthly` — lock + ceiling INSTALLED; only the trigger repetition is left — **S**
 
 **Diagnosed and half-fixed 2026-08-18.** It was not merely stuck: it was HUNG, and the
 distinction is the whole finding. The 11:24 instance wrote the strategy doc at 11:47, then its
@@ -229,32 +263,6 @@ Three causes, all now understood:
   up to three firings -- now serialised by the lock and bounded by the ceiling, but still
   three.
 - **Trigger**: none.
-
-
-Found 2026-08-18 while verifying something else, and measured rather than inferred:
-
-- The laptop task sits in state **`Running`**, `LastTaskResult` **0x800710E0** — *"the operator or
-  administrator has refused the request"*, which is what a repeat firing gets when an instance is
-  already running.
-- Its trigger repeats **every hour for two hours**, so it fired three times today — 10:24, 11:24,
-  12:24 — on the **18th**, for a job that is meant to run monthly.
-- Both log files are **57 bytes**: `Starting /bd-strategy-monthly` and nothing after it. No
-  completion line, no error.
-- Those two are the **only** `strategy-monthly_*.log` files in the folder. On this evidence the
-  job has never finished a run since it was created, and nothing ever said so.
-- **`strategy-monthly.bat` is the only one of the eleven bats with ZERO `job_lock` references**
-  (the others carry 2–3). So it can run concurrently with anything, including the 13:30 digest —
-  and while it runs on the laptop rather than on vmhost1, both machines share an egress IP, which
-  is the resource that matters: the Alpha Vantage cap is enforced **per IP**, measured in wave 1.0.
-  Concurrency between the two machines is therefore not free.
-
-This is the 2026-08-15 collision class (a job outside the ordering guard, taking another down)
-in the one place the S1 lock work did not reach.
-
-- **The work**: bring the bat inside `job_lock`, give it a completion/failure line so a hung run
-  is visible, and decide whether the 1-hour repetition is wanted at all — it looks like a
-  catch-up window that instead produces overlapping instances.
-- **Trigger**: none. It is running right now.
 
 
 ## Next — AGREED-DEFERRED
@@ -344,40 +352,7 @@ without a backtest is an educated guess on top of an educated guess
 
 ## Won't do — decided against
 
-- **TIKR screens #7–#10** (Yield / Deep Value / Net-Nets) — incompatible with the
-  Quality Compounder mandate (`STRATEGY_GUIDE.md §10`).
-- **A summable 4×10 SWOT scorecard** — the SWOT stays a qualitative overlay with
-  no number entering the composite (§10 item 4).
-- **A standalone `/bd-stocks-timing` sub-skill** — absorbed by the Technical card
-  and GO/NO-GO, which is exactly the intended scope (§10 item 10).
-- **ATR trailing stops in the exit plan** — `atr_context.enabled` stays `false` by
-  design: a compounder tolerates normal 20–30% drawdowns, and exit discipline is
-  the P/E band plus the thesis. Trailing stops belong to the growth skill.
-- **R5 — rotating the Alpha Vantage key pool** *(closed 2026-08-15, measured not assumed)*.
-  The entry assumed "six keys ⇒ ~6× the throughput". Both halves were false:
-  - `config/api_keys.txt` holds six entries but **five distinct keys** —
-    `api_key_alphavantage` and `api_key_alphavantage1` are the same string.
-  - **The free 25/day cap is enforced per SOURCE IP, not per key.** One key was burned
-    to its limit (25 calls succeeded, the 26th refused); the four other keys, one of
-    which had answered normally seconds earlier, were then **all refused by name** from
-    this machine. Rotation cannot raise a ceiling that is not per-key.
-
-  So this laptop has **one machine-wide allowance of 25 AV calls/day**, shared by
-  `financial_history.py` and `valuation_bands.py` — which is exactly what the existing
-  shared `_fin_history/_av_budget.json` counter already models. Nothing to build.
-
-  Do **not** re-open this by adding more keys; the constraint is the IP. Raising AV
-  throughput requires a paid plan, and raising **non-US** depth requires a different
-  provider entirely — see **N0** (AV fundamentals are US-listed only regardless of tier).
-
----
-
-## Maintaining this file
-
-Add an item when work is **consciously not done** — with the reason and the
-trigger, not just the title. Move it out when it ships, and record the outcome in
-`STRATEGY_GUIDE.md §10` (the historical record) rather than leaving a DONE row
-here. A roadmap of finished things is a changelog wearing the wrong hat.### N0. FinancialReports / financialfilings.com as the non-US fundamentals source — WON'T DO
+### N0. FinancialReports / financialfilings.com as the non-US fundamentals source — WON'T DO
 
 Probed 2026-08-18. **Both stated reasons for wanting it are false**, and neither depends on
 pricing, so the conclusion holds however the free tier turns out.
@@ -414,3 +389,37 @@ floor (v4.3 wave 2.2) already refuses to draw a band it cannot support, and the 
 is a paid provider -- not another free probe.
 
 
+- **TIKR screens #7–#10** (Yield / Deep Value / Net-Nets) — incompatible with the
+  Quality Compounder mandate (`STRATEGY_GUIDE.md §10`).
+- **A summable 4×10 SWOT scorecard** — the SWOT stays a qualitative overlay with
+  no number entering the composite (§10 item 4).
+- **A standalone `/bd-stocks-timing` sub-skill** — absorbed by the Technical card
+  and GO/NO-GO, which is exactly the intended scope (§10 item 10).
+- **ATR trailing stops in the exit plan** — `atr_context.enabled` stays `false` by
+  design: a compounder tolerates normal 20–30% drawdowns, and exit discipline is
+  the P/E band plus the thesis. Trailing stops belong to the growth skill.
+- **R5 — rotating the Alpha Vantage key pool** *(closed 2026-08-15, measured not assumed)*.
+  The entry assumed "six keys ⇒ ~6× the throughput". Both halves were false:
+  - `config/api_keys.txt` holds six entries but **five distinct keys** —
+    `api_key_alphavantage` and `api_key_alphavantage1` are the same string.
+  - **The free 25/day cap is enforced per SOURCE IP, not per key.** One key was burned
+    to its limit (25 calls succeeded, the 26th refused); the four other keys, one of
+    which had answered normally seconds earlier, were then **all refused by name** from
+    this machine. Rotation cannot raise a ceiling that is not per-key.
+
+  So this laptop has **one machine-wide allowance of 25 AV calls/day**, shared by
+  `financial_history.py` and `valuation_bands.py` — which is exactly what the existing
+  shared `_fin_history/_av_budget.json` counter already models. Nothing to build.
+
+  Do **not** re-open this by adding more keys; the constraint is the IP. Raising AV
+  throughput requires a paid plan, and raising **non-US** depth requires a different
+  provider entirely — see **N0** (AV fundamentals are US-listed only regardless of tier).
+
+---
+
+## Maintaining this file
+
+Add an item when work is **consciously not done** — with the reason and the
+trigger, not just the title. Move it out when it ships, and record the outcome in
+`STRATEGY_GUIDE.md §10` (the historical record) rather than leaving a DONE row
+here. A roadmap of finished things is a changelog wearing the wrong hat.
