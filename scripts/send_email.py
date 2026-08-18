@@ -28,6 +28,7 @@ import sys
 import uuid
 from datetime import date
 from pathlib import Path
+import bd_paths
 
 try:
     import markdown as _markdown  # type: ignore
@@ -43,7 +44,9 @@ for _name in ("stdout", "stderr"):
             pass
 
 # Add BD_Finance to path to reuse api_keys_reader + SMTP
-BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
+# Resolved per machine by bd_paths (vmhost1 has no C:\Github\BD at all, and a dead
+# BD_Finance path yields an EMPTY key dict with only a printed warning). Roadmap R11.
+BD_FINANCE = bd_paths.bd_finance() or Path(r"C:\Github\BD\Finance\BD_Finance")
 sys.path.insert(0, str(BD_FINANCE))
 
 LOG = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily\_log.csv")

@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import markets  # noqa: E402 — sibling module (suffix -> currency, EUR FX)
+import bd_paths
 
 # --- Reuse canon() / classify_nonequity() from the gap script (locked decision) ---
 #
@@ -84,7 +85,9 @@ canon, classify_nonequity = _load_gap_helpers()
 
 # Canonical BankBD DB path (matches bankbd.config.database_url default: sqlite:///bankbd.db
 # resolved against the repo root).
-DEFAULT_DB = Path(r"C:\Github\BD\Finance\BankBD\bankbd.db")
+# Resolved per machine by bd_paths (vmhost1 has no C:\Github\BD at all, and a dead
+# BD_Finance path yields an EMPTY key dict with only a printed warning). Roadmap R11.
+DEFAULT_DB = bd_paths.bankbd_db() or Path(r"C:\Github\BD\Finance\BankBD\bankbd.db")
 
 # Interim holdings source while BankBD's positions table is empty: a Yahoo Finance
 # portfolio export. Auto-fallback target when the DB yields zero positions.

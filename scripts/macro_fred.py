@@ -51,9 +51,12 @@ import urllib.parse
 import urllib.request
 from datetime import date
 from pathlib import Path
+import bd_paths
 
 OUT_DIR = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily\_macro")
-KEYS_PATH = Path(r"C:\Github\BD\Finance\BD_Finance\config\api_keys.txt")
+# Resolved per machine by bd_paths (vmhost1 has no C:\Github\BD at all, and a dead
+# BD_Finance path yields an EMPTY key dict with only a printed warning). Roadmap R11.
+KEYS_PATH = bd_paths.api_keys_path() or Path(r"C:\Github\BD\Finance\BD_Finance\config\api_keys.txt")
 
 FRED_ROOT = "https://api.stlouisfed.org/fred"
 TIMEOUT_S = 20

@@ -59,9 +59,12 @@ import yfinance as yf  # noqa: E402
 import listings  # noqa: E402
 import markets  # noqa: E402
 import share_basis  # noqa: E402
+import bd_paths
 
 # Reuse BD_Finance's api_keys_reader for the FMP cross-validation key (Layer 1).
-BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
+# Resolved per machine by bd_paths (vmhost1 has no C:\Github\BD at all, and a dead
+# BD_Finance path yields an EMPTY key dict with only a printed warning). Roadmap R11.
+BD_FINANCE = bd_paths.bd_finance() or Path(r"C:\Github\BD\Finance\BD_Finance")
 if str(BD_FINANCE) not in sys.path:
     sys.path.insert(0, str(BD_FINANCE))
 

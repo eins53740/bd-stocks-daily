@@ -22,11 +22,14 @@ import os
 import re
 import sys
 from pathlib import Path
+import bd_paths
 
 GROQ_MODEL_DEFAULT = "llama-3.3-70b-versatile"
 GEMINI_MODEL_DEFAULT = "gemini-2.0-flash"
 
-BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
+# Resolved per machine by bd_paths (vmhost1 has no C:\Github\BD at all, and a dead
+# BD_Finance path yields an EMPTY key dict with only a printed warning). Roadmap R11.
+BD_FINANCE = bd_paths.bd_finance() or Path(r"C:\Github\BD\Finance\BD_Finance")
 API_KEYS_PATH = BD_FINANCE / "config" / "api_keys.txt"
 
 

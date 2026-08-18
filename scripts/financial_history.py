@@ -48,9 +48,12 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import markets  # noqa: E402  (sibling helper — suffix_of)
+import bd_paths
 
 OUT_DIR_DEFAULT = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
-BD_FINANCE = Path(r"C:\Github\BD\Finance\BD_Finance")
+# Resolved per machine by bd_paths (vmhost1 has no C:\Github\BD at all, and a dead
+# BD_Finance path yields an EMPTY key dict with only a printed warning). Roadmap R11.
+BD_FINANCE = bd_paths.bd_finance() or Path(r"C:\Github\BD\Finance\BD_Finance")
 API_KEYS_PATH = BD_FINANCE / "config" / "api_keys.txt"
 
 TTL_DAYS = 80
