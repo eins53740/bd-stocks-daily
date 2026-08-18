@@ -1453,12 +1453,33 @@ def analyze(ticker: str, mode: str = "deep", use_fmp: bool = True) -> dict:
             tech["sma50"] = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else None
             tech["sma200"] = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else None
             tech["change_1y_pct"] = float((close.iloc[-1] / close.iloc[0] - 1) * 100)
-            # RSI 14
+            # RSI 14 -- Wilder-style EWM, matching BD_Finance/technical/rsi.py EXACTLY
+            # (ewm(alpha=1/n, min_periods=n), pandas' default adjust=True).
+            #
+            # THIS USED TO BE A DIFFERENT INDICATOR WEARING THE SAME LABEL (roadmap R18).
+            # It computed `rolling(14).mean()`, i.e. CUTLER's RSI, and published it as
+            # `rsi_14`, while technical_score.py published BD_Finance's Wilder-style value as
+            # `technical.rsi`. On ROVI.MC 2026-08-17 the two read 32.6 and 48.7 -- both
+            # internally correct, and 32.6 ("near oversold") versus 48.7 ("neutral") is not a
+            # rounding difference. Nothing in the code consumed `rsi_14`; its only consumer
+            # was the LLM writing the report, which saw two numbers under one name.
+            #
+            # The formula is REPLICATED rather than imported on purpose. Importing
+            # BD_Finance.technical.rsi executes that module's top level, which calls
+            # yf.download() for AMZN, GOOG and MSFT at 5-minute resolution -- three network
+            # fetches as a side effect of an import, in a pipeline node and in a suite
+            # documented as network-free. That is a BD_Finance defect (roadmap R21), outside
+            # this skill's write scope; six lines of pandas here avoid depending on it.
             delta = close.diff()
-            up = delta.clip(lower=0).rolling(14).mean()
-            down = -delta.clip(upper=0).rolling(14).mean()
-            rs = up / down
-            tech["rsi_14"] = float(100 - (100 / (1 + rs.iloc[-1]))) if down.iloc[-1] and down.iloc[-1] > 0 else None
+            gain = delta.clip(lower=0)
+            loss = -delta.clip(upper=0)
+            avg_gain = gain.ewm(alpha=1 / 14, min_periods=14).mean()
+            avg_loss = loss.ewm(alpha=1 / 14, min_periods=14).mean()
+            last_gain, last_loss = avg_gain.iloc[-1], avg_loss.iloc[-1]
+            tech["rsi_14"] = (float(100 - (100 / (1 + last_gain / last_loss)))
+                              if last_loss and last_loss > 0 and last_loss == last_loss
+                              else None)
+            tech["rsi_14_method"] = "wilder_ewm"    # same method as technical.rsi
             # Max drawdown
             roll_max = close.cummax()
             dd = (close - roll_max) / roll_max

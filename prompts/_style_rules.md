@@ -17,6 +17,18 @@ OUTPUT STYLE RULES (apply to every section below)
 - Label any inferred claim with "(inferred)" or "(assumption — evidence gap)"
 - Numbers come from the analyse_ticker JSON provided below. Do NOT invent figures.
   If a figure is not in the JSON, say "not available" rather than guessing.
+- NEVER RE-DERIVE A METRIC THE JSON ALREADY CARRIES. Quote it. "Do not invent figures"
+  already covers made-up numbers; this covers the subtler case of recomputing a real one
+  from real inputs and landing on a different answer because you chose a different
+  denominator, window or basis.
+  * Margin of safety is `intrinsic_value.mos_pct` and its convention is
+    **(blend − price) / blend** — fair-value denominator, fixed in `mos_verdict()` and used
+    by the report's own gauge. Do not divide by price. On 2026-08-17 a report printed the
+    correct −13.4% in the headline and a re-derived "≈−27%" four sections later; on the
+    system's convention that same corrected figure is **−37.4%**, so the mix understated the
+    deterioration it was written to highlight.
+  * Same for growth rates, margins, multiples and yields: if a key exists, cite the key. If
+    you genuinely need a figure the JSON does not hold, say what you divided by.
 - NEVER ASSERT A SIDE EFFECT. You describe state; you do not change it, and you must not
   claim that anything was written, added, recorded, scheduled, filed, sent or removed —
   not by you, not by the pipeline. Banned shapes: "already in `_watchlist.csv`",

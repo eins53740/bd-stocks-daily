@@ -125,3 +125,23 @@ def test_style_rules_forbid_asserting_side_effects():
     txt = (Path(__file__).resolve().parents[1] / "prompts" / "_style_rules.md").read_text(encoding="utf-8")
     assert "NEVER ASSERT A SIDE EFFECT" in txt
     assert "_watchlist.csv" in txt, "the ban names the exact fabrication that happened"
+
+
+def test_style_rules_pin_the_margin_of_safety_convention():
+    """R18: the -13.4% headline and a re-derived '~-27%' in the same report came from the
+    prose choosing a different denominator, not from the code -- mos_verdict() has exactly
+    one convention."""
+    txt = (Path(__file__).resolve().parents[1] / "prompts" / "_style_rules.md").read_text(encoding="utf-8")
+    assert "NEVER RE-DERIVE A METRIC THE JSON ALREADY CARRIES" in txt
+    assert "(blend − price) / blend" in txt
+    assert "mos_pct" in txt
+
+
+def test_mos_convention_in_code_is_fair_denominated():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "intrinsic_value", Path(__file__).resolve().parents[1] / "scripts" / "intrinsic_value.py")
+    iv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(iv)
+    # blend 100, price 80 -> +20% on the fair denominator, +25% on the price denominator.
+    assert iv.mos_verdict(100.0, 80.0)["mos_pct"] == 20.0
