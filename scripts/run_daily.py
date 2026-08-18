@@ -22,6 +22,7 @@ WHAT IT DOES *NOT* DO
 
 STAGES (each is idempotent; re-running one repeats its writes, it never doubles them)
   pre    0.5 thesis_check . 1 pick_candidates . 2 analyze_ticker . 2.2 financial_history
+         . 2.2b reconcile_ttm
          . 2.3 valuation_bands + intrinsic_value . 2.4 red_flags . 2.4b category+roic lens
          . 1.5 edgar . 2.6 macro (once per run)
   mid    2.5-end finalize_score . 2.55 exit_plan . 2.56 alpha_beta . 2.57 watchlist
@@ -127,6 +128,12 @@ def build_plan(stage: str, a: argparse.Namespace) -> list[Step]:
                  required=True, needs=("ticker",)),
             Step("2.2", "financial history", "financial_history.py",
                  ["--ticker", a.ticker or "", "--analysis-json", tj],
+                 required=True, needs=("ticker",)),
+            # 2.2b must come AFTER 2.2: the quarterly series it reconciles against is
+            # written by financial_history, and node 2 (analyze_ticker) runs before that,
+            # so analyze_ticker's own Layer-0 gate structurally cannot see it. Roadmap R15.
+            Step("2.2b", "reconcile TTM aggregates", "reconcile_ttm.py",
+                 ["--analysis-json", tj, "--update"],
                  required=True, needs=("ticker",)),
             Step("2.3", "valuation bands", "valuation_bands.py",
                  ["--ticker", a.ticker or "", "--analysis-json", tj, "--update"],

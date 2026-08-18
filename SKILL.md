@@ -13,7 +13,7 @@ argument-hint: "[--ticker TICKER] [--mode deep|screen] [--dry-run] [--add-ticker
 > dizia 4.3.1 — uma string de versão em prosa não tem quem a verifique, por isso o H1 deixou
 > de a ter. Contagens de testes e estado de wave também não pertencem aqui.
 
-Avaliação diária automática de 3 acções (1 deep-dive + 2 screens, dos quais 1 garantidamente de mercado não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 22 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.59 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
+Avaliação diária automática de 3 acções (1 deep-dive + 2 screens, dos quais 1 garantidamente de mercado não-US) do pool pré-filtrado, com score 0-10 (scoring **v2.2**), peer comparison, market timing, **technical score & GO/NO-GO**, **management quality**, **industry context**, **3-layer risk audit** e **bear case**, layout tiered (5 min TL;DR / 30 min deep). A orquestração corre como um **pipeline de 23 nós** (sub-fases 0.5 / 1.5 / 2.2 / 2.2b / 2.3 / 2.4 / 2.5 / 2.55 / 2.56 / 2.57 / 2.58 / 2.59 / 2.6 / 3.5 / 5.5 / 5.7 incluídas).
 
 O ecossistema v3 acrescenta, sobre as mesmas avaliações: um **dashboard de cartões** single-scroll stdlib (`build_dashboard.py`) com os cartões **Technical GO/NO-GO**, **Portfolio**, **Thesis** e **Broker** (NÃO são separadores/tabs — é layout de cartões num único scroll); cobertura **de mercado global** (TW/CN/HK/IN/KR/JP, local + EUR; ver `scripts/markets.py` e `docs/MARKET_COVERAGE_v3.md`); e um skill **paralelo** `/bd_stocks_daily_growth` para hyper-growers (roadmap item 11, renomeado de `/bd-stocks-rockets`).
 
@@ -406,6 +406,44 @@ python "%SCRIPTS%\financial_history.py" --ticker ASML.AS --analysis-json "%OUT_D
   - **Custo medido**: ~3-5 s por ticker (≈10 s pelos dois screens), contra ~6 min de folga num job de 22-24 min — 0,6 % do orçamento. Instrumentar com `node_timing.py --node 2.2 --ticker <T>` como nos restantes nós pesados.
   - **Degradação honesta**: em screens não-US a AV devolve vazio → yfinance (~5-6 trimestres + anual), etiquetado em `fin_history_source`. Mercados que reportam **semestralmente** (p. ex. `.AX` australiano) não têm linhas trimestrais de todo → sem ficheiro, sem chart, `fin_history_*` omitido. Isto é estrutura de mercado, não falha — não inventar uma série.
   - Se o orçamento AV do dia já estiver gasto, os screens US caem em yfinance como qualquer outro nome; o report continua completo, só com menos profundidade.
+
+### Phase 2.2b — Reconcile TTM aggregates (deep **+ screens**, v4.3.4 · roadmap R15)
+
+```
+python "%SCRIPTS%\reconcile_ttm.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.json" --update
+```
+
+**Ordem obrigatória: DEPOIS da 2.2 e ANTES da 2.3.** A série trimestral que este nó usa só
+existe depois da 2.2, e o nó 2 (`analyze_ticker`) corre *antes* da 2.2 — logo o gate Layer-0
+dele (`validate_consistency`) é estruturalmente incapaz de ver esta série. Por isso a
+verificação vive num nó próprio e não pendurada num gate que corre cedo demais para
+funcionar. A 2.3 lê `ev_ebitda`, portanto tem de correr depois da correcção.
+
+- **Porque existe**: no report ROVI.MC de 2026-08-17 a **prosa** nomeou e corrigiu três
+  defeitos de dados do fornecedor enquanto o **JSON** continuou a servir os valores errados
+  com `data_quality: "ok"` e `corrected_fields: []` — e o `ev_ebitda` corrompido (16,82
+  contra 10,85 real) já tinha pontuado o sub-rank de peers dentro do compósito. A correcção
+  do sistema era inalcançável por tudo excepto um humano a ler prosa.
+- **A identidade que sustenta tudo é a RECEITA**: só corrige o EBITDA se a soma dos 4
+  trimestres de receita reproduzir `revenue_ttm` a ≤2 % (no ROVI bateu a 0,00 %). Isso prova
+  que a janela trimestral **é a mesma** que o fornecedor usou. Sem essa prova **não corrige
+  nada** e escreve um `consistency_issue` → `data_quality: suspect`. Uma correcção que
+  inventa um número é o defeito que este nó existe para apanhar.
+- Corrigido o `ebitda_ttm`, os derivados movem-se com ele — `ev_ebitda`, `net_debt_ebitda` e
+  o novo `ebitda_margin_ttm`. O `ev_ebit` **não** (denominador diferente).
+- **`operating_margin_ttm` é sinalizado e REMOVIDO, nunca substituído.** Não existe série
+  trimestral de resultado operacional em sítio nenhum do sistema, e escrever um número
+  *anual* num campo *TTM* é uma quebra de base — outra classe de defeito. Quando o valor do
+  fornecedor está >50 % afastado da margem operacional anual, o campo é posto a `None` e a
+  anual é publicada ao lado como `operating_margin_annual_latest`, com a base etiquetada.
+  Não se perde nada: o `red_flags.py` já cai para o resultado operacional das demonstrações
+  quando o campo falta, e o `star_ratings.band()` já devolve `n/a`. Ambos dão **melhor**
+  resposta sem dados do que com dados errados.
+- Janela incompleta (um buraco nos últimos 4 trimestres) → **nenhuma soma**. Nunca 3
+  trimestres chamados TTM.
+- Overlay-only: schema continua `2.2`; usa os canais de proveniência que já existem
+  (`corrected_fields`, `consistency_issues`, `data_quality`) em vez de inventar outros.
+- Standalone: corre contra qualquer JSON já em disco sem `--update` para auditar o corpus.
 
 ### Phase 2.3 — Valuation depth (deep only, v4 Phase B)
 
