@@ -567,7 +567,27 @@ def build_exit(data):
         f'<div class="box"><div class="k">Thesis-broken trigger</div><div class="v" style="font-size:13px">{esc(trigger_txt or "n/a")}</div></div>',
     ]
     yoc_html = f'<div class="callout">Yield on cost (if held): <b>{esc(yoc_txt)}</b></div>' if yoc_txt else ""
-    return _card("Exit Plan", f'<div class="exit-grid">{"".join(boxes)}</div>{yoc_html}', "exit", new=True)
+    return _card("Exit Plan",
+                 f'<div class="exit-grid">{"".join(boxes)}</div>{yoc_html}{build_watchlist_state(data)}',
+                 "exit", new=True)
+
+
+def build_watchlist_state(data):
+    """The watch-list outcome as recorded by watchlist.py — never as narrated prose.
+
+    Roadmap R17: on 2026-08-17 a report told the reader twice that ROVI.MC was "already in
+    `_watchlist.csv`" when that file had not been written since 2026-08-10 and held four
+    other names. The narrative had no data channel to the node that decides membership, so
+    it guessed. This renders `watchlist_action`, which node 2.57 now writes; absent the
+    block it says nothing rather than implying either answer.
+    """
+    wa = data.get("watchlist_action") or {}
+    reason = wa.get("reason")
+    if not reason:
+        return ""
+    icon = "⭐" if wa.get("on_list") else "—"
+    return (f'<div class="callout">{icon} Watch-list: <b>{esc(reason)}</b>'
+            f'<span class="sub"> (recorded by node 2.57, not narrated)</span></div>')
 
 
 def build_valuation(data):

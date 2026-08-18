@@ -622,7 +622,9 @@ python "%SCRIPTS%\watchlist.py" --analysis-json "%OUT_DIR%\_tmp\{date}_{ticker}.
 ```
 
 - **Regra única** (mantém na lista **sse e só se** `scores.composite ≥ 7` **E** `intrinsic_value.mos_class == "rich"` **E** não-held **E** há `fair_value_range.low`): um nome de qualidade travado **só** pelo preço. Qualquer outro caso ⇒ garante ausência — o que subsume as três remoções da spec: comprado (agora held, via `exit_plan.find_holding`/`load_holdings` + alias SHEL.L→SHELL.AS), tese quebrada / qualidade perdida (score < 7), e graduação para barato (`mos_class` deixa de ser "rich").
-- Escreve `_watchlist.csv` (colunas `ticker,target,currency,added_date,fair_low,mos_class,score,fail_reason,thesis`; `target` = fair-low; `added_date` preservada no update). Overlay-only — **não escreve no analysis JSON**. Falha → `{"error": ...}` + exit 0.
+- Escreve `_watchlist.csv` (colunas `ticker,target,currency,added_date,fair_low,mos_class,score,fail_reason,thesis`; `target` = fair-low; `added_date` preservada no update). Overlay-only — acrescenta **uma** key aditiva ao analysis JSON, `watchlist_action` (schema continua 2.2). Falha → `{"error": ...}` + exit 0.
+- **`watchlist_action` existe por causa do R17.** Este nó calculava a verdade toda e imprimia-a para stdout, onde nada a lia — a mesma forma silenciosa do `finalize_score.py`. Sem canal de dados, o LLM que escreve o report tinha de adivinhar, e em 2026-08-17 disse ao leitor **duas vezes** que o ROVI.MC já estava "in `_watchlist.csv`" quando esse ficheiro não era escrito desde 2026-08-10 e tinha quatro outros nomes. Um leitor à espera do alerta prometido nunca o receberia. **Não há um único número nessa frase**, logo nenhuma validação numérica a apanha. Agora o `build_watchlist_state` do report renderiza o bloco, e o `_style_rules.md` proíbe a classe inteira: *nunca afirmar um efeito colateral*.
+- O `reason` nomeia sempre **qual** dos três predicados falhou (score < 7,0 · `mos_class` ≠ `rich` · já detido), porque "não está na lista porque o preço não está rich" nunca se confunde com "foi adicionado".
 
 ### Phase 2.58 — Opinion panel: 3 personas (deep only, v4 Phase G)
 

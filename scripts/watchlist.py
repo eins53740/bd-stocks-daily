@@ -216,12 +216,7 @@ def run(analysis_json: str, out_dir: Path, today_iso: str, do_update: bool) -> d
         rows, ticker, score, mos_class, target, held, currency, mos_pct,
         today_iso, fair_low=fair_low)
 
-    if do_update:
-        write_watchlist(out_dir, new_rows)
-        log(f"{ticker}: {action} (score={score}, mos={mos_class}, held={held}, "
-            f"target={target}); list now {len(new_rows)} name(s)")
-
-    return {
+    result = {
         "ticker": ticker,
         "action": action,
         "eligible": is_watchlist_eligible(score, mos_class, target),
@@ -230,9 +225,77 @@ def run(analysis_json: str, out_dir: Path, today_iso: str, do_update: bool) -> d
         "mos_class": mos_class,
         "target": target,
         "fair_low": fair_low,
+        "currency": currency,
         "watchlist_size": len(new_rows),
         "warnings": warnings,
     }
+
+    if do_update:
+        write_watchlist(out_dir, new_rows)
+        log(f"{ticker}: {action} (score={score}, mos={mos_class}, held={held}, "
+            f"target={target}); list now {len(new_rows)} name(s)")
+        write_action_to_analysis(analysis_json, data, result)
+
+    return result
+
+
+def explain_action(result: dict) -> tuple[bool, str]:
+    """(on_list, one-line reason) — the sentence the report is allowed to print.
+
+    Roadmap R17. The rule is only three predicates wide, so stating WHICH one bit is
+    always possible, and a report that says "not on the list because the price is not
+    rich" cannot be mistaken for one that says "added".
+    """
+    action = result.get("action")
+    on_list = action == "kept"
+    if on_list:
+        t, c = result.get("target"), result.get("currency") or ""
+        return True, (f"on the watch-list, alert at {t} {c}".strip() if t is not None
+                      else "on the watch-list")
+    if action == "removed":
+        return False, "removed from the watch-list this run (no longer eligible)"
+    if result.get("held"):
+        return False, "not on the watch-list: already held (the list is for names not owned)"
+    score = result.get("score")
+    if isinstance(score, (int, float)) and score < 7.0:
+        return False, f"not on the watch-list: composite {score} is below the 7.0 bar"
+    if result.get("mos_class") != "rich":
+        return False, (f"not on the watch-list: mos_class is "
+                       f"{result.get('mos_class') or 'unavailable'}, not 'rich' "
+                       f"(the list is for quality names blocked only by price)")
+    if result.get("target") is None:
+        return False, "not on the watch-list: no blend target (fair_value_range.mid) available"
+    return False, "not on the watch-list"
+
+
+def write_action_to_analysis(analysis_json: str, data: dict, result: dict) -> None:
+    """Write the outcome back as an additive `watchlist_action` key. Guarded.
+
+    WHY (roadmap R17). This node computed the whole truth and then printed it to stdout,
+    where nothing read it — the same silent shape as `finalize_score.py`. With no data
+    channel, the LLM writing the report had to guess, and on 2026-08-17 it told the reader
+    twice that ROVI.MC was "already in `_watchlist.csv`" when that file had not been
+    written since 2026-08-10 and held four other names. A stated action that did not happen
+    is invisible to every numeric check, because there is no number in it. So the report
+    now renders this block instead of inferring, and `_style_rules.md` forbids the claim.
+    Overlay-only: one additive key, schema untouched.
+    """
+    on_list, reason = explain_action(result)
+    try:
+        data["watchlist_action"] = {
+            "action": result.get("action"),
+            "on_list": on_list,
+            "reason": reason,
+            "target": result.get("target"),
+            "currency": result.get("currency") or data.get("currency"),
+            "eligible": result.get("eligible"),
+            "held": result.get("held"),
+            "watchlist_size": result.get("watchlist_size"),
+        }
+        Path(analysis_json).write_text(
+            json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    except Exception as e:      # never let bookkeeping break a run
+        log(f"could not write watchlist_action to {analysis_json}: {type(e).__name__}: {e}")
 
 
 def main() -> int:
