@@ -207,9 +207,17 @@ wait.
   front matter, idempotently, with a backup.
 - **It found a second orphan on its first run**: `2026-08-13 CSCO`, deep, score 6.12. This was
   never a one-off, which is why the guard closes the class rather than the instance.
-- **Left to do**: run it with `--fix` **on vmhost1** — the single writer. The laptop is a
-  read-only mirror that `stocks-mirror-pull` overwrites at 09:30 and 15:30, so a fix applied there
-  is discarded. Then wire the check into the 15:00 watchdog.
+- **The backfill is DONE** — Bruno ran `--fix` on vmhost1 on 2026-08-18, on the correct machine.
+  Verified from the laptop: 387 rows, both orphans present, and the backup
+  `_log.csv.pre-orphan-fix` carries mtime **2026-08-16 23:29:17**, which is itself the proof the
+  file had not been written since 08-16.
+- **Left to do**: wire the check into the 15:00 failover watchdog so an orphan is *reported*
+  rather than waiting to be looked for. That is the whole difference between a tool and a control.
+- **A defect in the tool itself, found by Bruno**: its `state :` line prints
+  `C:\BD_Obsidian\...` on **both** machines, because on vmhost1 that path is a junction to `D:`.
+  So the output does not tell you which machine you just wrote to — for a script whose entire
+  point is that only one machine may be written to, that is the wrong thing to be silent about.
+  It should print the resolved target and the hostname.
 - **Trigger**: none.
 
 ### R13. vmhost1's task descriptions still describe the pre-migration layout — **S**
@@ -354,6 +362,33 @@ trusting labels.
 - **The history table mislabels the prior verdict** as WATCH where `_log.csv` records `review`.
 - **Trigger**: none.
 
+### R19. `StocksStrategyMonthly` is stuck, unlocked, and has never completed — **S, live**
+
+Found 2026-08-18 while verifying something else, and measured rather than inferred:
+
+- The laptop task sits in state **`Running`**, `LastTaskResult` **0x800710E0** — *"the operator or
+  administrator has refused the request"*, which is what a repeat firing gets when an instance is
+  already running.
+- Its trigger repeats **every hour for two hours**, so it fired three times today — 10:24, 11:24,
+  12:24 — on the **18th**, for a job that is meant to run monthly.
+- Both log files are **57 bytes**: `Starting /bd-strategy-monthly` and nothing after it. No
+  completion line, no error.
+- Those two are the **only** `strategy-monthly_*.log` files in the folder. On this evidence the
+  job has never finished a run since it was created, and nothing ever said so.
+- **`strategy-monthly.bat` is the only one of the eleven bats with ZERO `job_lock` references**
+  (the others carry 2–3). So it can run concurrently with anything, including the 13:30 digest —
+  and while it runs on the laptop rather than on vmhost1, both machines share an egress IP, which
+  is the resource that matters: the Alpha Vantage cap is enforced **per IP**, measured in wave 1.0.
+  Concurrency between the two machines is therefore not free.
+
+This is the 2026-08-15 collision class (a job outside the ordering guard, taking another down)
+in the one place the S1 lock work did not reach.
+
+- **The work**: bring the bat inside `job_lock`, give it a completion/failure line so a hung run
+  is visible, and decide whether the 1-hour repetition is wanted at all — it looks like a
+  catch-up window that instead produces overlapping instances.
+- **Trigger**: none. It is running right now.
+
 
 ## Next — AGREED-DEFERRED
 
@@ -489,7 +524,7 @@ without a backtest is an educated guess on top of an educated guess
 | B4 | Four yfinance names with no FCF series at all | **S** | `0175.HK, CMO.MC, FLOW.AS, INGA.AS` — thin non-US statements where FCF genuinely is not published. Correct degradation today; only worth revisiting if a second source is added. |
 | B5 | `patrimonio positions` cannot write a disposal | **M** | By design: the holdings file records what is held, never a sale price, date or commission, and inventing one puts a fabricated capital gain in a tax-relevant sheet. Live case 2026-08-16: DOMO sits open on row 27 with no matching holding. Closing it needs those three inputs from a broker statement, which is a different importer. |
 | B6 | Only **9 free rows** remain in the `Accoes (BD)` formula block | **S** | Lots live on rows 3–36 and `H37` is `=SUMIFS(H3:H36,N3:N36,"")`. Rows 28–36 are free; the tenth new lot has nowhere to go that the invested total can see. Extending the block means extending the SUMIFS and copying the six per-row formulas down — deliberate work, not something a writer should do on the fly. |
-| B7 | The documented test command misses a dependency | **S** | `uv run --with pytest pytest tests` leaves 9 email tests failing on a `<pre>` fallback because the `markdown` package is absent from that env — a red suite that is purely environmental, which is worse than a slow one. Either add `--with markdown` everywhere it is documented, or pin the test deps in a `pyproject`. |
+| B7 | The documented test command misses a dependency — **worse than recorded** | **S** | Re-measured 2026-08-18: `uv run --with pytest pytest tests` does not merely fail 9 email tests on a missing `markdown`, it **cannot collect 13 test files at all** (`ModuleNotFoundError: No module named 'yaml'`) and aborts with `Interrupted: 13 errors during collection` — so the documented command reports nothing about 13 files' worth of behaviour. What works is `python -m pytest tests -q` against the system interpreter: **1689 passed, 1 skipped**. Fix: pin the test deps in a `pyproject`, and correct the command wherever it is documented, since every published test count came from a command that cannot run the suite. |
 
 ---
 
