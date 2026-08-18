@@ -1,4 +1,15 @@
-"""Run analyze_ticker.py via subprocess, extract the JSON block, write it to _tmp."""
+r"""Run analyze_ticker.py via subprocess, extract the JSON block, write it to _tmp.
+
+PATHS COME FROM bd_paths, NOT FROM CONSTANTS (roadmap R11). This file used to pass a
+hardcoded `cwd=C:\Github\BD\Finance\BD_Finance` to subprocess.run. vmhost1 -- the machine
+that has run the pipeline since the 2026-08-17 cutover -- has no `C:\Github` at all, so that
+cwd could not be entered and EVERY deep and screen died at node 2. It was found by the
+2026-08-18 13:30 run, which worked around it by hand rather than by fixing a replica.
+
+`run_daily.py` had already been given resolved candidates; this wrapper, which it calls,
+kept the constant. That is the whole argument for one resolver instead of three lists: the
+fix landed in two of the three places and the third was the one that mattered.
+"""
 import argparse
 import json
 import re
@@ -6,19 +17,26 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bd_paths  # noqa: E402
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ticker", required=True)
     ap.add_argument("--mode", required=True, choices=["deep", "screen"])
     ap.add_argument("--date", required=True)
-    ap.add_argument("--out-dir", default=r"C:\BD_Obsidian\Personal\Finance\StocksDaily\_tmp")
+    _state = bd_paths.vault_state()
+    ap.add_argument("--out-dir",
+                    default=str(_state / "_tmp") if _state
+                    else r"C:\BD_Obsidian\Personal\Finance\StocksDaily\_tmp")
     args = ap.parse_args()
 
     script = Path(__file__).parent / "analyze_ticker.py"
     proc = subprocess.run(
         [sys.executable, str(script), "--ticker", args.ticker, "--mode", args.mode],
-        cwd=r"C:\Github\BD\Finance\BD_Finance",
+        # None means "inherit", which is survivable; a nonexistent directory is not.
+        cwd=str(bd_paths.bd_finance()) if bd_paths.bd_finance() else None,
         capture_output=True,
         text=True,
         encoding="utf-8",

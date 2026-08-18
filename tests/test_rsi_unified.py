@@ -7,8 +7,9 @@ neutral is not a rounding difference.
 
 The formula is checked here against a replica of BD_Finance/technical/rsi.py rather than
 against an import of it: importing that module executes its top level, which calls
-yf.download() for AMZN, GOOG and MSFT at 5-minute resolution. A network-free suite cannot
-import it, and neither should a pipeline node (roadmap R21).
+yf.download() for AMZN, GOOG and MSFT at 5-minute resolution, and a network-free suite cannot
+do that. technical_score.py imports it for real and defends by stubbing yfinance first, so
+the pipeline itself makes no such call.
 """
 import numpy as np
 import pandas as pd

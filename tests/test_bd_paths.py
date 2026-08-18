@@ -119,3 +119,36 @@ def test_this_machine_resolves_every_path(mod):
     script silently falls back to its old literal and the point of R11 is lost."""
     assert mod.bd_finance() is not None
     assert mod.vault_state() is not None
+
+
+# --- R11 residual: no private resolution lists left in the skill ---------------------
+
+def test_no_module_keeps_its_own_path_candidate_list():
+    """Three near-identical lists existed in one skill, and the copy in _run_and_save.py was
+    a LIVE FATAL BUG on vmhost1 while the other two were already fixed -- every deep and
+    screen died at node 2 on 2026-08-18 because subprocess.run got a cwd that does not exist
+    there. That asymmetry is the whole argument for one resolver."""
+    from pathlib import Path
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    for name in ("_run_and_save.py", "run_daily.py", "technical_score.py"):
+        src = (scripts / name).read_text(encoding="utf-8")
+        code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+        assert "bd_paths" in src, f"{name} must go through the shared resolver"
+        # A literal is allowed ONLY as an `or`-fallback, never as the primary lookup.
+        assert 'cwd=r"C:' + chr(92) + 'Github' not in code,             f"{name} still hardcodes a subprocess cwd"
+        assert 'os.environ["BD_FINANCE_PARENT"]' not in code, \
+            f"{name} still reads the env var directly instead of via bd_paths"
+
+
+def test_run_daily_resolves_both_roots_on_this_machine():
+    # Plain import, not spec_from_file_location: run_daily uses `from __future__ import
+    # annotations` with @dataclass, and dataclasses resolves the string annotations through
+    # sys.modules -- a module loaded by spec alone is not there yet and the decorator raises.
+    import sys
+    scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import run_daily as rd
+    assert rd.CWD.is_dir(), "the launch directory must exist on whatever machine runs this"
+    assert (rd.CWD / "config" / "api_keys.txt").exists(), "and must be the real BD_Finance"
+    assert rd.OUT_DIR.is_dir()

@@ -105,6 +105,13 @@ def log(msg: str) -> None:
 _BD_INDICATORS = None  # cached (rsi, atr, adx, Boll_Band, max_dd)
 
 
+def _bd_paths():
+    """Imported lazily: this module is also imported by tests that never touch BD_Finance."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import bd_paths
+    return bd_paths
+
+
 def _import_bd_indicators():
     """
     Resolve BD_Finance/technical/* and return the reused indicator fns.
@@ -128,15 +135,13 @@ def _import_bd_indicators():
     #
     # The probe is for BD_Finance/technical/rsi.py, i.e. the thing actually imported -- a
     # directory that merely exists proves nothing.
-    _parents = (
-        Path(os.environ["BD_FINANCE_PARENT"]) if os.environ.get("BD_FINANCE_PARENT") else None,
-        Path(r"C:\Github\BD\Finance"),
-        Path(r"D:\Github\BD"),
-    )
-    bd_parent = next(
-        (p for p in _parents if p and (p / "BD_Finance" / "technical" / "rsi.py").exists()),
-        Path(r"C:\Github\BD\Finance"),
-    )
+    # R11: this list was one of three near-identical copies in this skill, and one of the
+    # three (_run_and_save.py's) was a live fatal bug on vmhost1 while the other two were
+    # already fixed. bd_paths.bd_finance_parent() holds the single copy, with the same
+    # env-var -> C: -> D: order and the same positive probe for
+    # BD_Finance/technical/rsi.py -- the thing actually imported, since a directory that
+    # merely exists proves nothing.
+    bd_parent = _bd_paths().bd_finance_parent() or Path(r"C:\Github\BD\Finance")
     if str(bd_parent) not in sys.path:
         sys.path.insert(0, str(bd_parent))
 

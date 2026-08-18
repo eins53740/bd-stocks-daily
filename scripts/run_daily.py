@@ -62,26 +62,25 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
+import bd_paths  # noqa: E402  (needs SCRIPTS on sys.path first)
+
 try:
     import node_timing
 except Exception:  # pragma: no cover - instrumentation must never block the pipeline
     node_timing = None
 
-OUT_DIR = Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
+OUT_DIR = bd_paths.vault_state() or Path(r"C:\BD_Obsidian\Personal\Finance\StocksDaily")
 
 # The working directory every node is launched from -- it is where api_keys.txt is found.
 # RESOLVED, not hardcoded: vmhost1 has no C:\Github at all (its repos live on D:), and with a
 # single C: constant here subprocess.run() failed on EVERY step there, making this orchestrator
 # a no-op on the one machine that actually runs the pipeline. Caught by run_daily's own tests
 # executing on vmhost1, which is the entire reason for running the suite on both machines.
-# Order matches scripts/skills_root.py: explicit env var, then the known roots.
-_CWD_CANDIDATES = (
-    Path(os.environ["BD_FINANCE_DIR"]) if os.environ.get("BD_FINANCE_DIR") else None,
-    Path(r"C:\Github\BD\Finance\BD_Finance"),
-    Path(r"D:\Github\BD\BD_Finance"),
-)
-CWD = next((p for p in _CWD_CANDIDATES if p and p.is_dir()),
-           Path(r"C:\Github\BD\Finance\BD_Finance"))
+# R11: one resolver, not a fourth private list. bd_paths probes for a file that PROVES the
+# layout and ignores a stale env var rather than obeying it -- one wrong variable must not be
+# able to take out ten scheduled jobs at once. The literal stays as the last-resort fallback
+# so the laptop resolves byte-identically.
+CWD = bd_paths.bd_finance() or Path(r"C:\Github\BD\Finance\BD_Finance")
 
 # `required` is the whole point of the table: it says which failures make the REST of the
 # stage meaningless. valuation_bands reads the file financial_history writes, so 2.2 failing
