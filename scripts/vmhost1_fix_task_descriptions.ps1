@@ -30,6 +30,19 @@ Ready on the laptop and Disabled here.
 
 Every value below was measured on vmhost1 on 2026-08-18, not copied from a doc.
 
+RUN 2026-08-18: three of four landed. StocksStrategyMonthly did NOT -- Set-ScheduledTask threw
+"The parameter is incorrect." and, because $ErrorActionPreference is Stop, the exception would
+have skipped every task after it too (it happened to be last, so nothing was lost this time).
+Cause, read from that task's own XML on vmhost1: its <CalendarTrigger> carries an EMPTY
+<ScheduleByMonth> body -- no <DaysOfMonth>, no <Months>. The CIM layer behind Set-ScheduledTask
+cannot serialize a monthly trigger with neither, and names no parameter when it says so.
+
+This is the same trap laptop_fix_strategy_monthly_trigger.ps1 avoids from the other side: there
+the cmdlets risked LOSING the second-Wednesday schedule, here they refuse to write at all. One
+conclusion covers both -- for calendar-triggered tasks, go through the task's own XML. So the
+write is now cmdlet-first with an XML fallback, and a failure on one task no longer aborts the
+rest.
+
   Verify after running:
     Get-ScheduledTask -TaskPath "\BD\Finance\" | Select-Object TaskName,Description | Format-List
 #>
@@ -71,6 +84,47 @@ Script  : D:\Github\.scripts\strategy-monthly.bat
 "@
 }
 
+# Re-registering a task from its own serialization is lossless by construction -- it is the
+# task's own XML going back in unchanged but for the Description. What it is NOT safe for is a
+# stored-password principal, so that case refuses instead of guessing a credential.
+function Set-DescriptionViaXml {
+    param([string]$TaskPath, [string]$Name, [string]$Description)
+
+    $full = "$TaskPath$Name"
+    $xml  = (schtasks /query /tn $full /xml ONE 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($xml)) {
+        return "could not export the XML for $full"
+    }
+    if ($xml -notmatch '<RegistrationInfo>') {
+        return "no <RegistrationInfo> element in the exported XML"
+    }
+    if ($xml -match '<LogonType>Password</LogonType>') {
+        return "principal uses a stored password -- schtasks /create would need /ru + /rp, and guessing a credential to fix a comment is not a trade worth making. Set this description by hand."
+    }
+
+    # XML-escape the text, then protect the .NET replacement-string metacharacter.
+    $esc = [System.Security.SecurityElement]::Escape($Description).Replace('$', '$$')
+
+    if ($xml -match '(?s)<RegistrationInfo>.*?<Description>.*?</Description>') {
+        $fixed = $xml -replace '(?s)(<RegistrationInfo>.*?)<Description>.*?</Description>', "`${1}<Description>$esc</Description>"
+    } else {
+        $fixed = $xml -replace '(?s)(<RegistrationInfo>.*?)(\s*)</RegistrationInfo>', "`${1}`${2}  <Description>$esc</Description>`${2}</RegistrationInfo>"
+    }
+    if ($fixed -eq $xml) { return "the Description injection changed nothing -- unexpected XML shape" }
+
+    # schtasks emits and expects UTF-16LE with a BOM. A UTF-8 file here fails to import, and a
+    # UTF-8 BOM written by Out-File is a documented corruption source in this repo.
+    $tmp = Join-Path $env:TEMP ("desc_" + $Name + ".xml")
+    [System.IO.File]::WriteAllText($tmp, $fixed, [System.Text.UnicodeEncoding]::new($false, $true))
+
+    & schtasks /create /tn $full /xml $tmp /f | Out-Null
+    if ($LASTEXITCODE -ne 0) { return "schtasks /create exited $LASTEXITCODE (elevation?)" }
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+    return $null
+}
+
+$failed = @()
+
 foreach ($name in $descriptions.Keys | Sort-Object) {
     $task = Get-ScheduledTask -TaskPath "\BD\Finance\" -TaskName $name -ErrorAction SilentlyContinue
     if (-not $task) { Write-Host "SKIP    $name - no such task here"; continue }
@@ -79,10 +133,61 @@ foreach ($name in $descriptions.Keys | Sort-Object) {
     $have = if ($task.Description) { ($task.Description -replace "`r`n", "`n").TrimEnd() } else { "" }
     if ($have -eq $want) { Write-Host "OK      $name - already correct"; continue }
 
-    $task.Description = $want
-    Set-ScheduledTask -InputObject $task | Out-Null
-    Write-Host "UPDATED $name"
+    # Two of these four are Disabled ON PURPOSE (the laptop owns them). Two machines writing the
+    # same monthly document is far worse than one missing description, so the disabled state is
+    # measured before the write and restored if the write moves it.
+    $wasDisabled = ($task.State -eq 'Disabled')
+    $route = 'cmdlet'
+
+    try {
+        $task.Description = $want
+        Set-ScheduledTask -InputObject $task -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "CMDLET  $name - refused: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "        falling back to the task's own XML"
+        $why = Set-DescriptionViaXml -TaskPath "\BD\Finance\" -Name $name -Description $want
+        if ($why) {
+            Write-Host "FAILED  $name - $why" -ForegroundColor Red
+            $failed += "$name : $why"
+            continue          # one task's failure must not skip the others
+        }
+        $route = 'xml'
+    }
+
+    # --- verify from the task itself, not from the fact that the call returned --------------
+    $after = Get-ScheduledTask -TaskPath "\BD\Finance\" -TaskName $name
+    if (($after.State -eq 'Disabled') -ne $wasDisabled) {
+        $restore = if ($wasDisabled) { 'Disabled' } else { 'Ready' }
+        Write-Host "        enabled state moved to $($after.State); restoring $restore" -ForegroundColor Yellow
+        if ($wasDisabled) {
+            Disable-ScheduledTask -TaskPath "\BD\Finance\" -TaskName $name | Out-Null
+        } else {
+            Enable-ScheduledTask -TaskPath "\BD\Finance\" -TaskName $name | Out-Null
+        }
+        $after = Get-ScheduledTask -TaskPath "\BD\Finance\" -TaskName $name
+        if (($after.State -eq 'Disabled') -ne $wasDisabled) {
+            Write-Host "FAILED  $name - could not restore the enabled state" -ForegroundColor Red
+            $failed += "$name : left $($after.State), was $restore"
+            continue
+        }
+    }
+
+    $now = if ($after.Description) { ($after.Description -replace "`r`n", "`n").TrimEnd() } else { "" }
+    if ($now -ne $want) {
+        Write-Host "FAILED  $name - the description did not stick ($route)" -ForegroundColor Red
+        $failed += "$name : description not written"
+        continue
+    }
+    Write-Host "UPDATED $name ($route)" -ForegroundColor Green
 }
 
 Write-Host ""
 Write-Host "Descriptions only. Triggers, actions and principals were not touched."
+if ($failed.Count) {
+    Write-Host ""
+    Write-Host "$($failed.Count) task(s) NOT fixed:" -ForegroundColor Red
+    $failed | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    exit 1
+}
+Write-Host "All four descriptions match." -ForegroundColor Green
+exit 0
