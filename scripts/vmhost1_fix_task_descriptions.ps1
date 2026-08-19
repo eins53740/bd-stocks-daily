@@ -89,7 +89,7 @@ Logs    : D:\BD_Obsidian\Personal\Finance\StocksDaily\log\stocks-prefilter_*.log
     "StocksPortfolioWeekly" = @"
 Weekly Yahoo-portfolio ingest (portfolio_ingest.py --write): reads the newest Yahoo CSV export from Downloads and refreshes _portfolio_holdings.yaml.
 DISABLED ON PURPOSE on this host. The LAPTOP owns this job - the Yahoo export lands in the laptop's Downloads folder, and /bd-stocks-monitor stayed there too because vmhost1's OneDrive copy of Patrimonio BD.xlsx is a month stale. Verified 2026-08-18: Ready on the laptop, Disabled here. Do not enable without moving the export path first.
-Trigger : weekly Monday 08:30 (would be, if enabled)
+Trigger : weekly WEDNESDAY 12:30 (would be, if enabled) - was Monday 08:30 here while the laptop ran Wednesday 12:30; aligned 2026-08-19 by decision (roadmap R22) so a failover cannot silently change when holdings are ingested.
 Script  : D:\Github\.scripts\stocks-portfolio-ingest.bat
 "@
     "StocksStrategyMonthly" = @"

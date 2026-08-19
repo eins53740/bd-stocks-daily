@@ -1298,6 +1298,53 @@ def attachment_notice_text(names: list[str]) -> str:
             "\n  Full rendered report — cover, charts, Sankey, SWOT, ratings.\n\n")
 
 
+STALE_MARKER = OUT_DIR / "_portfolio_export_stale.txt"
+
+
+def _stale_marker_message() -> tuple[str, str]:
+    """(message, date-it-was-flagged), or ('','') when the export is fresh or unreadable.
+
+    Roadmap R22. `stocks-portfolio-ingest.bat` writes this marker when the Yahoo export it just
+    ingested is past its age threshold, and DELETES it on a fresh run (bat line 62) — so the
+    notice below is self-clearing and cannot become a permanent nag. Until now NOTHING read it:
+    the name appeared in one doc and in no `.py` at all, so a 20-day-old cost basis fed
+    held-detection, `exit_plan`, the buy list and every EUR weight without ever saying so out
+    loud. A warning with no path to a human is the same defect as no warning.
+
+    Never raises: a missing marker is the normal case, and an unreadable one must not cost a
+    digest — same contract as `run_cost_block`.
+    """
+    try:
+        msg = STALE_MARKER.read_text(encoding="utf-8", errors="replace").strip()
+        if not msg:
+            return "", ""
+        return msg, date.fromtimestamp(STALE_MARKER.stat().st_mtime).isoformat()
+    except Exception:
+        return "", ""
+
+
+def portfolio_stale_notice_html() -> str:
+    msg, flagged = _stale_marker_message()
+    if not msg:
+        return ""
+    return (
+        "<p style='font-size:13px;color:#7c2d12;background:#fff7ed;border-left:3px solid "
+        "#ea580c;padding:8px 12px;margin:12px 0;'>⚠️ <strong>Portfolio export is stale.</strong> "
+        f"{html.escape(msg)}"
+        "<br><span style='color:#9a3412;font-size:12px;'>Held-detection, cost basis, exit "
+        "triggers and every EUR weight are computed off this file. Flagged "
+        f"{html.escape(flagged)}; this notice clears itself on the next fresh ingest.</span></p>"
+    )
+
+
+def portfolio_stale_notice_text() -> str:
+    msg, flagged = _stale_marker_message()
+    if not msg:
+        return ""
+    return (f"STALE PORTFOLIO EXPORT (flagged {flagged}): {msg}\n"
+            "  Held-detection, cost basis, exit triggers and EUR weights come off this file.\n\n")
+
+
 def build_card_text(row: dict) -> str:
     """Plain-text version of a card for the multipart/alternative text part."""
     score = float(row.get("score", 0) or 0)
@@ -1430,6 +1477,8 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
     # and one caller unpack positionally.
     attach_names = [name for _p, name in deep_report_attachments(rows)]
     attach_html = attachment_notice_html(attach_names)
+    # R22: a data-freshness warning belongs ABOVE the numbers it invalidates, not in a footnote.
+    stale_html = portfolio_stale_notice_html()
     html_body = f"""
     <html>
       <head>
@@ -1451,6 +1500,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         <p style="color: #666; font-size: 13px;">
           Auto-generated. Not investment advice. Verify all figures before acting.
         </p>
+        {stale_html}
         {attach_html}
         {buy_today_html}
         {watchlist_html}
@@ -1493,6 +1543,7 @@ def build_email(rows: list[dict], target_date: str) -> tuple[str, str, str]:
         f"StocksDaily — {target_date}\n"
         f"{'=' * 40}\n"
         f"Auto-generated. Not investment advice. Verify all figures before acting.\n\n"
+        f"{portfolio_stale_notice_text()}"
         f"{attachment_notice_text(attach_names)}"
         f"{buy_today_text}"
         f"{watch_text}"

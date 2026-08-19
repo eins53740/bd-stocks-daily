@@ -58,7 +58,8 @@ Trigger : weekly WEDNESDAY 12:30
 Script  : C:\Github\.scripts\stocks-portfolio-ingest.bat
 Owner   : THIS machine owns this job - the Yahoo CSV export lands in THIS machine's Downloads folder. vmhost1 has a copy, disabled on purpose.
 WARNING : Yahoo has had no API since 2017, so producing the CSV export is a MANUAL step. This task only ingests whatever is already in Downloads; when the newest export is stale it writes _portfolio_export_stale.txt instead of failing. A green result therefore means "ingested", not "holdings are current".
-DRIFT   : the docs and the vault memory both say "Mondays 08:30", and vmhost1's disabled copy is set to Monday 08:30. This trigger is Wednesday 12:30 (measured 2026-08-19). They disagree; the trigger, not the doc, is what runs.
+DECIDED : Wednesday 12:30 is the intended schedule (2026-08-19, roadmap R22). The docs said "Mondays 08:30" and vmhost1's disabled copy was set to it; both are now aligned to this. Beware a false signal: StartWhenAvailable is true, so a Wednesday start missed with the laptop asleep fires on the next wake - the 2026-08-10 and 2026-08-17 runs both landed on a Monday for that reason. A Monday run is NOT evidence of a Monday trigger.
+STALE   : the export is re-exported ad-hoc, so a run that finds an unchanged CSV and reports "added/removed/changed: none" is NORMAL, not a failure. When the export is past its age threshold the ingest writes _portfolio_export_stale.txt; since 2026-08-19 the daily digest carries a line naming it, above the numbers it invalidates. Before that, nothing read the file at all.
 "@
     "Patrimonio Monthly" = @"
 Monthly patrimony pipeline: wages --apply (parses the payslip PDFs) -> audit -> report (Patrimonio.html) -> BankBD refresh_from_excel.bat.

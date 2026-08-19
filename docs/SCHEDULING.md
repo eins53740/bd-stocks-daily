@@ -17,7 +17,7 @@ All live in Task Scheduler folder **`\BD\Finance\`**. `Get-ScheduledTask` and
 | `StocksWatchdog` | 14:15 | `stocks-watchdog.bat` | — | No |
 | `StocksEarningsPreview` | 06:00 | `stocks-earnings-preview.bat` | 1800 s | Yes (own) |
 | `StocksEarningsReview` | 07:30 | `stocks-earnings-review.bat` | 2700 s | No — by design |
-| `StocksPortfolioWeekly` | Mon 08:30 | `stocks-portfolio-ingest.bat` | — | No |
+| `StocksPortfolioWeekly` | **Wed 12:30** | `stocks-portfolio-ingest.bat` | — | No |
 
 All times verified against the live triggers with
 `Get-ScheduledTask -TaskPath '\BD\Finance\'` on 2026-08-15 — **read the tasks, not this
@@ -25,7 +25,20 @@ table, when they disagree.** Two drifts were corrected here on that date: the pr
 documented as `16:45` (it is **Mon 14:30**, and `bd-stocks-prefilter/SKILL.md` separately
 claimed 14:00), and `StocksDaily`'s timeout was documented as 1500 s while
 `stocks-daily.bat:83` has passed `-TimeoutSeconds 1800` since 2026-07-31.
-| `StocksPortfolioWeekly` | Mon 08:30 | `stocks-portfolio-ingest.bat` | — | No |
+
+A third drift was corrected on **2026-08-19** (roadmap R22), and an orphan copy of the
+`StocksPortfolioWeekly` row was removed from this spot at the same time — it had been left
+dangling outside the table by an earlier edit, so the file carried the wrong time twice.
+`StocksPortfolioWeekly` was documented here as `Mon 08:30`; the live trigger on the **laptop,
+which owns the job**, is `DaysOfWeek = 8` (Wednesday) at **12:30**, and vmhost1's *disabled* copy
+was the `Mon 08:30` one — the two machines disagreed with each other, not only with this table.
+**Wednesday 12:30 is now the decision** (2026-08-19); vmhost1's copy is aligned to it so a
+failover does not silently change when holdings are ingested.
+
+Beware a false signal when checking this one: `StartWhenAvailable` is true, so a Wednesday start
+missed with the laptop asleep fires on the next wake — the 2026-08-10 and 2026-08-17 runs both
+landed on a **Monday** morning for exactly that reason. **A Monday run is not evidence of a Monday
+trigger.**
 
 Order matters in both directions:
 
