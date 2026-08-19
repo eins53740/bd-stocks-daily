@@ -92,28 +92,46 @@ The immediate cost of the gap, for the record: the Y1 throttle fix — a suspect
 never advance the pause counter — went into production on vmhost1 **uncommittable**, because
 `bd-stocks-prefilter` had nothing to commit to. See `CHANGELOG.md`.)*
 
-### R13. vmhost1's task descriptions still describe the pre-migration layout — **S**
+### R13. One vmhost1 description the cmdlets refuse to write — **S**
 
-`\BD\Finance\StocksDaily`'s own Description reads `Trigger : daily 17:00` and
-`Script : wscript.exe C:\Github\BD\Finance\.scripts\run_hidden.vbs ...`. The live trigger is
-**13:30** and the live script is `D:\Github\.scripts\stocks-daily.bat`. Cosmetic, but it is
-the first thing anyone reads in Task Scheduler when something breaks, and it points at a
-path that does not exist on that machine.
+**Three of four landed 2026-08-18** via `scripts/vmhost1_fix_task_descriptions.ps1`, values
+measured on vmhost1 that day rather than copied from a doc: `StocksDaily` (which claimed
+`Trigger : daily 17:00` and a `C:\Github\BD\Finance\.scripts\run_hidden.vbs` path that does
+not exist on that machine — real: 13:30 and `D:\Github\.scripts\`), `StocksPrefilter` (claimed
+`daily 16:45 ... has drifted`; real: weekly Monday 14:30) and `StocksPortfolioWeekly`. Verified
+by reading the descriptions back off the machine.
 
-- **Shipped 2026-08-18**: `scripts/vmhost1_fix_task_descriptions.ps1`, values measured on
-  vmhost1 that day rather than copied from a doc. StocksPrefilter lied too (claimed
-  `daily 16:45 ... has drifted; review`; real: **weekly Monday 14:30**), and
-  StocksPortfolioWeekly and StocksStrategyMonthly carried **no description at all** — so a task
-  disabled ON PURPOSE, because the laptop owns both (verified Ready there, Disabled here), reads
-  exactly like one someone switched off and forgot.
-- **Left to do**: on vmhost1, run
-  `pwsh -File C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\vmhost1_fix_task_descriptions.ps1`.
-  Descriptions only; no trigger, action or principal touched; idempotent; a COMPUTERNAME guard
-  makes it refuse to run anywhere else (verified: exits 2 on the laptop).
-- **It lives in the skill, not in `.scripts`** — deliberately. The skills tree is the only one
-  with a hash-verified push to vmhost1; `.scripts` having none *is* R10. A fixer for vmhost1
-  parked only on the laptop is a script that can never reach the machine it was written for,
-  which is the mistake Bruno caught on 2026-08-18.
+**The fourth failed**, and the failure is the interesting part:
+
+```
+Set-ScheduledTask: vmhost1_fix_task_descriptions.ps1:83
+     |      Set-ScheduledTask -InputObject $task | Out-Null
+     | The parameter is incorrect.
+```
+
+Cause, read from that task's own XML on vmhost1: `StocksStrategyMonthly` there carries a
+`<CalendarTrigger>` whose **`<ScheduleByMonth>` body is empty** — no `<DaysOfMonth>`, no
+`<Months>`. The CIM layer behind `Set-ScheduledTask` cannot serialize a monthly trigger with
+neither, and says so without naming the parameter.
+
+**This is the same trap R19 dodged**, confirmed from the other side. There, going through the
+cmdlets risked LOSING the second-Wednesday schedule; here the cmdlet will not write at all. One
+conclusion covers both: **for calendar-triggered tasks, use the task's own XML, not the
+ScheduledTasks cmdlets.**
+
+- **The work**: an XML fallback when `Set-ScheduledTask` fails — inject `<Description>` into
+  `<RegistrationInfo>` and re-register with `/f` — plus turning a per-task failure into a
+  warning instead of an abort (`$ErrorActionPreference = "Stop"` currently kills the loop, so
+  with more tasks in the list the ones after the failure would be skipped in silence, and the
+  script exits non-zero without saying that three of four succeeded).
+- **The hazard to respect while doing it**: that task is `<Enabled>false</Enabled>` on vmhost1
+  **on purpose** — the laptop owns it, verified Ready there and Disabled here. A re-register must
+  assert the enabled state before and after and re-disable if the import wakes it. Two machines
+  writing the same monthly document is far worse than one missing description.
+- **Deliberately NOT in scope**: the empty `<ScheduleByMonth>` means that task has no valid
+  schedule if it is ever enabled on vmhost1, and it still carries the same `Repetition PT1H/PT2H`
+  just removed on the laptop. Recorded, untouched — R13 promises *descriptions only*, and
+  widening a fixer's scope mid-flight is how guarantees are lost.
 - **Trigger**: none.
 
 ### R20. There is still no push for `.scripts` to vmhost1 — **M**
@@ -220,50 +238,22 @@ knowing before it is promised.
   so it ships alone with a measured before/after.
 - **Trigger**: that decision.
 
-### R19. `StocksStrategyMonthly` — lock + ceiling INSTALLED; only the trigger repetition is left — **S**
-
-**Diagnosed and half-fixed 2026-08-18.** It was not merely stuck: it was HUNG, and the
-distinction is the whole finding. The 11:24 instance wrote the strategy doc at 11:47, then its
-session transcript recorded its last entry at 11:54 and nothing for the next 2h20m, on 2% CPU
-with four established sockets. A monthly job with no ceiling cannot end that state by itself.
-
-Measured, not inferred: `STATE Running`, `LastTaskResult 0x800710E0` ("the operator or
-administrator has refused the request" -- what a repetition start gets when an instance is
-already running), three firings on one day (10:24 / 11:24 / 12:24) for a MONTHLY job, and two
-57-byte logs with no completion line -- the only strategy-monthly logs in existence.
-
-Three causes, all now understood:
-1. `strategy-monthly.bat` was the ONLY Stocks* bat with **neither** `job_lock` (ten siblings
-   have it) **nor** `run_with_timeout` (six do). Nothing serialised it and nothing could end it.
-2. The trigger carries `Repetition PT1H / PT2H`, which makes a monthly job fire three times in
-   one day. It traces to the bat's own registration comment: `/sc monthly /d 1 /st 09:00
-   /ri 60 /du 02:00`. That comment was ALSO wrong about the day -- the live trigger is
-   `ScheduleByMonthDayOfWeek / Wednesday`, which is deliberate (the Claude weekly quota rolls
-   over on Wednesday), not day 1.
-3. The machine booted 10:17, so the missed 09:00 start ran as catch-up at 10:24 and the
-   repetitions followed. Same catch-up shape as the 2026-08-15 growth/daily collision.
-
-- **Written and waiting**: a replacement bat with the lock, a 2700 s ceiling, a corrected
-  registration comment, and a single VERDICT line on every exit path so "did this month's
-  refresh complete?" is answerable from the log's last line instead of from process forensics.
-  It also fixes a pre-existing cmd trap it inherited: `%ERRORLEVEL%` inside a parenthesised
-  if/else is expanded when the BLOCK is parsed, so the old `echo send_strategy_email.py exit
-  code %ERRORLEVEL%` printed the errorlevel from before the send, never the send's own.
-- **INSTALLED 16:13** -- the hung instance ended on its own, so the swap went in and was
-  verified by running the real control flow with the claude and mail calls stubbed: lock
-  acquired, "exit code 124", the 124 NOTE, the email-retry branch firing, "send_strategy_email
-  exit code 0" (the real value, not a stale one), lock released, and `VERDICT strategy-monthly
-  claude=124 doc_updated_today=1 email=0`.
-- **One consequence worth recording**: the 11:24 log is STILL 57 bytes with the process gone,
-  so the bat never reached its own completion line -- `send_strategy_email.py` never ran and
-  **this month's digest never went out**, even though the document it announces was written at
-  11:47. That is the exact failure the VERDICT line now makes visible.
-- **Left to do, and it needs a human**: drop `/ri 60 /du 02:00` from the trigger. A monthly job
-  must not carry an hourly repetition, and until it is removed a late boot will still produce
-  up to three firings -- now serialised by the lock and bounded by the ceiling, but still
-  three.
-- **Trigger**: none.
-
+*(R19 removed 2026-08-19 — **shipped, both halves**. The bat gained `job_lock`, a 2700 s
+ceiling and a VERDICT line on every exit path (installed 16:13 on 2026-08-18, verified by
+running the real control flow with the claude and mail calls stubbed). The half that needed a
+human — dropping `Repetition PT1H/PT2H` from a MONTHLY trigger — landed the same evening and was
+verified from the task itself: `Repeat: Every: Disabled`, `Days: Second WED` intact,
+`Next Run Time 2026-09-09 09:00`, and `<ScheduleByMonthDayOfWeek>` / `<Week>2</Week>` /
+`<Wednesday />` all present after the round-trip. That round-trip was the whole risk, which is
+why `laptop_fix_strategy_monthly_trigger.ps1` goes through the task's own XML instead of
+`Set-ScheduledTask`: the ScheduledTasks cmdlets do not model a CalendarTrigger well, and a
+monthly job that starts firing on the wrong day is a worse defect than the repetition it was
+meant to fix. That judgement was vindicated within the hour — see R13, where the same cmdlet
+refused to write at all. Two facts the XML corrected about the incident: MultipleInstancesPolicy
+was ALREADY `IgnoreNew`, so only the first of the three starts ran and Windows refused the other
+two (hence `0x800710E0`); and `StartWhenAvailable=true` is what produced the 10:24 catch-up after
+the 10:17 boot — left alone deliberately, since a monthly refresh that silently skips a month is
+worse than one that runs late. See `CHANGELOG.md`.)*
 
 ## Next — AGREED-DEFERRED
 
