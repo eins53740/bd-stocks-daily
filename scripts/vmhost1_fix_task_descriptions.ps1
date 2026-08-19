@@ -1,8 +1,17 @@
 <#
 vmhost1-fix-finance-task-descriptions.ps1 -- roadmap R13.
 
-RUN THIS ON VMHOST1:
-  pwsh -File C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\vmhost1_fix_task_descriptions.ps1
+RUN THIS ON VMHOST1 -- with powershell.exe, NOT pwsh:
+  powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\vmhost1_fix_task_descriptions.ps1 -DryRun
+  powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\vmhost1_fix_task_descriptions.ps1
+
+vmhost1 has NO real PowerShell 7 install (measured 2026-08-19: nothing under
+C:\Program Files\PowerShell). Its `pwsh` is only the Microsoft Store execution alias in
+%LOCALAPPDATA%\Microsoft\WindowsApps, and Store aliases refuse to launch from a non-interactive
+session -- over ssh it fails with "Program 'pwsh.exe' failed to run: Access is denied", and
+wrapped in `cmd /c` it fails SILENTLY, exiting 0 with no output at all. Verified PS 5.1.26100 runs
+this script: nothing here needs 7 (no pipeline chain operators, no ternary, no null-coalescing),
+and both ScheduledTasks and System.Security.SecurityElement are present there.
 
 It only rewrites the Description text of four \BD\Finance tasks; it touches no trigger, no
 action, no principal, and it is idempotent.
