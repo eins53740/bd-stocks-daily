@@ -32,10 +32,21 @@ refuses instead. One conclusion covers every monthly task on this build: go thro
 own XML.
 #>
 
-# Re-registering a task from its own serialization keeps the schedule, because it is the task's
-# own XML going back in unchanged but for the Description. It is not byte-identical: on import
-# Windows re-materializes an empty <Months> list as all twelve months. Verified semantically
-# equivalent -- day-of-month, week and day-of-week survive and the NextRunTime does not move.
+# Re-registering a task from its own serialization keeps a WELL-FORMED schedule, because it is
+# the task's own XML going back in unchanged but for the Description. Two caveats, both measured:
+#
+#   * It is not byte-identical. On import Windows re-materializes an empty <Months> list as all
+#     twelve months. Semantically equivalent -- day-of-month, week and day-of-week survive and
+#     NextRunTime does not move (verified on the laptop, Day 27 and Week 2/Wednesday).
+#   * It COMPLETES a DEGENERATE trigger with Windows defaults, and that is a real scope leak.
+#     vmhost1's StocksStrategyMonthly exported a <ScheduleByMonth> with no <DaysOfMonth> at all;
+#     after the re-register it carries <Day>1</Day>. schtasks /query does render <DaysOfMonth>
+#     when it exists (proven on Patrimonio Monthly's Day 27), so the day was genuinely absent and
+#     the import chose one. A task with no valid day could never have fired correctly, so this is
+#     an improvement -- but it is a TRIGGER change made by a script that promises descriptions
+#     only. Before running this against a task whose schedule matters, export its XML and check
+#     the trigger is complete.
+#
 # What this route is NOT safe for is a stored-password principal, so that case refuses instead
 # of guessing a credential.
 function Set-DescriptionViaXml {

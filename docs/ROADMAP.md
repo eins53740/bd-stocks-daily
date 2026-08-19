@@ -92,60 +92,28 @@ The immediate cost of the gap, for the record: the Y1 throttle fix — a suspect
 never advance the pause counter — went into production on vmhost1 **uncommittable**, because
 `bd-stocks-prefilter` had nothing to commit to. See `CHANGELOG.md`.)*
 
-### R13. Task descriptions — one vmhost1 run left — **S**
+*(R13 removed 2026-08-19 — **shipped, both halves, verified off both machines.** Laptop:
+three owned tasks that had no description at all now carry 1255 / 923 / 914 chars, states
+unchanged, `NextRunTime` unmoved. vmhost1: the fourth landed through the XML fallback — `desc=381`,
+still `Disabled`, `logon=S4U` — alongside the three written 2026-08-18. Shipped
+`scripts/_task_description_engine.ps1` as the single write path for both host scripts, plus
+`laptop_fix_task_descriptions.ps1`.
 
-**Laptop half DONE 2026-08-19**, and it was the worse half: three `\BD\Finance` tasks on the
-LAPTOP had no description at all, two of them jobs the laptop actually *owns*
-(`StocksStrategyMonthly`, `StocksPortfolioWeekly`, `Patrimonio Monthly`). On vmhost1 an empty
-description at least belongs to a task disabled on purpose. Written by
-`scripts/laptop_fix_task_descriptions.ps1`, values measured off the machine, verified by reading
-them back: 1255 / 923 / 914 chars, states unchanged, `NextRunTime` unmoved.
-
-**vmhost1 half: 3 of 4 landed 2026-08-18**, values measured on vmhost1 that day rather than
-copied from a doc: `StocksDaily` (which claimed `Trigger : daily 17:00` and a
-`C:\Github\BD\Finance\.scripts\run_hidden.vbs` path absent from that machine — real: 13:30 and
-`D:\Github\.scripts\`), `StocksPrefilter` (claimed `daily 16:45 ... has drifted`; real: weekly
-Monday 14:30) and `StocksPortfolioWeekly`. The fourth, `StocksStrategyMonthly`, died on
-`Set-ScheduledTask` — *"The parameter is incorrect."*
-
-**The cause, and the earlier entry had it wrong.** This entry used to blame an empty `<Months>`
-list in the exported XML. Refuted by measurement: after an XML round-trip `<Months>` holds all
-twelve months and the cmdlet **still** refuses. The real mechanism, reproduced on the laptop on
-two monthly tasks so it is not a vmhost1 oddity:
-
-| Task | CIM class from `Get-ScheduledTask` | schedule-bearing properties | `Set-ScheduledTask` |
-|---|---|---|---|
-| `StocksPortfolioWeekly` | `MSFT_TaskWeeklyTrigger` | `DaysOfWeek`, `WeeksInterval` | **OK** |
-| `StocksStrategyMonthly` | `MSFT_TaskTrigger` (base) | **none at all** | refused |
-| `Patrimonio Monthly` | `MSFT_TaskTrigger` (base) | **none at all** | refused |
-
-A monthly `CalendarTrigger` comes back as the **base** class, carrying no month, no day-of-month
-and no week — the schedule is simply *absent from the object*. So the error is Windows **refusing
-to write back a trigger that lost its schedule on the way out**; had it not refused, it would have
-written a monthly task with no schedule. `Set-ScheduledTask` cannot round-trip a monthly task on
-this build **at all**, on either machine.
-
-That makes this the **same defect** R19 dodged, not a cousin: there the cmdlets would have silently
-dropped the second-Wednesday schedule, here Windows refuses instead. One conclusion, now
-generalised: **for monthly/calendar-triggered tasks, go through the task's own XML.** The XML route
-is not byte-identical — on import Windows re-materializes an empty `<Months>` as all twelve — but
-it is semantically equivalent, verified by day/week fields surviving and `NextRunTime` not moving.
-
-- **Shipped**: `scripts/_task_description_engine.ps1` — one write path shared by both host
-  scripts (cmdlet first, then inject `<Description>` into `<RegistrationInfo>` and re-register
-  with `/f`), a per-task failure downgraded from abort to warning, a disabled-state guard so an
-  XML import cannot wake a task the other machine owns, `-DryRun`, and verification read off the
-  task afterwards. Both regex branches proven against real exported XML: text round-trips through
-  XML escaping, exactly one `<Description>`, and Triggers/Actions/Principals/Settings unchanged.
-  The engine lives in one file precisely because two copies of a fixer drift the way two copies of
-  `stocks-daily.bat` drifted for ten weeks.
-- **What is left**: push the skill to vmhost1, then run
-  `pwsh -File ...\scripts\vmhost1_fix_task_descriptions.ps1` there (needs elevation). Expect
-  `OK` on the three already correct and `UPDATED StocksStrategyMonthly (xml)` on the fourth.
-- **Deliberately NOT in scope**: vmhost1's `StocksStrategyMonthly` still carries the
-  `Repetition PT1H/PT2H` removed from the laptop's copy on 2026-08-18, and is `Enabled=false`
-  there on purpose. Recorded, untouched — R13 promises *descriptions only*.
-- **Trigger**: none.
+Three findings worth keeping. **(1)** The root cause first written here was wrong: it blamed an
+empty `<Months>` list, and after an XML round-trip `<Months>` holds all twelve months while
+`Set-ScheduledTask` still refuses. The real mechanism is that `Get-ScheduledTask` returns a
+monthly `CalendarTrigger` as the **base** `MSFT_TaskTrigger` with no month, no day-of-month and no
+week — the schedule is absent from the object — so the error is Windows refusing to write back a
+trigger that lost its schedule on the way out. It cannot round-trip a monthly task on this build
+at all, on either machine, which makes this the *same* defect R19 dodged rather than a cousin.
+**(2)** vmhost1 has **no real PowerShell 7** — only the Store execution alias, which refuses to
+launch non-interactively; over ssh it says "Access is denied" and wrapped in `cmd /c` it fails
+**silently, exiting 0 with no output**. The RUN line now says `powershell.exe`. **(3)** The XML
+route COMPLETES a degenerate trigger with Windows defaults: vmhost1's task exported no
+`<DaysOfMonth>` and now carries `<Day>1</Day>`. That is a trigger change made by a fixer that
+promised descriptions only — harmless here (the task is disabled, the laptop owns the job, and a
+trigger with no day could never have fired correctly) but recorded in the engine header as a
+pre-flight check. See `CHANGELOG.md`.)*
 
 ### R22. The portfolio ingest runs Wednesday 12:30; everything written says Monday 08:30 — **S**
 
@@ -161,17 +129,40 @@ means the week starts on fresh holdings; Wednesday lunchtime means up to nine da
 the week's first daily run reads them. Every downstream weight (`to_eur`, concentration, the
 monitor's alerts) is computed off that file.
 
-Also measured, and unexplained: its last run was **2026-08-17 09:12** — a Monday, at neither 08:30
-nor 12:30 — and it ended `LastTaskResult 0x1`, a **failure**. So the schedule question and a live
-failure are sitting on the same task.
+**Two things this entry first got wrong, both killed by measurement 2026-08-19.** The
+`LastTaskResult 0x1` was not a live mystery: the 09:13 log says
+`ERROR: no Yahoo export found in C:\Users\bsdias\Downloads (looked for portfolio*.csv,
+quotes*.csv)` — the export lives in the **`YF` subfolder**, and the search path was widened the
+same morning (10:21 and 10:22 succeeded). Closed, already fixed. And the "unexplained Monday
+09:12" was a **catch-up**: `StartWhenAvailable` is true, so the Wednesday starts missed on 08-06
+and 08-13 fired on the following Mondays when the laptop woke. Nothing anomalous.
 
-- **The work**: decide which schedule is intended, set it on the owner via the task's own XML (the
-  weekly trigger *does* survive the cmdlets, so this one is a one-liner either way), align
-  vmhost1's disabled copy, and correct `SCHEDULING.md` + the vault memory. Then diagnose the
-  `0x1`.
-- **Why it is not done**: changing when a job runs is a decision, not a comment. R13 promised
-  descriptions only, and the description now states the drift instead of hiding it.
-- **Trigger**: none — needs a call on Monday-vs-Wednesday.
+**What measurement replaced them with is worse, and it reframes the decision.** The trigger day is
+close to irrelevant, because the binding constraint is the manual export:
+
+- the Yahoo export at `Downloads\YF\portfolio.csv` is dated **2026-07-30** — 20 days old;
+- today's Wednesday 12:30 run fired, parsed it, and reported `added: (none) removed: (none)
+  changed: (none)`. The weekly task re-parses the same stale CSV and rewrites an identical file;
+- its only real output in that state is `_portfolio_export_stale.txt`, and **nothing reads it**:
+  grep finds the name in `PORTFOLIO_DATAFLOW.md` and nowhere in any `.py`. `send_email.py` never
+  mentions it. The alarm rings in an empty room — a new shape of the silent-success family in
+  `feedback_silent_success_antipatterns`, where the warning is produced correctly and has no path
+  to a human.
+
+So a weekly ingest is chasing a manual step done roughly monthly, and the mechanism meant to say
+so is inert.
+
+- **The decision needed**: (a) whether the stale warning gets a path to a human — one line in the
+  daily digest when `_portfolio_export_stale.txt` exists is the cheap fix and the one that
+  actually changes behaviour; (b) whether the ingest cadence should match the export cadence
+  rather than run weekly against an unchanged file; (c) Monday-vs-Wednesday, which only matters
+  once (a) is true.
+- **Then, regardless**: align `SCHEDULING.md` and the vault memory to whatever runs, and align
+  vmhost1's disabled copy.
+- **Why it is not done**: changing when a job runs, and adding a line to the digest, are both
+  decisions. R13 promised descriptions only, and the description now states the drift instead of
+  hiding it.
+- **Trigger**: none — needs the call on (a) and (b).
 
 ### R23. `Patrimonio Monthly` has never run once — **S**
 
