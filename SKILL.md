@@ -228,11 +228,20 @@ precisam de wrapper — o custo do wrapper não compensa o sinal.
 
 ### Phase 0.5 — Thesis check (only when `round > 1`)
 
-Skipped on `round == 1`. For re-evaluations (round 2+), `pick_candidates.py` already loads the prior report; before any new analysis runs, verify whether the previous thesis is still intact.
+Skipped on `round == 1`. For re-evaluations (round 2+), `pick_candidates.py` already loads the prior report; this phase says whether the previous thesis is still intact.
 
 ```bash
-python "%SCRIPTS%\thesis_check.py" --ticker {ticker} --prior-report {path_to_prior_md}
+python "%SCRIPTS%\thesis_check.py" --ticker {ticker} --current-json {analyze_json_path}
 ```
+
+> **Corrected 2026-08-19 (roadmap R21).** This block read `--prior-report {path}` and promised
+> the check ran *"before any new analysis"*. Both were wrong, and together they meant the
+> thesis-drift check **had never run by any path**: `thesis_check.py` declares only `--ticker` /
+> `--current-json` / `--log-csv` / `--out-dir`, so `--prior-report` made argparse exit 2 — and it
+> compares **today's** analysis against the most recent prior `_log.csv` row, so it cannot run
+> before that analysis exists. It runs **after Phase 2**, which is where `run_daily.py` now places
+> it (the node keeps the id `0.5` because that is the phase's name, not its position). It finds
+> the prior row itself; there is no prior-report argument to pass.
 
 Output JSON:
 
@@ -597,12 +606,12 @@ default OFF no path agendado — roadmap N1)** — se `BD_SEGMENTS=1` **e** `_se
 8. **Finalise composite**:
    
    ```bash
-   python "%SCRIPTS%\finalize_score.py" --json-path {analyze_json_path} --mgmt-score {mgmt_score}
+   python "%SCRIPTS%\finalize_score.py" --json-path {analyze_json_path} --mgmt-score {mgmt_score} --update
    ```
    
    Use the returned JSON for Phase 5. Sets `management_score`, `management_flag`, recomputes `scores.composite` and `verdict`.
    
-   **Then write `finalize_score.py` stdout to `%OUT_DIR%\_tmp\{date}_{ticker}.json` (overwrite Phase 2's intermediate).** Phase 3 (`render_charts.py`) reads from this file via `--analysis-json`. Without this step, the radar PNG will be skipped (validation gate) and the report loses its score breakdown.
+   **`--update` writes the finalised JSON back to `--json-path` itself** (roadmap R21) — the manual "then redirect stdout" step is gone, and with it the way this phase failed silently. Phase 3 (`render_charts.py`) reads that file via `--analysis-json`; without the persist the radar PNG is validation-skipped and the report loses its score breakdown. Omitting `--update` still prints to stdout and touches nothing, which is a legitimate dry read — but it is exactly what `run_daily.py` did while reporting PASS, so **the scheduled path always passes `--update`**.
    
    *(This is step 8 of Phase 2.5 — referenced from Phase 3's pre-condition below.)*
 
@@ -686,6 +695,16 @@ Corre UMA vez por run (não por ticker), antes da Phase 5:
 ```bash
 python "%SCRIPTS%\macro_snapshot.py" --check
 ```
+
+> **`--check` só olha para o `_macro/{today}.md` — o ficheiro NARRATIVO.** Não diz nada sobre o
+> `_macro/{today}.json`, que é onde vivem os números. É por isso que, desde 2026-08-19 (roadmap
+> R21), o `run_daily.py` corre o nó 2.6 como **`--fetch`** e não como `--check`: a metade Python
+> passou a ser incondicional, garantida por construção em vez de afirmada. Medido nesse dia: o
+> `_macro/2026-08-19.json` foi escrito às 13:31:20 pelos dois nós de overlay e **não tinha a key
+> `metrics`** — zero índices, VIX, yields, FX, commodities e BTC, contra 13 métricas em todos os
+> ficheiros até 08-17. A sonda **disse `stale`**; ninguém estava a ouvir. O `--fetch` passou também
+> a **fundir** em vez de reescrever, logo já não pode apagar `breadth`/`sectors`/`regime` — os três
+> escritores são agora overlay-only e a ordem entre eles não perde dados.
 
 - `stale: false` → o `_macro/{today}.md` existe; todos os reports do dia embedam dele. Nada mais a fazer.
 - `stale: true` → duas metades:

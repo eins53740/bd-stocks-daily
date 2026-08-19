@@ -105,17 +105,53 @@ def _tmp_json(date: str, ticker: str) -> str:
     return str(OUT_DIR / "_tmp" / f"{date}_{ticker}.json")
 
 
+def _fundamentals_score(tmp_json: str) -> float | None:
+    """`scores.fundamentals` off the analysis JSON, or None if it cannot be read.
+
+    Node 3.5 gates on it (`FUND_GATE = 7.0`) and technical_score.py declares it required.
+    Read here rather than asked of the caller: node 2 already computed it and wrote it to
+    disk, and a number a human retypes is a number that can disagree with the one scored.
+    """
+    if not tmp_json:
+        return None
+    try:
+        data = json.loads(Path(tmp_json).read_text(encoding="utf-8"))
+        val = (data.get("scores") or {}).get("fundamentals")
+        return None if val is None else float(val)
+    except Exception:
+        return None
+
+
+def _absent(value: object) -> bool:
+    """Is a `needs` value missing? None, empty string, or an unset store_true -- and
+    deliberately NOT a falsy number.
+
+    `not value` was wrong the moment a numeric flag entered `needs`: --mgmt-score 0 and a
+    fundamentals score of 0.0 are real values, and skipping the node "for want of an
+    argument" would name the wrong reason for it not running -- the failure this file
+    exists to prevent.
+    """
+    return value is None or value == "" or value is False
+
+
 def build_plan(stage: str, a: argparse.Namespace) -> list[Step]:
     """The order. Read this top to bottom -- it IS the pipeline contract."""
     tj = _tmp_json(a.date, a.ticker) if a.ticker else ""
     if stage == "pre":
         return [
-            Step("0.5", "thesis check (round > 1 only)", "thesis_check.py",
-                 ["--ticker", a.ticker or "", "--prior-report", a.prior_report or ""],
-                 needs=("ticker", "prior_report")),
             Step("1", "pick candidates", "pick_candidates.py", [],
                  required=True, per_ticker=False),
-            Step("2.6", "macro snapshot", "macro_snapshot.py", ["--check"],
+            # --fetch, NOT --check (roadmap R21). --check is a freshness PROBE over the
+            # narrative `_macro/<date>.md`; it writes nothing and nothing here read its
+            # answer, so the daily job asserted freshness on a file this path never
+            # refreshed. Measured 2026-08-19: `_macro/2026-08-19.json` was written at
+            # 13:31:20 by the two overlay nodes below and carried NO `metrics` key at all,
+            # against 13 metrics in every file up to 08-17 -- the macro table ran with no
+            # indices, VIX, yields, FX, commodities or BTC. The probe did report `stale`;
+            # nothing was listening. Fetch is unconditional now, so freshness is a property
+            # of the run rather than a claim about it, and `fetch()` merges, so it cannot
+            # clobber the overlays that follow.
+            Step("2.6", "macro snapshot", "macro_snapshot.py", ["--fetch"],
                  per_ticker=False),
             Step("2.6b", "macro breadth", "macro_breadth.py", ["--update"],
                  per_ticker=False),
@@ -125,6 +161,19 @@ def build_plan(stage: str, a: argparse.Namespace) -> list[Step]:
                  ["--ticker", a.ticker or "", "--mode", a.mode or "screen",
                   "--date", a.date],
                  required=True, needs=("ticker",)),
+            # Phase 0.5 runs HERE, not first, and the id is the phase name rather than the
+            # order. Two defects, both found by the argument-contract test (roadmap R21):
+            # this node passed `--prior-report`, which thesis_check.py has never declared,
+            # and omitted `--current-json`, which it declares required -- so argparse exited
+            # 2 and the thesis-drift check never ran on a single re-evaluation. SKILL.md
+            # carried the same wrong flag, so the manual path was broken too.
+            # The position follows from the same reading: thesis_check compares TODAY's
+            # analysis against the prior `_log.csv` row, so it cannot run "before any new
+            # analysis" as the doc claimed -- node 2 writes the file it needs. `prior_report`
+            # stays the gate: it is the caller saying "this is round > 1".
+            Step("0.5", "thesis check (round > 1 only)", "thesis_check.py",
+                 ["--ticker", a.ticker or "", "--current-json", tj],
+                 needs=("ticker", "prior_report")),
             Step("2.2", "financial history", "financial_history.py",
                  ["--ticker", a.ticker or "", "--analysis-json", tj],
                  required=True, needs=("ticker",)),
@@ -153,15 +202,22 @@ def build_plan(stage: str, a: argparse.Namespace) -> list[Step]:
         ]
     if stage == "mid":
         return [
+            # --update or this node is a no-op that reports PASS (roadmap R21): the
+            # finalised composite went to stdout, which run_step captures and discards, so
+            # every node after it read a JSON whose management score was still null and
+            # whose composite was still flagged provisional.
             Step("2.5-end", "finalize score", "finalize_score.py",
-                 ["--json-path", tj, "--mgmt-score", str(a.mgmt_score)],
+                 ["--json-path", tj, "--mgmt-score", str(a.mgmt_score), "--update"],
                  required=True, needs=("ticker", "mgmt_score")),
             Step("2.55", "exit & thesis plan", "exit_plan.py",
                  ["--ticker", a.ticker or "", "--analysis-json", tj, "--update",
                   "--bear-trigger", a.bear_trigger or ""],
                  deep_only=True, needs=("ticker", "bear_trigger")),
+            # No --ticker: alpha_beta.py declares only --analysis-json/--out-dir/--update,
+            # so argparse exited 2 and the return profile was absent from every deep report
+            # (roadmap R21). It takes the ticker from the JSON.
             Step("2.56", "return profile (alpha/beta)", "alpha_beta.py",
-                 ["--ticker", a.ticker or "", "--analysis-json", tj, "--update"],
+                 ["--analysis-json", tj, "--update"],
                  deep_only=True, needs=("ticker",)),
             Step("2.57", "watch-list maintenance", "watchlist.py",
                  ["--analysis-json", tj, "--update"],
@@ -172,9 +228,15 @@ def build_plan(stage: str, a: argparse.Namespace) -> list[Step]:
             Step("3", "render charts", "render_charts.py",
                  ["--ticker", a.ticker or "", "--analysis-json", tj],
                  required=True, deep_only=True, needs=("ticker",)),
+            # --fundamental-score is required=True in technical_score.py and was omitted,
+            # so the GO/NO-GO never ran on any deep (roadmap R21). It is not the caller's
+            # to supply -- node 2 computed it and wrote it to disk -- so main() reads it off
+            # the analysis JSON, and `needs` makes an unreadable score a stated skip rather
+            # than an argparse death.
             Step("3.5", "technical score & GO/NO-GO", "technical_score.py",
-                 ["--ticker", a.ticker or "", "--analysis-json", tj],
-                 deep_only=True, needs=("ticker",)),
+                 ["--ticker", a.ticker or "", "--analysis-json", tj,
+                  "--fundamental-score", str(a.fundamental_score)],
+                 deep_only=True, needs=("ticker", "fundamental_score")),
         ]
     if stage == "post":
         return [
@@ -221,7 +283,7 @@ def plan_for(stage: str, a: argparse.Namespace) -> tuple[list[Step], list[dict]]
             skipped.append({"node": step.node, "name": step.name,
                             "state": "SKIP", "detail": "deep-only phase"})
             continue
-        missing = [n for n in step.needs if not getattr(a, n, None)]
+        missing = [n for n in step.needs if _absent(getattr(a, n, None))]
         if missing:
             # A REQUIRED step skipped for want of an argument is not a skip, it is a
             # misinvocation: `mid` without --mgmt-score would print a tidy SKIP line, do
@@ -297,12 +359,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mode", choices=["deep", "screen"])
     ap.add_argument("--mgmt-score", type=float, help="mid: the Phase 2.5 management score")
     ap.add_argument("--bear-trigger", help="mid: the bear-case trigger sentence")
+    ap.add_argument("--fundamental-score", type=float,
+                    help="mid: node 3.5's gate input; read from the analysis JSON when omitted")
     ap.add_argument("--prior-report", help="pre: prior report path, enables Phase 0.5")
     ap.add_argument("--report", help="post: the written .md report path")
     ap.add_argument("--email", action="store_true", help="post: also send the digest")
     ap.add_argument("--dry-run", action="store_true", help="print the plan, execute nothing")
     ap.add_argument("--json", action="store_true", help="machine-readable result on stdout")
     a = ap.parse_args(argv)
+
+    # Resolved before planning, because node 3.5's argument list is built from it.
+    if a.fundamental_score is None and a.ticker:
+        a.fundamental_score = _fundamentals_score(_tmp_json(a.date, a.ticker))
 
     runnable, skipped = plan_for(a.stage, a)
     results: list[dict] = list(skipped)

@@ -9,7 +9,7 @@ Bump this in the same commit that appends to docs/CHANGELOG.md and creates the g
 """
 from __future__ import annotations
 
-__version__ = "4.3.4"
+__version__ = "4.3.5"
 
 # Bumped to the release value when a wave set closes; "-dev" while a version is in flight,
 # so a report rendered mid-wave is visibly not a released build.

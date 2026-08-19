@@ -197,18 +197,40 @@ def fetch_metrics(tickers: list[str]) -> dict:
 
 
 def fetch(out_dir: Path, today: date | None = None) -> dict:
+    """Pull the quotes and MERGE `metrics` into `_macro/<date>.json`.
+
+    Merge, not overwrite, and that is the whole point (roadmap R21). This used to write a
+    fresh three-key payload, so a fetch landing after `macro_breadth --update` or
+    `macro_fred --update` silently deleted their `breadth`/`sectors`/`regime` overlays --
+    which made the node's position in the pipeline load-bearing and undocumented, and is
+    why the daily runner was left calling `--check` (which writes nothing) instead. Now
+    the three writers are all overlay-only and order between them cannot lose data.
+
+    It owns `metrics` alone, exactly as breadth owns `breadth`/`sectors` and fred owns
+    `regime`.
+    """
     today = today or date.today()
     _log(f"fetching {len(TICKERS)} tickers for {today.isoformat()}")
-    payload = {
-        "date": today.isoformat(),
-        "fetched_at": datetime.now().isoformat(timespec="seconds"),
-        "metrics": fetch_metrics(TICKERS),
-    }
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"{today.isoformat()}.json"
-    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    _log(f"wrote {json_path}")
-    return payload
+
+    data: dict
+    if json_path.exists():
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            _log(f"could not parse {json_path.name} ({e}); re-initialising")
+            data = {"date": today.isoformat()}
+    else:
+        data = {"date": today.isoformat()}
+
+    data["date"] = today.isoformat()
+    data["fetched_at"] = datetime.now().isoformat(timespec="seconds")
+    data["metrics"] = fetch_metrics(TICKERS)
+
+    json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _log(f"merged metrics into {json_path}")
+    return data
 
 
 def main() -> int:

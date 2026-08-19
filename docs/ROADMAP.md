@@ -200,39 +200,53 @@ self-heals from the failover watchdog); `.scripts` has nothing.
   exactly the ten-week frozen-bat failure with a new mechanism.
 - **Trigger**: none; it is the natural next step after R10.
 
-### R21. Four orchestration defects the 13:30 run reported and nobody fixed — **S**
+*(R21 removed 2026-08-19 — **all four shipped, and the test written to catch them found a
+fifth.** Each fix was verified by running the real node, not by reading the diff.
 
-The 2026-08-18 13:30 job on vmhost1 finished cleanly (26m 15s, exit 0, digest delivered) and
-its own report listed **five** defects in `run_daily.py`. Only the first was fixed that day, as
-part of R11 -- and it was the fatal one (`_run_and_save.py` passing a hardcoded
-`cwd=C:\Github\BD\Finance\BD_Finance` on a machine with no `C:\Github`). The other four are
-still live, and all four were **re-verified against the code on 2026-08-18 at 17:00**, not
-carried over on the report's word:
+**2.5-end** — `finalize_score.py` gained `--update`, writing the finalised JSON back through
+`--json-path` (the convention `exit_plan`/`alpha_beta`/`watchlist` already use, so no fourth write
+path). Proven on a copy of a live deep: `mgmt None → 5.5`, `composite_is_provisional true → false`
+**on disk**. `--update` without `--json-path` now exits 2 rather than succeeding with nowhere to
+write — that would have been the same defect wearing a flag. Third instance of the R15/R17 shape,
+and the last of them.
 
-| Node | Defect | Verified how | Shape |
-|---|---|---|---|
-| **2.5-end** | `finalize_score.py` prints the finalised composite to **stdout** and the runner throws it away | `finalize_score.py:67` is `print(json.dumps(result...))` -- there is no write path; `run_daily.py:269` captures stdout and, on `rc == 0`, **returns without reading it** | **SILENT** -- the node reports PASS while the management score never lands and the composite stays provisional |
-| **2.56** | passes `--ticker` to `alpha_beta.py`, which does not accept it | `alpha_beta.py:451-454` declares only `--analysis-json`, `--out-dir`, `--update` | Loud: argparse exits 2, so the return profile is simply absent |
-| **3.5** | omits `--fundamental-score`, which is **required** | `technical_score.py:531` -- `required=True`, no default | Loud: the GO/NO-GO never runs |
-| **2.6** | runs `macro_snapshot.py --check` and never `--fetch` | `run_daily.py:118` passes `["--check"]`; `macro_snapshot.py:217-218` are mutually exclusive modes and only `--fetch` writes | Half-silent: freshness is *asserted* on a file nothing in this path refreshes |
+**2.56** — the `--ticker` `alpha_beta.py` never declared is gone; it reads the ticker from the
+JSON. **3.5** — `--fundamental-score` is now read off `scores.fundamentals` by the runner, because
+node 2 already computed it and a number a human retypes is a number that can disagree with the one
+scored. Both exit 0 where they exited 2. With the real 6.38 for RENT3.SA, 3.5 now prints the honest
+`gate not met` instead of dying.
 
-**2.5-end is the one that matters, and it is the third instance of one shape.** R15 (corrections
-computed in prose, never written to the JSON) and R17 (a side effect announced but never
-performed) were the same defect: a helper that knows the answer, a channel that drops it, and a
-green status either way. That is now a named pattern, not three coincidences -- see
-`feedback_silent_success_antipatterns`.
+**2.6 was the decision, and the measurement made it.** `--check` probes the **narrative**
+`_macro/<date>.md` and says nothing about `_macro/<date>.json`, where the numbers live — so
+"freshness asserted on a file nothing refreshes" understated it. Measured: today's
+`_macro/2026-08-19.json` was written at 13:31:20 by the two overlay nodes with **no `metrics` key at
+all** — zero indices, VIX, yields, FX, commodities, BTC, against 13 metrics in every file through
+08-17, and no 08-18 file. The probe *did* report `stale`; nothing read its answer. **Fourth
+instance of "the alarm rings in an empty room"**, after R22's portfolio marker. The runner now
+fetches unconditionally, and the reason it could not before is gone too: `fetch()` **merges**
+instead of rewriting a three-key payload, so it can no longer delete `breadth`/`sectors`/`regime`
+and the three writers are all overlay-only. Verified on the live file — 13 metrics landed, 11
+sector rows and the `regime` block byte-identical.
 
-- **The fix is small and the risk is in the wiring, not the logic**: give `finalize_score.py`
-  an `--update` that writes back through the same path `exit_plan`/`alpha_beta`/`watchlist`
-  already use (do not invent a fourth), drop the bad flag at 2.56, thread the fundamentals
-  score into 3.5 from the JSON already on disk, and decide deliberately whether 2.6 should
-  fetch in the scheduled path or whether the prefilter/macro job owns that (a second
-  `--fetch` is known to clobber the merged breadth+sectors overlay, so this one is a
-  **decision**, not a typo).
-- **Why it was not done on 2026-08-18**: the 1-16 pass was scoped to the roadmap items the user
-  ordered, and these arrived from a run report rather than from the roadmap. Listing them here
-  is what makes them ordinary work instead of a memory.
-- **Trigger**: none.
+**The fifth defect: node 0.5 had never run either.** Found by `TestArgumentContract`, which
+validates every node's argument list against the target script's own argparse via `ast`. It passed
+`--prior-report`, which `thesis_check.py` has never declared, and omitted the `--current-json` it
+declares required — and **`SKILL.md:234` carried the same wrong flag**, so no path ran the
+thesis-drift check on any re-evaluation. Its position was wrong for the same reason: it compares
+**today's** analysis against the prior `_log.csv` row, so SKILL.md's *"before any new analysis"* was
+impossible — node 2 writes the file it reads. Now placed after node 2, keeping the id `0.5` as the
+phase name rather than the order.
+
+**How they survived: the runner failed in the open and the model papered over it every day.**
+`_timings/2026-08-19.jsonl` records `2.56 rc=2` and `3.5 rc=2` — argparse deaths on the scheduled
+run — yet the deep's JSON carries an `alpha_beta` block, because the LLM re-ran the node by hand
+after seeing the FAIL. The two that cost data are the two that did **not** fail: 2.5-end returned 0
+having written nothing, and 2.6 returned 0 having fetched nothing.
+
+**One latent bug fixed on the way**, because the 3.5 fix depends on it: `needs` tested `not value`,
+so a real `0.0` read as "the caller forgot the flag" — a node skipped for a reason that was never
+measured, in the file whose job is to stop exactly that. `_absent()` now distinguishes a falsy
+number from an absent one. **1839 passed, 1 skipped** (from 1756; +83). See `CHANGELOG.md`.)*
 
 ### R14. OpenBB — evaluation DONE, Phase 1 awaiting a go/no-go — **M**
 

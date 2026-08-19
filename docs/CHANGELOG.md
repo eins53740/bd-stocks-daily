@@ -30,6 +30,61 @@ face of every report.
 
 ---
 
+## v4.3.5 — 2026-08-19 · schema 2.2 · **1839 tests** (daily)
+
+**The orchestration release.** `run_daily.py` is the executable pipeline contract, and five of
+its nodes were wired to arguments the target scripts do not accept, or to no write path at all.
+Roadmap **R21** listed four; the test written to catch them found the fifth. Nothing here changes
+a score, a weight or the schema — it changes whether nodes that always reported healthy actually
+did their work.
+
+**How five broken nodes survived weeks of daily runs.** `_timings/2026-08-19.jsonl` records
+`2.56 rc=2` and `3.5 rc=2` on the scheduled run — argparse deaths, in the open, every day — and
+the deep's JSON still carries an `alpha_beta` block, because the LLM re-ran the node by hand after
+seeing the FAIL line. The runner was being papered over daily at the cost of tokens and of anyone
+noticing. **The two nodes that actually lost data are the two that did not fail**: 2.5-end
+returned 0 having written nothing, and 2.6 returned 0 having fetched nothing.
+
+| Node | Was | Now |
+|---|---|---|
+| **2.5-end** finalize_score | printed the finalised composite to stdout, which `run_step` captures and **discards** → `scores.management` stayed null and `composite_is_provisional` stayed **true** on the file every later node reads; node reported PASS | `--update` writes back through `--json-path`, the convention `exit_plan`/`alpha_beta`/`watchlist` already use. `--update` with no path exits **2** rather than succeeding with nowhere to write |
+| **2.56** alpha_beta | passed a `--ticker` the script has never declared → argparse **exit 2**, no return profile in any deep report | reads the ticker from the JSON; exit 0 |
+| **3.5** technical_score | omitted `--fundamental-score`, declared `required=True` → argparse **exit 2**, GO/NO-GO never ran | the runner reads `scores.fundamentals` off the analysis JSON — node 2 computed it, so no human retypes it |
+| **2.6** macro_snapshot | ran `--check`, a probe that writes nothing | runs `--fetch`, unconditionally |
+| **0.5** thesis_check | passed `--prior-report` (never declared) and omitted `--current-json` (required), **and** ran before the node that writes it → thesis-drift check had **never run by any path** | correct flags, placed after node 2; id `0.5` is the phase name, not the order |
+
+**2.6 was the one that cost live data, and only measurement showed it.** `--check` probes the
+**narrative** `_macro/<date>.md`; it says nothing about `_macro/<date>.json`, where the numbers
+live. Measured 2026-08-19: that day's JSON was written at 13:31:20 by the two overlay nodes and had
+**no `metrics` key at all** — zero indices, VIX, yields, FX, commodities, BTC, against 13 metrics in
+every file through 08-17, with no 08-18 file at all. The probe *did* answer `stale`; nothing read
+it. **Fourth instance of "the alarm rings in an empty room"**, after v4.3.4's portfolio staleness
+marker. The blocker that kept the runner on `--check` is gone too: `macro_snapshot.fetch()` now
+**merges** `metrics` instead of rewriting a three-key payload, so it can no longer delete
+`breadth`/`sectors`/`regime`, and all three writers are overlay-only with no load-bearing order.
+Verified on the live file: 13 metrics landed, 11 sector rows and the `regime` block unchanged.
+
+**The general fix is the test, not the five edits.** `TestArgumentContract` walks every node in
+every stage, extracts the target script's `add_argument` declarations with `ast`, and asserts that
+every flag passed is declared and every `required=True` flag is supplied. It found 0.5 on its first
+run. Two of the five defects could not have survived a test run once it existed — and the class
+cannot come back.
+
+**One latent bug fixed because the 3.5 fix rests on it**: `needs` tested `not value`, so a real
+`0.0` — `--mgmt-score 0`, a fundamentals score of 0.0 — read as *"the caller forgot the flag"*, a
+node skipped for a reason nobody measured, in the file that exists to prevent exactly that.
+`_absent()` now separates a falsy number from an absent value.
+
+**Docs corrected, because two of them carried the same wrong flags**: `SKILL.md` Phase 0.5 (wrong
+flag **and** an impossible "before any new analysis" promise), Phase 2.5 step 8 (the manual
+"redirect stdout" step is gone — that manual step *was* the failure mode), and Phase 2.6 (what
+`--check` can and cannot see).
+
+**1839 passed, 1 skipped** (from 1750 at v4.3.4; +89 across this and v4.3's R22/R23 work). Closes
+roadmap **R21**. Schema untouched at **2.2**.
+
+---
+
 ## v4.3.4 — 2026-08-18 · schema 2.2 · **1750 tests** (daily)
 
 **The data-integrity release.** Nine roadmap items, all of them found by the 2026-08-17

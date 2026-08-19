@@ -22,7 +22,7 @@ import run_daily as rd  # noqa: E402
 def ns(**kw) -> argparse.Namespace:
     base = dict(date="2026-08-18", ticker=None, mode=None, mgmt_score=None,
                 bear_trigger=None, prior_report=None, report=None, email=False,
-                dry_run=True, json=False)
+                fundamental_score=None, dry_run=True, json=False)
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -54,7 +54,7 @@ class TestOrder:
         """render_charts and technical_score both read the composite. Drawing first would
         publish charts of a pre-management-score number."""
         n = nodes("mid", ticker="ASML.AS", mode="deep", mgmt_score=7.5,
-                  bear_trigger="margin below 40%")
+                  bear_trigger="margin below 40%", fundamental_score=8.6)
         assert n.index("2.5-end") < n.index("3") < n.index("3.5")
 
     def test_the_chart_gate_precedes_the_html_render(self):
@@ -212,5 +212,6 @@ def test_every_step_names_a_script_that_exists(stage):
     scripts = Path(rd.SCRIPTS)
     for step in rd.build_plan(stage, ns(ticker="T", mode="deep", report="r.md",
                                         mgmt_score=7.0, bear_trigger="x",
+                                        fundamental_score=8.0,
                                         prior_report="p.md")):
         assert (scripts / step.script).exists(), f"{stage}/{step.node}: {step.script}"

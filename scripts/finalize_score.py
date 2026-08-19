@@ -1,8 +1,16 @@
 """
 finalize_score.py - Recompute composite score after LLM supplies Management Quality.
 
-Called by SKILL.md orchestration at the end of Phase 2.5. Input is the provisional
-analyze_ticker JSON + --mgmt-score X.X. Output is the finalised JSON on stdout.
+Called at the end of Phase 2.5. Input is the provisional analyze_ticker JSON +
+--mgmt-score X.X. Output is the finalised JSON on stdout, AND -- with --update -- written
+back to --json-path.
+
+--update exists because stdout alone was a silent failure (roadmap R21). run_daily.py runs
+this node, gets rc=0, reports PASS and discards stdout: the management score never landed
+and `composite_is_provisional` stayed true on the file every later node reads. The only
+thing that made it work was a human remembering to redirect. Same shape as R15 and R17 --
+a helper that knows the answer and a channel that drops it -- so the fix is the same as
+theirs: write through the caller's own path, do not add a new one.
 
 Only runs for deep mode. Screens never invoke this (their composite is already
 final — renormalised over 6 components).
@@ -51,7 +59,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json-path", help="Path to analyze_ticker JSON; if omitted, read from stdin")
     ap.add_argument("--mgmt-score", type=float, required=True, help="Management quality score 0-10")
+    ap.add_argument("--update", action="store_true",
+                    help="Write the finalised JSON back to --json-path (required to persist)")
     args = ap.parse_args()
+
+    if args.update and not args.json_path:
+        print("ERROR: --update needs --json-path; there is nothing to write back to.",
+              file=sys.stderr)
+        return 2
 
     if args.json_path:
         raw = Path(args.json_path).read_text(encoding="utf-8")
@@ -64,10 +79,15 @@ def main() -> int:
         return 2
 
     result = finalize(data, args.mgmt_score)
-    print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+    blob = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+    if args.update:
+        # Written before stdout so a broken pipe cannot cost the persist.
+        Path(args.json_path).write_text(blob, encoding="utf-8")
+    print(blob)
     print(
         f"finalized: mgmt={args.mgmt_score}, composite={result['scores']['composite']}, "
-        f"verdict={result['verdict']}, flag={result['management_flag']}",
+        f"verdict={result['verdict']}, flag={result['management_flag']}"
+        + (f", written to {args.json_path}" if args.update else " (stdout only, NOT persisted)"),
         file=sys.stderr,
     )
     return 0
