@@ -115,76 +115,68 @@ promised descriptions only — harmless here (the task is disabled, the laptop o
 trigger with no day could never have fired correctly) but recorded in the engine header as a
 pre-flight check. See `CHANGELOG.md`.)*
 
-### R22. The portfolio ingest runs Wednesday 12:30; everything written says Monday 08:30 — **S**
+*(R22 removed 2026-08-19 — **shipped, decisions taken.** (a) `send_email.py` gained
+`portfolio_stale_notice_html/text`, rendered **above** the cards they invalidate; until then
+`_portfolio_export_stale.txt` was written by the ingest bat and read by **nothing** — the name
+appeared in one doc and in no `.py` — so a 20-day-old cost basis fed held-detection, `exit_plan`,
+the buy list and every EUR weight in silence. Self-clearing (the bat deletes the marker on a fresh
+run) and it cannot cost a digest (any read failure returns `""`, same contract as
+`run_cost_block`). It also prints the date the marker was flagged, which is how the live render
+exposed the marker itself going stale — it said 18 days when the truth was 20. 6 new tests;
+**1756 passed, 1 skipped**. (b) The export is **ad-hoc**, so the weekly ingest stays and an
+unchanged CSV reporting `added/removed/changed: none` is documented as NORMAL. (c)
+**Wednesday 12:30** is the decision — in `SCHEDULING.md`, both task descriptions, the vault memory,
+and vmhost1's copy via `vmhost1_align_portfolio_weekly_trigger.ps1` (the cmdlet is safe there
+*because* a weekly trigger has a real CIM class and round-trips, unlike the monthly ones). Two
+side-findings fixed on the way: an orphan `StocksPortfolioWeekly` row left dangling outside the
+`SCHEDULING.md` table made the file state the wrong time twice, and the `0x1` failure was not a
+live defect — the export sits in the `YF` subfolder and the search path was widened the same
+morning. The `StartWhenAvailable` catch-up that landed the 08-10 and 08-17 runs on Mondays is
+recorded as a false signal: **a Monday run is not evidence of a Monday trigger.** See
+`CHANGELOG.md`.)*
 
-Measured 2026-08-19. `\BD\Finance\StocksPortfolioWeekly` on the **laptop**, which owns the job:
-`DaysOfWeek = 8` (Wednesday), `WeeksInterval = 1`, `StartBoundary ...T12:30`. vmhost1's disabled
-copy is `DaysOfWeek = 2` (Monday) at `08:30`, and `docs/SCHEDULING.md` plus the vault memory both
-say Mondays 08:30. **The two machines disagree with each other, not only with the docs**, so this
-cannot be closed by editing a doc.
+### R23. Two battery settings can still block the patrimony chain — **S**
 
-Why it matters rather than being cosmetic: Yahoo has had no API since 2017, so the CSV export is a
-manual step and the task only ingests whatever is already in `Downloads`. A Monday-morning ingest
-means the week starts on fresh holdings; Wednesday lunchtime means up to nine days of drift before
-the week's first daily run reads them. Every downstream weight (`to_eur`, concentration, the
-monitor's alerts) is computed off that file.
+**The catch-up half shipped 2026-08-19.** `Patrimonio Monthly` had **never run once** —
+`LastTaskResult 0x41303` = `SCHED_S_TASK_HAS_NOT_RUN`, `LastRunTime` still the "never" sentinel,
+registered 2026-08-02 — because `StartWhenAvailable` was **absent** from its Settings and therefore
+false, so a 09:00 start missed with the laptop asleep was dropped rather than caught up. Now
+`true`, applied and verified by `scripts/laptop_fix_patrimonio_catchup.ps1`: day 27 preserved,
+`NextRunTime` unmoved at 2026-08-27 09:00, action, principal and `Ready` state unchanged. Day 27 is
+deliberate and stays — the payslip PDFs the chain parses arrive before month end.
 
-**Two things this entry first got wrong, both killed by measurement 2026-08-19.** The
-`LastTaskResult 0x1` was not a live mystery: the 09:13 log says
-`ERROR: no Yahoo export found in C:\Users\bsdias\Downloads (looked for portfolio*.csv,
-quotes*.csv)` — the export lives in the **`YF` subfolder**, and the search path was widened the
-same morning (10:21 and 10:22 succeeded). Closed, already fixed. And the "unexplained Monday
-09:12" was a **catch-up**: `StartWhenAvailable` is true, so the Wednesday starts missed on 08-06
-and 08-13 fired on the following Mondays when the laptop woke. Nothing anomalous.
+That script had to go through the task's own XML: this is a MONTHLY task, so `Set-ScheduledTask`
+refuses it, and `StartWhenAvailable` had to be **inserted** rather than flipped, into a `<Settings>`
+sequence whose element order `schtasks` does not export the way the documentation suggests. The
+script therefore tries candidate positions and lets `schtasks /create` validate — a wrong position
+fails with the task unchanged. `before <IdleSettings>` was accepted.
 
-**What measurement replaced them with is worse, and it reframes the decision.** The trigger day is
-close to irrelevant, because the binding constraint is the manual export:
+**What is left is a genuine trade-off, which is why it was not flipped silently.** The same
+Settings block carries:
 
-- the Yahoo export at `Downloads\YF\portfolio.csv` is dated **2026-07-30** — 20 days old;
-- today's Wednesday 12:30 run fired, parsed it, and reported `added: (none) removed: (none)
-  changed: (none)`. The weekly task re-parses the same stale CSV and rewrites an identical file;
-- its only real output in that state is `_portfolio_export_stale.txt`, and **nothing reads it**:
-  grep finds the name in `PORTFOLIO_DATAFLOW.md` and nowhere in any `.py`. `send_email.py` never
-  mentions it. The alarm rings in an empty room — a new shape of the silent-success family in
-  `feedback_silent_success_antipatterns`, where the warning is produced correctly and has no path
-  to a human.
+```
+<DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
+<StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
+```
 
-So a weekly ingest is chasing a manual step done roughly monthly, and the mechanism meant to say
-so is inert.
+- The first means the task **will not start at all** while the laptop is on battery. A 09:00
+  catch-up on a workday is exactly when a laptop is likely to be unplugged, so **the fix that just
+  shipped may still not produce a run** — and a fix that looks applied and does nothing is the
+  silent-success shape this pipeline keeps producing.
+- The second means an in-flight run is **killed** the moment the machine goes to battery. This
+  chain writes `Patrimonio BD.xlsx` through Excel COM on a copy with a timestamped backup; being
+  killed mid-write is worse than not running at all, so this one is arguably correct as-is.
 
-- **The decision needed**: (a) whether the stale warning gets a path to a human — one line in the
-  daily digest when `_portfolio_export_stale.txt` exists is the cheap fix and the one that
-  actually changes behaviour; (b) whether the ingest cadence should match the export cadence
-  rather than run weekly against an unchanged file; (c) Monday-vs-Wednesday, which only matters
-  once (a) is true.
-- **Then, regardless**: align `SCHEDULING.md` and the vault memory to whatever runs, and align
-  vmhost1's disabled copy.
-- **Why it is not done**: changing when a job runs, and adding a line to the digest, are both
-  decisions. R13 promised descriptions only, and the description now states the drift instead of
-  hiding it.
-- **Trigger**: none — needs the call on (a) and (b).
+They pull in opposite directions, and against a real cost: a full `wages → audit → report → BankBD`
+run is heavy, and permitting it on battery drains it.
 
-### R23. `Patrimonio Monthly` has never run once — **S**
-
-Measured 2026-08-19: `LastTaskResult 0x41303` = `SCHED_S_TASK_HAS_NOT_RUN`, and `LastRunTime` is
-the "never" sentinel. Registered `2026-08-02`, trigger monthly **day 27 at 09:00**, next run
-2026-08-27. `StartWhenAvailable` is **FALSE**, so a start missed while the laptop is asleep or off
-is *dropped*, never caught up — and 09:00 on a workday is exactly when this laptop is least likely
-to be sitting at that task's schedule. The action file exists, so this is not a broken path.
-
-The consequence is not a missing log: `monthly.cmd` is the whole patrimony chain — `wages --apply`
-(payslip PDFs) → `audit` → `report` (`Patrimonio.html`) → BankBD `refresh_from_excel.bat`. Wave 4.0
-documented that chain as the monthly refresh of the source of truth, and `PORTFOLIO_DATAFLOW.md`
-reads as though it runs. **It has never fired on a schedule**; anything it has produced came from a
-hand run.
-
-- **The work**: set `StartWhenAvailable = true` (the same catch-up setting `StocksStrategyMonthly`
-  relies on — a monthly refresh that silently skips a month is worse than one that runs late), or
-  move it to an hour the machine is reliably on. Then correct `PORTFOLIO_DATAFLOW.md`, which
-  currently describes a schedule that has never executed.
-- **Why it is not done here**: it is a settings change on a task outside this skill, and day 27 at
-  09:00 may be deliberate.
-- **Trigger**: none.
+- **The decision needed**: allow the start on battery (flip the first, keep the second), allow both,
+  or leave both and accept that this chain runs when the laptop happens to be docked on the 27th.
+  A fourth option that avoids the trade-off entirely: move the trigger to an hour the machine is
+  reliably plugged in.
+- **The check that closes this either way**: after 2026-08-27, read `LastTaskResult` — not `State`,
+  which said `Ready` for the whole time this task had never run.
+- **Trigger**: the 2026-08-27 run, or a call on the battery settings.
 
 ### R20. There is still no push for `.scripts` to vmhost1 — **M**
 

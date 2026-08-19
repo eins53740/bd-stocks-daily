@@ -67,7 +67,8 @@ Trigger : monthly, day 27, 09:00
 Script  : "C:\Github\BD\Finance\Patrimonio\monthly.cmd"
 Logs    : C:\Github\BD\Finance\Patrimonio\logs\monthly_DDMMYYYY.log
 Source  : Patrimonio BD.xlsx is the single source of truth. It is password-protected (credential in the .env beside it) and is written through Excel COM on a copy with a timestamped backup - openpyxl would destroy its chartsheets and drawings, so do not "simplify" that path.
-WARNING : StartWhenAvailable is FALSE. A start missed while this laptop is asleep or off is DROPPED, not caught up - and at 09:00 on a workday the laptop is often not on this task's schedule. As of 2026-08-19 this task had NEVER run (LastTaskResult 0x41303 = SCHED_S_TASK_HAS_NOT_RUN). Judge this chain by its log, never by the task's result.
+HISTORY : this task had NEVER run once (LastTaskResult 0x41303 = SCHED_S_TASK_HAS_NOT_RUN, measured 2026-08-19, registered 2026-08-02). StartWhenAvailable was ABSENT from its Settings, so it defaulted false and a 09:00 start missed with the laptop asleep or off was dropped. Catch-up is now ON (laptop_fix_patrimonio_catchup.ps1, 2026-08-19); day 27 kept deliberately, the payslip PDFs arrive before month end.
+WARNING : it may STILL not run. DisallowStartIfOnBatteries is true, so a catch-up on battery is refused; StopIfGoingOnBatteries is true, so an in-flight run is killed if you unplug - and this chain writes the workbook through Excel COM, where a killed write is worse than no run. Left as an open decision (roadmap R23), not silently flipped. Judge this chain by its log, never by the task's result.
 "@
 }
 

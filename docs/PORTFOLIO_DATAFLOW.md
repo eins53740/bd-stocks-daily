@@ -34,8 +34,21 @@ import is idempotent precisely so it can be re-derived at any time.
                                                    ✗ NOTHING writes back to "Accoes (BD)"
 ```
 
-`Patrimonio Monthly` (09:00, monthly) runs `monthly.cmd`: **wages → audit → report → BankBD
-import**. The order is load-bearing — the report and the import must both see the writes.
+`Patrimonio Monthly` (**day 27**, 09:00, monthly) runs `monthly.cmd`: **wages → audit → report →
+BankBD import**. The order is load-bearing — the report and the import must both see the writes.
+
+> **⚠ Correction, 2026-08-19 (roadmap R23): this task had NEVER run.** `LastTaskResult 0x41303` =
+> `SCHED_S_TASK_HAS_NOT_RUN`, `LastRunTime` still the "never" sentinel, registered 2026-08-02.
+> `StartWhenAvailable` was **absent** from its Settings — so it defaults false and a 09:00 start
+> missed while the laptop is asleep or off was *dropped*, not caught up. Everything below that
+> describes this chain describes what `monthly.cmd` **does when run by hand**, which is how any
+> output it has produced was produced. Catch-up is now on
+> (`scripts/laptop_fix_patrimonio_catchup.ps1`, applied and verified 2026-08-19), day 27 kept.
+>
+> **It may still not run.** The same Settings block has `DisallowStartIfOnBatteries=true`, so a
+> catch-up on battery is refused, and `StopIfGoingOnBatteries=true`, which kills an in-flight run —
+> on a chain that writes the workbook through Excel COM, that is worse than not running. Both are
+> left as an open decision in R23, not silently flipped.
 
 ### Verified from the logs, not assumed
 
@@ -49,13 +62,26 @@ import**. The order is load-bearing — the report and the import must both see 
 | 4 BankBD | **1041 snapshots, 211 income rows, 216 months**, exit code 0 |
 
 All **ten** finance tasks are registered and `Ready`: StocksDaily 13:30 · StocksGrowth
-12:45 · StocksPrefilter Mon 14:30 · StocksWatchdog 14:15 · StocksPortfolioWeekly Mon 08:30 ·
+12:45 · StocksPrefilter Mon 14:30 · StocksWatchdog 14:15 · **StocksPortfolioWeekly Wed 12:30** ·
 StocksPortfolioMonthly · StocksEarningsPreview · StocksEarningsReview · StocksStrategyMonthly ·
-Patrimonio Monthly 09:00.
+Patrimonio Monthly **day 27** 09:00.
 
-`_portfolio_holdings.yaml` was last written **2026-08-10 09:10** (the Monday 08:30 job, after
-the `job_lock` queue) and there is **no** `_portfolio_export_stale.txt`, so the Yahoo export
-is current. The weekly ingest is live.
+> **⚠ Two corrections, 2026-08-19.** **(1)** `StocksPortfolioWeekly` is **Wednesday 12:30** on the
+> laptop that owns it (`DaysOfWeek = 8`), not Monday 08:30 — vmhost1's disabled copy was the
+> Monday one, so the two machines disagreed with each other. Wednesday 12:30 is now the decision
+> (roadmap R22). The `2026-08-10 09:10` write cited below was a **`StartWhenAvailable` catch-up**
+> of a missed Wednesday, not a Monday job — a Monday run is not evidence of a Monday trigger.
+> **(2)** `Ready` is not `has ever run`: `Patrimonio Monthly` was `Ready` when this audit was
+> written and had never executed once. See the correction above.
+
+`_portfolio_holdings.yaml` was last written **2026-08-10 09:10** and there was **no**
+`_portfolio_export_stale.txt` at audit time, so the Yahoo export was current then. **That did not
+hold**: measured 2026-08-19 the export is dated 2026-07-30 (20 days), the marker is back, and the
+weekly run re-parses the unchanged CSV reporting `added/removed/changed: none`. The export is
+**ad-hoc by design** (Yahoo has had no API since 2017 — the Download click is manual), so an
+unchanged CSV is normal and the freshness signal is what matters. Until 2026-08-19 that marker was
+read by **nothing**; the daily digest now carries a line naming it, above the numbers it
+invalidates.
 
 ---
 
@@ -158,6 +184,10 @@ Two traps that must survive any future change:
 
 - **A green Task Scheduler result proves nothing** when `run_hidden.vbs` is in the chain
   (documented in `SCHEDULING.md`). Verify from the logs, as this audit did.
+- **`Ready` proves even less — it does not mean the task has ever run.** This audit listed ten
+  tasks as registered and `Ready` and one of them had never executed once (R23). The cheap check
+  is `LastTaskResult`: `0x41303` is `SCHED_S_TASK_HAS_NOT_RUN`, and `LastRunTime` shows a 1932
+  sentinel date. Read those two fields before writing that a chain "runs monthly".
 - **`PATRIMONIO_PW` never gets committed.** The password lives in the `.env` beside the
   workbook and is resolved by `patrimonio.workbook`, explicitly so that the BankBD repo —
   which has a git remote — never sees it.
