@@ -24,8 +24,16 @@ import sys
 from pathlib import Path
 import bd_paths
 
-GROQ_MODEL_DEFAULT = "llama-3.3-70b-versatile"
+# Groq DELETES retired models (404 model_not_found), it does not deprecate them:
+# llama-3.3-70b-versatile died on 2026-08-17 and every Llama/Mixtral id went with it.
+# Confirm against GET https://api.groq.com/openai/v1/models before changing this.
+GROQ_MODEL_DEFAULT = "openai/gpt-oss-120b"
 GEMINI_MODEL_DEFAULT = "gemini-2.0-flash"
+
+# Groq's surviving chat models are reasoning models. Left alone they emit the
+# chain-of-thought into message.content (which breaks extract_json) and spend
+# max_tokens thinking. Matched on substring so a model swap keeps working.
+GROQ_REASONING_MODELS = ("gpt-oss", "qwen")
 
 # Resolved per machine by bd_paths (vmhost1 has no C:\Github\BD at all, and a dead
 # BD_Finance path yields an EMPTY key dict with only a printed warning). Roadmap R11.
@@ -110,9 +118,17 @@ def _call_groq(prompt: str, system: str | None, model: str,
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
+    extra = {}
+    if any(tag in model for tag in GROQ_REASONING_MODELS):
+        # Sent through extra_body, NOT as typed kwargs: the SDK version drifts across
+        # machines (laptop groq 1.0.0, vmhost1 0.26.0) and 0.26.0's create() has no
+        # reasoning_effort parameter — passing it directly raises TypeError and turns a
+        # dead model into a dead client. extra_body reaches the API on every version.
+        extra = {"extra_body": {"reasoning_effort": "low",
+                                "reasoning_format": "hidden"}}
     resp = client.chat.completions.create(
         model=model, messages=messages, max_tokens=max_tokens,
-        temperature=temperature, response_format={"type": "json_object"})
+        temperature=temperature, response_format={"type": "json_object"}, **extra)
     return resp.choices[0].message.content
 
 

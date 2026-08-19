@@ -36,6 +36,27 @@ face of every report.
 ROVI.MC audit or by the 2026-08-18 13:30 run on vmhost1 — i.e. by measurement, not by review.
 The theme is one sentence: *the system kept knowing things it never wrote down.*
 
+**Also fixed: dead Groq model in `llm_client.py`.** Groq **deletes** retired models instead of
+deprecating them — `llama-3.3-70b-versatile` began returning 404 `model_not_found` on
+2026-08-17, taking every Llama and Mixtral id with it. Because `complete_json` degrades
+Groq→Gemini, the opinion panel (2.58) and news sentiment (2.59) kept producing output off the
+*fallback* provider, so nothing looked broken while the independent-model guarantee was quietly
+gone. `GROQ_MODEL_DEFAULT` → **`openai/gpt-oss-120b`**. A model swap alone was not enough: the
+surviving Groq models are **reasoning** models, which without `reasoning_format: "hidden"` emit
+the chain-of-thought into `message.content` and break `extract_json`, and which bill reasoning
+tokens against `max_tokens` (149 of the 400-token budget on a one-line persona prompt; ~15 with
+`reasoning_effort: "low"`). `_call_groq` now sends both params, gated on
+`GROQ_REASONING_MODELS` substring match so a swap back to a non-reasoning id cannot 400.
+They go through **`extra_body`, not typed kwargs** — the `groq` SDK version drifts across
+machines (laptop 1.0.0, **vmhost1 0.26.0**) and 0.26.0's `create()` has no `reasoning_effort`
+parameter, so passing it directly raised `TypeError` and converted a dead model into a dead
+client. That was caught only by running the real call **on vmhost1**, where it matters: the
+laptop passed while production failed. Worth recording that on vmhost1 there is **no
+`api_key_gemini`**, so the fallback could never fire there — the panel and sentiment cards were
+fully dark, not degraded. Verified end-to-end on both machines and both caller shapes
+(`max_tokens` 400 and 700): `provider=groq`, valid JSON. 1750 tests still pass. `model_chain`
+in both report blocks derives from the constant, so it self-corrects.
+
 **Closed: R15** — corrections found in the narrative never reached the JSON. The ROVI report's
 prose named and corrected three vendor-data defects while `_tmp/2026-08-17_ROVI.MC.json` still
 served the wrong numbers under `data_quality: "ok"` and `corrected_fields: []` — and the
