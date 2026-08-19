@@ -135,148 +135,134 @@ morning. The `StartWhenAvailable` catch-up that landed the 08-10 and 08-17 runs 
 recorded as a false signal: **a Monday run is not evidence of a Monday trigger.** See
 `CHANGELOG.md`.)*
 
-### R23. Two battery settings can still block the patrimony chain — **S**
+*(R23 removed 2026-08-19 — **decided and applied.** Owner's call: **allow the START on battery,
+keep the stop.** `DisallowStartIfOnBatteries` is now `false` on `\BD\Finance\Patrimonio Monthly`
+(`laptop_allow_patrimonio_on_battery.ps1`, verified: day 27 kept, `StartWhenAvailable` kept,
+`Ready` kept, action and principal unchanged). `StopIfGoingOnBatteries` stays **true** on purpose —
+the two settings look symmetric and are not: one decides whether work begins, the other can
+interrupt work already in flight, and this chain writes `Patrimonio BD.xlsx` through Excel COM on a
+copy with a timestamped backup, where a write killed half-way is worse than a run that never
+happened. Together with the catch-up fix earlier the same day, the task had **never run once** since
+registration on 2026-08-02 (`LastTaskResult 0x41303` = `SCHED_S_TASK_HAS_NOT_RUN`) and now has both
+a catch-up and permission to take it.
 
-**The catch-up half shipped 2026-08-19.** `Patrimonio Monthly` had **never run once** —
-`LastTaskResult 0x41303` = `SCHED_S_TASK_HAS_NOT_RUN`, `LastRunTime` still the "never" sentinel,
-registered 2026-08-02 — because `StartWhenAvailable` was **absent** from its Settings and therefore
-false, so a 09:00 start missed with the laptop asleep was dropped rather than caught up. Now
-`true`, applied and verified by `scripts/laptop_fix_patrimonio_catchup.ps1`: day 27 preserved,
-`NextRunTime` unmoved at 2026-08-27 09:00, action, principal and `Ready` state unchanged. Day 27 is
-deliberate and stays — the payslip PDFs the chain parses arrive before month end.
+**The remaining item is an observation, not work**: after **2026-08-27**, read `LastTaskResult` —
+**not** `State`, which read `Ready` throughout the entire period this task had never executed.
+`0x41303` means it still has not run; `0` means it did.
 
-That script had to go through the task's own XML: this is a MONTHLY task, so `Set-ScheduledTask`
-refuses it, and `StartWhenAvailable` had to be **inserted** rather than flipped, into a `<Settings>`
-sequence whose element order `schtasks` does not export the way the documentation suggests. The
-script therefore tries candidate positions and lets `schtasks /create` validate — a wrong position
-fails with the task unchanged. `before <IdleSettings>` was accepted.
+**One thing this exposed that was bigger than R23.** Reviewing what else starts unattended showed
+**four enabled tasks firing at exactly 09:00** — this one, `StocksStrategyMonthly`,
+`SyncSapEnv-To-vmhost1`, `Deslocacoes-Subsidio-Mensal` — three more at exactly 13:00, and **~30 of
+the ~33 enabled `\BD\` tasks carrying `StartWhenAvailable=true` with no `RandomDelay` at all**. A
+slot missed while the laptop sleeps fires as catch-up on the next wake, so a late logon started the
+whole missed morning at once: the 2026-08-15 incident (growth and daily both stamped `_1336`, both
+at their ceilings, digest lost) generalised from two tasks to twenty, and `job_lock.ps1` only ever
+protected the Stocks pair. 27 tasks now carry a `RandomDelay` spread across 5–25 minutes
+(`laptop_stagger_task_starts.ps1`, idempotent, delays derived from a hash of the task path so
+re-running does not reshuffle thirty schedules). Three excluded with reasons. **`RandomDelay` is
+NOT a minimum** — Windows draws from zero to the value — and a hard floor is not expressible on a
+calendar trigger at all, so what this buys is de-correlation, which is the actual cause. The
+verification had to read the **XML**, not `$task.Triggers[].RandomDelay`: a monthly CalendarTrigger
+comes back as the base `MSFT_TaskTrigger` with no such property, so the CIM read called seven
+writes that had plainly succeeded a failure. See `CHANGELOG.md`.)*
 
-**What is left is a genuine trade-off, which is why it was not flipped silently.** The same
-Settings block carries:
+*(R20 removed 2026-08-19 — **shipped and verified against vmhost1, which is the half that had
+been impossible.** `stocks-skills-push.ps1` now carries **two sets under one lock**: the finance
+skills as before, and the 13 launchers in `.scripts` (`_bd_env.bat`, `run_with_timeout.ps1`,
+`job_lock.ps1`, ten `stocks-*.bat`) to `D:\Github\.scripts` — a different DRIVE, hence a second
+root pair rather than one loop. Extending the proven, already-scheduled, already-locked mechanism
+rather than writing a sibling, per the entry's own preference.
 
-```
-<DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
-<StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
-```
+**The gap it closed, measured rather than asserted.** Before the push vmhost1 held **10 of the 13
+files, and 8 of those 10 differed**; `_bd_env.bat`, `stocks-monitor.bat` and
+`stocks-failover-watchdog.bat` were **absent entirely**. Diffing `stocks-daily.bat` showed the
+divergence was exactly R10's work missing: vmhost1 still ran the **pre-R10** copy with hardcoded
+`D:\Github\.scripts\job_lock.ps1`, `D:\...\run_with_timeout.ps1` and
+`cd /d "D:\Github\BD\BD_Finance"`, against the laptop's `%~dp0`-relative, `_bd_env.bat`-probing
+version. So the machine that has run the pipeline since the 2026-08-17 cutover was running
+launchers three weeks behind the ones being edited.
 
-- The first means the task **will not start at all** while the laptop is on battery. A 09:00
-  catch-up on a workday is exactly when a laptop is likely to be unplugged, so **the fix that just
-  shipped may still not produce a run** — and a fix that looks applied and does nothing is the
-  silent-success shape this pipeline keeps producing.
-- The second means an in-flight run is **killed** the moment the machine goes to battery. This
-  chain writes `Patrimonio BD.xlsx` through Excel COM on a copy with a timestamped backup; being
-  killed mid-write is worse than not running at all, so this one is arguably correct as-is.
+**One hard dependency was checked BEFORE pushing, not after.** The new bats `call
+"%~dp0_bd_env.bat"` and `exit /b 9` if `BDF` does not resolve — and that file was one of the three
+missing. Pushing the bats without it would have killed the 13:30 job outright. Verified on vmhost1
+first that `_bd_env.bat`'s probe target exists (`D:\Github\BD\BD_Finance\config\api_keys.txt`,
+present) and that its FIRST candidate cannot win by accident (`/mnt/c/Github` exists there but is
+**empty**, so the C: branch is absent and the D: branch is taken). After the push,
+`_bd_env.bat` was executed on vmhost1 and returned **rc=0**.
 
-They pull in opposite directions, and against a real cost: a full `wages → audit → report → BankBD`
-run is heavy, and permitting it on battery drains it.
+**Two deliberate differences from the skills set.** (1) **No orphan deletion.** The skills tree is
+meant to be a byte-for-byte replica, so an extra file there is drift; `D:\Github\.scripts` is
+vmhost1's own script directory, holding its lock state and whatever else that machine legitimately
+needs, and deleting "extras" would delete files the laptop has no opinion about. (2)
+**`job_lock.ps1` is the one file that can break the push while the push holds its lock**, so the
+remote copy is backed up before extraction and the RELEASE is used as the test: if releasing fails,
+the backup is restored and released instead, loudly. A stuck global lock blocks every Stocks job on
+the machine that runs the pipeline. On the live run the release succeeded with the pushed copy,
+which is what proves it good.
 
-- **The decision needed**: allow the start on battery (flip the first, keep the second), allow both,
-  or leave both and accept that this chain runs when the laptop happens to be docked on the 27th.
-  A fourth option that avoids the trade-off entirely: move the trigger to an hour the machine is
-  reliably plugged in.
-- **The check that closes this either way**: after 2026-08-27, read `LastTaskResult` — not `State`,
-  which said `Ready` for the whole time this task had never run.
-- **Trigger**: the 2026-08-27 run, or a call on the battery settings.
+Both manifests verified after the push: skills `544AAD98025B88D1`, `.scripts`
+`5AC51FEF2DBF2F1D`, exit 0. `-SkillsOnly` added for the case where only set 1 is wanted. See
+`CHANGELOG.md`.)*
 
-### R20. There is still no push for `.scripts` to vmhost1 — **M**
+### R14. OpenBB — five questions to settle before any code — **M**
 
-R10 made the Stocks* bats machine-agnostic in every executable line, which is what makes a
-push POSSIBLE. It does not make one exist. vmhost1 still runs its own D: copies, and today's
-lock/timeout/`%~dp0` work reaches it only if someone copies it by hand.
+**The evaluation asked for is done** (ReadNow 0315, `0315-openbb-exploration-08-17-39ab82`,
+2026-08-17: working venv, confirmed endpoints, measured values). What is open is no longer
+research — it is a **discussion**, and the owner named its agenda on 2026-08-19. **The scope also
+widened**: 0315 concluded *"adopt narrowly, for macro only"*, and the ask is now macro **and**
+company evaluation. That is not a bigger version of the same decision, it is a second decision
+with its own evidence requirement, so the questions are split accordingly.
 
-This is the same gap that made me write a vmhost1 fixer into `C:\Github\.scripts` earlier
-today -- a script for vmhost1, left in the one tree with no way to get there. Bruno caught it.
-The skills tree has `stocks-skills-push.ps1` (hash-verified both ways, scheduled, and it
-self-heals from the failover watchdog); `.scripts` has nothing.
+**Q1 — What do we actually gain?** What 0315 measured: OECD + EconDB/Eurostat + ECB breadth that
+FRED alone does not serve. What it did **not** establish is any gain on the company side, because
+it never looked there. The honest position going in: for series we already pull straight from FRED,
+OpenBB adds a dependency and nothing else — `macro_fred.py` already reads M2 (`M2SL`) and the
+Buffett Indicator (`NCBEILQ027S`÷`GDP`) with units asserted. So Q1 has a measured answer for macro
+and **no answer at all** for companies.
 
-- **Two options, and the cheap one is probably right**: extend `stocks-skills-push.ps1` to
-  carry `.scripts/stocks-*.bat` + `_bd_env.bat` + `run_with_timeout.ps1` + `job_lock.ps1`
-  (reuses a proven, already-scheduled, already-locked mechanism), or write a sibling
-  `stocks-bats-push.ps1` (cannot break the skills push if it goes wrong). The first is less
-  code and less schedule; the second is less blast radius.
-- **Why it was not done today**: writing to vmhost1 is confirm-first here, so the end-to-end
-  verification a deployment mechanism needs could not be run. Shipping an untested push is
-  worse than shipping none -- a push that half-works on the machine that owns the pipeline is
-  exactly the ten-week frozen-bat failure with a new mechanism.
-- **Trigger**: none; it is the natural next step after R10.
+**Q2 — What is it an alternative to, next to yfinance?** The question that decides whether this is
+worth real effort. yfinance is the spine of this whole system and its known holes are specific:
+non-US fundamentals depth (~4-5 quarters via the fallback), an EPS series gated to US outright
+(`valuation_bands.py:451`, `if suffix == ""`), no quarterly P/E anywhere, and a throttle that
+returns 429 in bursts. Alpha Vantage cannot fix any of it — its fundamentals endpoints are
+**US-listed only at every tier**, and the free cap is **per-IP** (measured, roadmap R5 WON'T DO),
+so more keys buy nothing. **If OpenBB's free providers reach non-US fundamentals, it addresses the
+gap that closed N0 as WON'T DO** — that, and not the macro breadth, would be the real prize. It is
+unmeasured. Measuring it is cheap: pick five names already in the universe across `.AS`, `.L`,
+`.TW`, `.HK`, `.SA`, pull income statement + cash flow + EPS history, and diff against what
+yfinance and the reports already hold.
 
-*(R21 removed 2026-08-19 — **all four shipped, and the test written to catch them found a
-fifth.** Each fix was verified by running the real node, not by reading the diff.
+**Q3 — Does it run as a CLI, and does it drop into our scripts?** Partly answered and the partial
+answer is a warning. 0315 established that `openbb-core` plus providers is **not enough** — the
+router extensions and `openbb.build()` are required, which is a build step, not an import. What is
+unmeasured is whether a CLI invocation exists that a `.bat` or a helper can shell out to the way
+every other ground-truth helper does. This matters more than it looks: **the ground-truth rule
+(`SKILL.md:56`) means numbers must come from a Python helper**, so OpenBB has to sit behind a
+helper with a JSON contract, in an **isolated venv** — it pulls a large dependency tree and this
+system's daily job cannot afford a dependency conflict with yfinance, pandas or matplotlib.
 
-**2.5-end** — `finalize_score.py` gained `--update`, writing the finalised JSON back through
-`--json-path` (the convention `exit_plan`/`alpha_beta`/`watchlist` already use, so no fourth write
-path). Proven on a copy of a live deep: `mgmt None → 5.5`, `composite_is_provisional true → false`
-**on disk**. `--update` without `--json-path` now exits 2 rather than succeeding with nowhere to
-write — that would have been the same defect wearing a flag. Third instance of the R15/R17 shape,
-and the last of them.
+**Q4 — What data, and at what quality?** 0315's negatives are half its value and they must survive
+into any implementation: `fixedincome.government.treasury_rates` and `economy.money_measures` **do
+not exist** in this version; `economy.cpi` accepts only `fred`/`oecd`; `economy.indicators` requires
+`frequency`; and **Portugal is absent** from both the EconDB yield-curve list and the composite
+leading indicator, while Spain, France, Germany and Italy are present. Two quality traps, both
+named in 0315: **CPI returns a DECIMAL (`0.021854`), not a percent** — the same class as the
+Buffett-Indicator factor-of-1000 — so any module must **assert** its units rather than assume them;
+and OpenBB's `atexit` handler emits `RuntimeError: can't create new thread at interpreter shutdown`
+plus an un-awaited `ClientSession.close` **to stderr**, which this family has already lost a digest
+to (the 2026-07-29 `taskkill`/stderr/`EAP=Stop` chain), so nothing wrapping it may treat stderr as
+failure.
 
-**2.56** — the `--ticker` `alpha_beta.py` never declared is gone; it reads the ticker from the
-JSON. **3.5** — `--fundamental-score` is now read off `scores.fundamentals` by the runner, because
-node 2 already computed it and a number a human retypes is a number that can disagree with the one
-scored. Both exit 0 where they exited 2. With the real 6.38 for RENT3.SA, 3.5 now prints the honest
-`gate not met` instead of dying.
+**Q5 — Is the free tier enough?** Unmeasured, and the question that can kill the whole item.
+OpenBB is an aggregator: its ceilings are its **providers'** ceilings, so "free tier" is not one
+number but one per provider, and several of the useful ones (FMP, Intrinio, Polygon, Benzinga) are
+key-gated with their own caps. The AV lesson applies directly — a cap that turns out to be per-IP
+rather than per-key changes the answer completely, and it was only found by burning a key on
+purpose. **Any go decision needs the per-provider cap measured the same way**, for the specific
+endpoints we would depend on, before code is written against them.
 
-**2.6 was the decision, and the measurement made it.** `--check` probes the **narrative**
-`_macro/<date>.md` and says nothing about `_macro/<date>.json`, where the numbers live — so
-"freshness asserted on a file nothing refreshes" understated it. Measured: today's
-`_macro/2026-08-19.json` was written at 13:31:20 by the two overlay nodes with **no `metrics` key at
-all** — zero indices, VIX, yields, FX, commodities, BTC, against 13 metrics in every file through
-08-17, and no 08-18 file. The probe *did* report `stale`; nothing read its answer. **Fourth
-instance of "the alarm rings in an empty room"**, after R22's portfolio marker. The runner now
-fetches unconditionally, and the reason it could not before is gone too: `fetch()` **merges**
-instead of rewriting a three-key payload, so it can no longer delete `breadth`/`sectors`/`regime`
-and the three writers are all overlay-only. Verified on the live file — 13 metrics landed, 11
-sector rows and the `regime` block byte-identical.
-
-**The fifth defect: node 0.5 had never run either.** Found by `TestArgumentContract`, which
-validates every node's argument list against the target script's own argparse via `ast`. It passed
-`--prior-report`, which `thesis_check.py` has never declared, and omitted the `--current-json` it
-declares required — and **`SKILL.md:234` carried the same wrong flag**, so no path ran the
-thesis-drift check on any re-evaluation. Its position was wrong for the same reason: it compares
-**today's** analysis against the prior `_log.csv` row, so SKILL.md's *"before any new analysis"* was
-impossible — node 2 writes the file it reads. Now placed after node 2, keeping the id `0.5` as the
-phase name rather than the order.
-
-**How they survived: the runner failed in the open and the model papered over it every day.**
-`_timings/2026-08-19.jsonl` records `2.56 rc=2` and `3.5 rc=2` — argparse deaths on the scheduled
-run — yet the deep's JSON carries an `alpha_beta` block, because the LLM re-ran the node by hand
-after seeing the FAIL. The two that cost data are the two that did **not** fail: 2.5-end returned 0
-having written nothing, and 2.6 returned 0 having fetched nothing.
-
-**One latent bug fixed on the way**, because the 3.5 fix depends on it: `needs` tested `not value`,
-so a real `0.0` read as "the caller forgot the flag" — a node skipped for a reason that was never
-measured, in the file whose job is to stop exactly that. `_absent()` now distinguishes a falsy
-number from an absent one. **1839 passed, 1 skipped** (from 1756; +83). See `CHANGELOG.md`.)*
-
-### R14. OpenBB — evaluation DONE, Phase 1 awaiting a go/no-go — **M**
-
-**The evaluation this item asked for is complete**: ReadNow 0315
-(`0315-openbb-exploration-08-17-39ab82`), 2026-08-17, with a working venv, confirmed endpoints
-and measured values. What is left is a decision, not research.
-
-**Verdict: adopt narrowly, for macro only.** OpenBB's value is OECD + EconDB/Eurostat + ECB
-breadth, which FRED alone does not give. Replacing `macro_fred.py` is explicitly out of scope --
-for series we already fetch directly from FRED, OpenBB only adds a dependency.
-
-Half of 0315's value is what it measured as BROKEN, and those negatives must survive into any
-implementation: `fixedincome.government.treasury_rates` and `economy.money_measures` do not
-exist in this version; `economy.cpi` accepts only `fred`/`oecd`; **Portugal is absent** from
-both the EconDB yield-curve list and the composite leading indicator (Spain, France, Germany
-and Italy are present); `economy.indicators` requires `frequency`; and `openbb-core` plus
-providers is NOT enough -- the router extensions and `openbb.build()` are required.
-
-**Two traps that gate adoption, both already named in 0315:**
-- **Units.** CPI comes back as a DECIMAL (`0.021854`), not a percentage. Same class as the
-  Buffett-Indicator factor-of-1000 that `macro_fred.py` documents. Any new module must ASSERT
-  its units, not assume them.
-- **stderr at shutdown.** OpenBB's `atexit` handler emits `RuntimeError: can't create new
-  thread at interpreter shutdown` plus an un-awaited `ClientSession.close`. Harmless to the
-  result, but it goes to **stderr** -- and this family has already lost a digest to exactly
-  that: the 2026-07-29 `taskkill`/stderr/`EAP=Stop` chain leaked a log handle and silently
-  deleted the email. Anything wrapping OpenBB must not treat stderr as failure.
-
-**The country list is derived, not chosen** (measured 2026-08-18 from `_log.csv`, 385 rows /
-295 distinct tickers, and from `_portfolio_holdings.yaml`):
+**The country list is derived, not chosen** (measured 2026-08-18 from `_log.csv`, 385 rows / 295
+distinct tickers, plus `_portfolio_holdings.yaml`):
 
 | Tier | Countries | Share of evaluations |
 |---|---|---|
@@ -284,17 +270,17 @@ providers is NOT enough -- the router extensions and `openbb.build()` are requir
 | Then | Hong Kong 4.7 · Netherlands 3.9 · Germany 3.4 · France 3.1 · South Korea 2.9 · United Kingdom 2.9 · Sweden 2.6 · Taiwan 2.3 | ~26% |
 | Then | China 2.1 · Japan 2.1 · Spain 1.8 · Portugal 1.6 · India 1.6 | ~9% |
 
-Those 14 cover ~88% of everything ever evaluated. The portfolio itself is narrower still --
-US 8 of 12 holdings, Netherlands 2, Taiwan 1, Portugal 1 -- so a Phase 1 that starts with the
-top tier plus the four portfolio countries is defensible on its own evidence. **Portugal is the
-one that OpenBB cannot serve well** (absent from the yield-curve and CLI lists), which is worth
-knowing before it is promised.
+Those 14 cover ~88% of everything ever evaluated; the portfolio is narrower still (US 8 of 12,
+Netherlands 2, Taiwan 1, Portugal 1). **Portugal is the one OpenBB serves worst** — worth knowing
+before it is promised, since it is the home market.
 
-- **Left to do**: Bruno's go/no-go on 0315's Phase 1 (`country_macro.py`, isolated venv,
-  24h cache, units asserted, fixtures-only tests, ~2-3h). Phases 2 and 3 follow only after the
-  timing harness proves Phase 1 fits; Phase 3 changes valuations (`rf` per currency in the DCF)
-  so it ships alone with a measured before/after.
-- **Trigger**: that decision.
+- **Left to do**: settle Q1-Q5 in conversation. Q2 and Q5 are the two that need **new measurement**
+  before they can be answered honestly (a five-ticker non-US fundamentals diff, and a per-provider
+  cap probe); Q1, Q3 and Q4 have partial answers from 0315 already. Only then Phase 1
+  (`country_macro.py`, isolated venv, 24h cache, units asserted, fixtures-only tests, ~2-3 h).
+  Phases 2 and 3 follow only if the timing harness says Phase 1 fits, and Phase 3 changes
+  valuations (`rf` per currency in the DCF) so it ships alone with a measured before/after.
+- **Trigger**: that conversation.
 
 *(R19 removed 2026-08-19 — **shipped, both halves**. The bat gained `job_lock`, a 2700 s
 ceiling and a VERDICT line on every exit path (installed 16:13 on 2026-08-18, verified by

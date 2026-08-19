@@ -144,7 +144,7 @@ uv run python "C:\Users\bsdias\.claude\skills\bd-stocks-daily\scripts\analyze_ti
 # Regenerate the dashboard
 uv run python "...\scripts\build_dashboard.py"
 
-# Tests (1840: 1839 pass + 1 opt-in Chromium skip, as of v4.3.5)
+# Tests (1841: 1840 pass + 1 opt-in Chromium skip, as of v4.3.6)
 # --with-requirements, NOT --with pytest: `uv run --with pytest` builds an env holding
 # pytest and nothing else, so it CANNOT COLLECT 13 of the test files (matplotlib,
 # yfinance, yaml, pandas, numpy). Every count published before 2026-08-18 came from a

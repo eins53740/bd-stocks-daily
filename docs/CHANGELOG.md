@@ -30,6 +30,77 @@ face of every report.
 
 ---
 
+## v4.3.6 — 2026-08-19 · schema 2.2 · **1840 tests** (daily)
+
+**The deployment and unattended-start release.** Nothing here touches analysis. It closes the last
+way a fix could be written on the laptop and never reach the machine that runs the pipeline, and it
+stops thirty scheduled jobs from starting in the same minute.
+
+**R20 — `.scripts` now has a push, and it was verified against vmhost1.** `stocks-skills-push.ps1`
+carries two sets under one lock: the finance skills, and the 13 launchers in `.scripts` to
+`D:\Github\.scripts` (a different drive, so a second root pair). Measured before pushing: vmhost1
+held **10 of 13 files with 8 of them different**, and `_bd_env.bat`, `stocks-monitor.bat` and
+`stocks-failover-watchdog.bat` were **absent**. The `stocks-daily.bat` diff showed vmhost1 running
+the **pre-R10** copy — hardcoded `D:\` helper paths and `cd /d "D:\Github\BD\BD_Finance"` —
+three weeks behind the version being edited. The new bats `exit /b 9` without `_bd_env.bat`, one of
+the three missing files, so its probe target on vmhost1 was verified **before** the push and
+`_bd_env.bat` executed there **after** it (rc=0). Set 2 never deletes orphans (that directory is
+vmhost1's own, not a replica) and `job_lock.ps1` is backed up before being overwritten, with the
+release used as the test — a stuck global lock blocks every Stocks job on the pipeline host.
+
+**Unattended starts are staggered.** Reviewing what fires without a human present found **four
+enabled tasks at exactly 09:00** (`Patrimonio Monthly`, `StocksStrategyMonthly`,
+`SyncSapEnv-To-vmhost1`, `Deslocacoes-Subsidio-Mensal`), three at exactly 13:00, and **~30 of ~33
+enabled `\BD\` tasks with `StartWhenAvailable=true` and no `RandomDelay` at all**. A slot missed
+while the laptop sleeps fires as catch-up on the next wake, so a late logon started the whole
+missed morning at once — the 2026-08-15 incident (growth and daily both stamped `_1336`, both at
+their ceilings, digest lost) generalised from two tasks to twenty, with `job_lock.ps1` protecting
+only the Stocks pair. `laptop_stagger_task_starts.ps1` gives 27 of them a `RandomDelay` spread
+across 5–25 minutes, derived from a hash of the task path so re-running does not reshuffle thirty
+schedules; 3 excluded with stated reasons; idempotent (a second run sets 0 and skips 30).
+**`RandomDelay` is not a minimum** — Windows draws from zero to the value — and a hard floor is not
+expressible on a calendar trigger, which has no `<Delay>` element at all; what this buys is
+de-correlation, which is the actual cause.
+
+**The request it did NOT satisfy, stated rather than quietly reinterpreted.** Asked to delay "the
+tasks that start at logon", the measurement said there are none of ours: **all eight `\BD\` tasks
+with a `LogonTrigger` are Disabled**, and the 35 enabled logon-triggered tasks belong to Windows,
+Office, Adobe, OneDrive and PowerToys. Those are not rescheduled — it is modifying system settings
+and Windows servicing resets them. Reported instead: PowerToys waits `PT3S` and is a real logon
+cost (one-line change supplied, the owner's call because it delays FancyZones and key remaps), and
+the HKCU Run key holds 8 autostarts with **tacky-borders launching twice** — once from the Run key
+and once from a Startup-folder shortcut.
+
+**R23 closed with it.** `DisallowStartIfOnBatteries` is now `false` on `Patrimonio Monthly` — a
+09:00 catch-up on a workday was being refused for want of AC power, so the catch-up fix could have
+looked applied and produced nothing. `StopIfGoingOnBatteries` stays **true**: the two settings look
+symmetric and are not, and this chain writes the workbook through Excel COM where a killed write is
+worse than no run.
+
+**The verifier was wrong before the writes were.** Seven monthly tasks were reported as failures by
+`$task.Triggers[].RandomDelay` coming back empty — because a monthly `CalendarTrigger` returns from
+`Get-ScheduledTask` as the base `MSFT_TaskTrigger`, which has no such property. The same defect that
+makes `Set-ScheduledTask` refuse these tasks bites the READ path too. Verification now reads the
+task XML, and all seven had in fact taken the delay (`NextRunTime` showing 09:05:15, 09:04:13 with
+day 27 / day 1 / second-Wednesday intact).
+
+**The test suite was writing into production instrumentation.** `run_step` records a timing on every
+call and `node_timing.record` writes to the real `StocksDaily/_timings/<today>.jsonl`, so the
+order-contract tests' stub steps named "A" and "X" were appending fake nodes: **12 rows on 08-17, 54
+on 08-18 — the entire file — and 21 on 08-19**, so the timing report was partly measuring the test
+runner. `tests/conftest.py` now sets `BD_TIMINGS=0` (read at import, which is what a conftest is
+for) and 87 stub rows were removed. The guard assertion was written in `conftest.py` first, where
+**pytest does not collect it**, so it passed by never running — the same silent shape as the R21
+defects; it now lives in a collected test file.
+
+**Removed**: `scripts/_finalize_and_save.py`, a second write path for node 2.5-end left fully
+orphaned by v4.3.5's `--update` (no caller anywhere on disk). Two copies of one write is how two
+copies of `stocks-daily.bat` drifted for ten weeks.
+
+**1840 passed, 1 skipped.** Closes roadmap **R20** and **R23**. Schema untouched at **2.2**.
+
+---
+
 ## v4.3.5 — 2026-08-19 · schema 2.2 · **1839 tests** (daily)
 
 **The orchestration release.** `run_daily.py` is the executable pipeline contract, and five of

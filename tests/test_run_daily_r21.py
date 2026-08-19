@@ -291,3 +291,24 @@ class TestMacroSnapshot:
         p.write_text("{ truncated", encoding="utf-8")
         out = macro_snapshot.fetch(tmp_path, today=date(2026, 8, 18))
         assert out["metrics"] == {"^VIX": {"last": 14.0}}
+
+
+# --- the suite must not write into the operational timings log ---------------------------
+
+def test_timings_are_disabled_for_the_whole_suite():
+    """`run_step` records a timing on every call, and `node_timing.record` writes to the REAL
+    StocksDaily/_timings/<today>.jsonl. The order-contract tests call run_step with stub steps
+    named "A" and "X", so every test run was injecting fake nodes into production data --
+    measured 2026-08-19: 12 rows on 08-17, 54 on 08-18 (the WHOLE file) and 21 on 08-19, so the
+    timing report was partly measuring the test runner. `tests/conftest.py` sets BD_TIMINGS=0,
+    which node_timing reads at import time.
+
+    This assertion lives in a collected test file on purpose: it was written in conftest.py
+    first, where pytest does not collect it, so it passed by never running -- the same silent
+    shape as the four defects above it.
+    """
+    import node_timing
+    assert node_timing.ENABLED is False, (
+        "node_timing is live under test: it will append stub nodes to the real "
+        f"{node_timing.TIMINGS_DIR}"
+    )
